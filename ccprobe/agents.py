@@ -332,10 +332,15 @@ def lead_state(tr, session, now):
     if tr is None:
         return {"key": "unknown", "label": session.get("status") or "?", "since": 0, "detail": ""}
     p = tr.oldest_pending()
+    # Claude Code itself says idle (for 30 s, so not a momentary flip): a turn that ended without leaving an entry
+    # (interrupted, or the request failed) is over, not stuck
+    reg_idle = session.get("status") == "idle" and now - (session.get("statusUpdatedAt") or 0) / 1000 > 30
     asks = next((q for q in tr.pending.values() if q["name"] in ASK_TOOLS), None)
     if asks:                                   # a question or a plan left open for the user: really waiting for you
         what = "a plan for you to approve" if asks["name"] == "ExitPlanMode" else "a question for you"
         return {"key": "waiting_user", "label": "waiting for you", "since": asks["t"], "detail": what}
+    if p and reg_idle:
+        return {"key": "idle", "label": "idle", "since": (session.get("statusUpdatedAt") or 0) / 1000, "detail": f"{p['name']} was cut short"}
     if p:
         age = now - p["t"]
         st = pending_state(tr, now, None, False)
@@ -347,6 +352,9 @@ def lead_state(tr, session, now):
     if tr.last_kind is None:
         return {"key": "idle" if session.get("status") == "idle" else "unknown",
                 "label": "idle" if session.get("status") == "idle" else "no recent entries", "since": tr.last_ts, "detail": ""}
+    if reg_idle:
+        return {"key": "idle", "label": "idle", "since": (session.get("statusUpdatedAt") or 0) / 1000,
+                "detail": "the last turn ended without a reply (interrupted?)"}
     return _ladder(tr, now)
 
 

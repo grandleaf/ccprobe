@@ -31,6 +31,7 @@
   <symbol id="i-sort-recent" viewBox="0 0 16 16"><path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2 2.2v2.6h2.6M8 5v3.2l2.2 1.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
   <symbol id="i-sort-az" viewBox="0 0 16 16"><path d="M1.5 7.5L4 1.5l2.5 6M2.4 5.5h3.2M1.5 9.5h5l-5 5h5M12 2v11.5M9.5 11l2.5 2.5 2.5-2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
   <symbol id="i-sort-custom" viewBox="0 0 16 16"><g fill="currentColor"><circle cx="5.5" cy="3.5" r="1.3"/><circle cx="10.5" cy="3.5" r="1.3"/><circle cx="5.5" cy="8" r="1.3"/><circle cx="10.5" cy="8" r="1.3"/><circle cx="5.5" cy="12.5" r="1.3"/><circle cx="10.5" cy="12.5" r="1.3"/></g></symbol>
+  <symbol id="i-noterm" viewBox="0 0 16 16"><path d="M2 3.5h12v8H2zM6 14h4M8 11.5V14M2.5 2l11 11.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
   <symbol id="i-fit" viewBox="0 0 16 16"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
 </svg>
 
@@ -57,8 +58,9 @@
 <main class="layout">
   <aside class="rail" id="rail" aria-label="Sessions">
     <div class="rail-h"><span id="railCount" class="rc"></span>
+      <div class="seg small icon"><button id="unseenBtn" aria-pressed="false" aria-label="Hide sessions with no terminal" data-tip="Hide sessions no terminal shows (tmux window closed)"><svg><use href="#i-noterm"/></svg></button></div>
       <div class="seg small icon" data-set="railSort" role="group" aria-label="Sort sessions">
-        <button data-v="attn" aria-label="Needs you first" data-tip="Needs you first: red alerts or a question for you, then busy, idle, dead"><svg><use href="#i-sort-attn"/></svg></button>
+        <button data-v="attn" aria-label="Needs you first" data-tip="Needs you first: red alerts or a question for you, then busy, idle, dead; sessions with no terminal open go after the rest"><svg><use href="#i-sort-attn"/></svg></button>
         <button data-v="recent" aria-label="Recently active first" data-tip="Recently active first"><svg><use href="#i-sort-recent"/></svg></button>
         <button data-v="az" aria-label="A to Z" data-tip="A–Z by project"><svg><use href="#i-sort-az"/></svg></button>
         <button data-v="custom" aria-label="Custom order" data-tip="Custom order: drag the cards, or Alt+↑/↓"><svg><use href="#i-sort-custom"/></svg></button>

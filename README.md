@@ -12,8 +12,9 @@ python3 ccprobe.py --help        # --port, --window 6h, --ctx-max, --interval, -
 
 What you see:
 - **Graph.** The lead sits on top, the HP worker and running agents below it, helpers next to the agent they serve,
-  and parked agents in the right-hand column. The HP queue and the shared window are their own cards, and a red line
-  runs to whoever holds the lock. Dashed lines flow while work is in flight, and amber task lines end in an arrow at the agent
+  and parked agents in the right-hand column. The HP queue and the shared window are their own cards. While the window
+  is held, its card sits right next to the holder (below, beside or above it, wherever nothing else is), joined by a
+  short red line; while it is free, it sits in the bottom row. Dashed lines flow while work is in flight, and amber task lines end in an arrow at the agent
   doing the work. A chevron travels along an edge for every message, hand-back or spawn, pointing from the sender to
   the receiver. Timeline arcs end in an arrowhead on the receiver's lane. The HP worker is the agent named for the
   running HP task (`hp128`, shown as "HP 128"). With a fresh agent per task, earlier HP agents and an older agent whose
@@ -30,8 +31,11 @@ What you see:
   "N hidden · show" brings them all back. A hidden agent comes back by itself as soon as
   it writes anything new, and opening it from an alert or a message link shows it again. Hiding happens only in this
   browser and only on the page; it never stops an agent.
+- **Unseen sessions:** a tmux session that no terminal shows (its window was closed) is greyed out in the sessions
+  list and reads "no terminal". It still runs; hover over it to see the `tmux attach` command. The monitor-with-a-slash button at the
+  top of the list hides them (the session you are looking at stays).
 - **Sessions list order:** four icon buttons at its top. ⚠ needs you first (red alerts or a question for you, then busy,
-  idle, dead) · 🕘 recently active first · A–Z · ⠿ custom. Custom starts as A–Z. Drag a card to move it
+  idle, dead; sessions with no terminal open after the rest) · 🕘 recently active first · A–Z · ⠿ custom. Custom starts as A–Z. Drag a card to move it
   (the others slide aside), or focus it and press Alt+↑/↓ (Alt+Shift+↑/↓ to the top or bottom). New sessions slot in
   by A–Z. The order is saved per project directory in this browser. Live reorders in the other modes wait while
   the pointer is over the list, and happen at most every 4 s.

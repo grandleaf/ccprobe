@@ -167,6 +167,12 @@ class StateTests(Base):
         st = lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now)
         self.assertEqual((st["key"], st["detail"]), ("waiting_user", "a question for you"))
 
+    def test_registry_idle_wins_over_an_unanswered_prompt(self):
+        self.w.add({"type": "user", "timestamp": iso(self.now - 900), "message": {"content": "exit"}})
+        tr = self.tr()
+        self.assertEqual(lead_state(tr, {"alive": True, "status": "idle", "statusUpdatedAt": (self.now - 890) * 1000}, self.now)["key"], "idle")
+        self.assertEqual(lead_state(tr, {"alive": True, "status": "busy", "statusUpdatedAt": (self.now - 890) * 1000}, self.now)["key"], "stuck")
+
     def test_idle_compaction_is_not_a_prompt(self):
         self.w.add(text(self.now - 1900, "Done.", stop="end_turn"),
                    {"type": "system", "subtype": "compact_boundary", "timestamp": iso(self.now - 1800), "compactMetadata": {"trigger": "auto"}},

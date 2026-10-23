@@ -33,7 +33,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private window: settings last for this visit */ } },
 };
 const reducedOS = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, compact: false, notify: false, railSort: 'attn' },
+const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, compact: false, notify: false, railSort: 'attn', hideUnseen: false },
   store.get('ccprobe.settings', {}));
 const saveSettings = () => store.set('ccprobe.settings', settings);
 let dismissed = store.get('ccprobe.dismissed', {});    // alert key+title -> until (epoch s; 1e12 = for good)
@@ -231,7 +231,7 @@ function sortRail(list, m, alerts) {
     if (!s.alive || s.error) return 4;
     if (mine.some(a => a.sev === 'red') || st.key === 'waiting_user') return 0;   // a question or plan for you
     if (mine.some(a => a.sev === 'amber')) return 1;
-    return BUSY.includes(st.key) || s.status === 'busy' ? 2 : 3;
+    return (BUSY.includes(st.key) || s.status === 'busy' ? 2 : 3) + (unseen(s) ? .5 : 0);   // unseen after the ones on screen
   };
   const r = new Map(list.map(x => [x.key, rank(x.s)]));
   return list.slice().sort((x, y) => r.get(x.key) - r.get(y.key) || recent(x, y));
@@ -269,14 +269,22 @@ function cardHtml(s, alerts, now) {
   const st = s.alive ? s.status : 'dead';
   return `<div class="n"><span class="st ${esc(st)}"></span><span class="nm">${esc(s.project)}</span>${nal ? `<span class="b alert">${nal}</span>` : na ? `<span class="b">${na} agent${na > 1 ? 's' : ''}</span>` : ''}</div>
       <div class="m">${esc(s.lead?.state?.label || st)} · ${ago(s.lead?.state?.since || s.status_since, now)}</div>
-      <div class="m">${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) : 'not in tmux'} · v${esc(s.version)}</div>`;
+      <div class="m">${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) + (unseen(s) ? ' · no terminal' : '') : 'not in tmux'} · v${esc(s.version)}</div>`;
 }
+// a tmux session no terminal shows (its window was closed): it still runs, unseen
+const unseen = s => !!s.tmux && s.tmux.attached === 0;
 function renderRail(m) {
-  const ss = m?.sessions || [];
+  const all = m?.sessions || [];
+  // the toggle hides sessions no terminal shows, except the one you are looking at
+  const ss = settings.hideUnseen ? all.filter(s => !unseen(s) || s.id === S.sid) : all;
+  const ub = $('unseenBtn'), nu = all.filter(unseen).length;
+  ub.classList.toggle('on', !!settings.hideUnseen); ub.setAttribute('aria-pressed', String(!!settings.hideUnseen));
+  ub.dataset.tip = settings.hideUnseen ? `Show the ${nu} session${nu === 1 ? '' : 's'} with no terminal` : `Hide the ${nu} session${nu === 1 ? '' : 's'} no terminal shows (tmux window closed)`;
   const alerts = liveAlerts(m);
-  const nt = ss.filter(s => s.tmux).length;
-  setT($('railCount'), `${ss.length} session${ss.length === 1 ? '' : 's'}`);
-  $('railCount').dataset.tip = `${ss.length} session${ss.length === 1 ? '' : 's'} · ${nt} in tmux`;
+  const nt = all.filter(s => s.tmux).length;
+  const shown = ss.length < all.length ? `${ss.length} of ${all.length}` : `${all.length}`;
+  setT($('railCount'), ss.length < all.length ? shown : `${shown} session${all.length === 1 ? '' : 's'}`);   // "2 of 4": short enough for a narrow rail
+  $('railCount').dataset.tip = `${shown} session${all.length === 1 ? '' : 's'} · ${nt} in tmux${all.length > ss.length ? ` · ${all.length - ss.length} with no terminal hidden` : ''}`;
   $('rail').classList.toggle('custom', settings.railSort === 'custom');
   const list = railEntries(ss);
   for (const { s, key } of list) {          // contents: every tick, each card only when its text changed
@@ -284,8 +292,10 @@ function renderRail(m) {
     if (!b) { b = document.createElement('button'); b.className = 'sess'; b.setAttribute('role', 'listitem'); b.dataset.key = key; railCards.set(key, b); }
     const h = cardHtml(s, alerts, m.now);
     if (b._html !== h) { b.innerHTML = h; b._html = h; }
-    b.dataset.sid = s.id; b.classList.toggle('on', s.id === S.sid);
-    b.setAttribute('aria-label', `${s.project}, ${s.lead?.state?.label || s.status}`);
+    b.dataset.sid = s.id; b.classList.toggle('on', s.id === S.sid); b.classList.toggle('unseen', unseen(s));
+    b.setAttribute('aria-label', `${s.project}, ${s.lead?.state?.label || s.status}${unseen(s) ? ', no terminal open' : ''}`);
+    if (unseen(s)) b.dataset.tip = `No terminal shows this tmux session (its window was closed). It still runs; to see it: tmux attach -t ${s.tmux.session}`;
+    else delete b.dataset.tip;
   }
   if (S.railDrag) { S.railDirty = true; return; }   // never reorder under a card being dragged
   const keys = new Set(list.map(x => x.key));
@@ -334,6 +344,10 @@ $('rail').addEventListener('pointerleave', () => railHold($('rail').contains(doc
 $('rail').addEventListener('focusin', () => railHold(true));
 $('rail').addEventListener('focusout', e => { if (!$('rail').contains(e.relatedTarget)) railHold($('rail').matches(':hover')); });
 
+$('unseenBtn').addEventListener('click', () => {
+  settings.hideUnseen = !settings.hideUnseen; saveSettings();
+  S.railForce = true; hideTip(); renderRail(S.model);
+});
 $('railList').addEventListener('click', e => {
   const b = e.target.closest('.sess'); if (!b) return;
   selectSession(b.dataset.sid);
@@ -660,7 +674,7 @@ function unleave(o) {
 function geom(id) {
   const d = S.disp.get(id); if (!d) return null;
   if (d.kind === 'res') return { x: d.x, y: d.y, r: d.rr, rect: d.w ? { w: d.w, h: d.h } : null };
-  return { x: d.x, y: d.y, r: d.r * d.s, top: (d.top || 0) * d.s, bottom: (d.bottom || 0) * d.s };
+  return { x: d.x, y: d.y, r: d.r * d.s, top: (d.top || 0) * d.s, bottom: (d.bottom || 0) * d.s, half: (d.half || d.r) * d.s };
 }
 function moving() {
   const now = performance.now();
@@ -714,7 +728,8 @@ function drawFrame(now) {
   for (const [key, e] of S.edges) {
     const a = geom(e.a), b = geom(e.b);
     if (!a || !b) { e.g.remove(); S.edges.delete(key); S.leaving.delete(e); continue; }
-    const { d, mid } = edgePath(a, b, e.bend);
+    // the lock link: the shortest straight line from the holder (hex and labels) to the window card
+    const { d, mid } = key === 'lock' && b.rect ? rimLink(a, b) : edgePath(a, b, e.bend);
     put(e.path, 'd', d);
     put(e.lbl, 'x', (mid.x + 8).toFixed(1)); put(e.lbl, 'y', (mid.y - 6).toFixed(1));
     put(e.g, 'opacity', opStr(Math.min(opNow(S.disp.get(e.a), now), opNow(S.disp.get(e.b), now), opNow(e, now))));
@@ -735,6 +750,20 @@ function drawFrame(now) {
   }
   const v = S.vbD;
   if (v) { S.vb = { x: v.x, y: v.y, w: v.w, h: v.h }; applyVb(); }
+}
+// the shortest straight link between two boxes: the node with its labels, and the card. It never crosses the
+// node's own text, and never lines up with edges that enter the hex
+function rimLink(n, c) {
+  const A = { x0: n.x - n.half, x1: n.x + n.half, y0: n.y - n.top, y1: n.y + n.bottom };
+  const B = { x0: c.x - c.rect.w / 2, x1: c.x + c.rect.w / 2, y0: c.y - c.rect.h / 2, y1: c.y + c.rect.h / 2 };
+  const span = (a0, a1, b0, b1) => Math.max(a0, b0) <= Math.min(a1, b1) ? (Math.max(a0, b0) + Math.min(a1, b1)) / 2 : null;
+  const mx = span(A.x0, A.x1, B.x0, B.x1), my = span(A.y0, A.y1, B.y0, B.y1);
+  const near = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+  let sx, sy, ex, ey;
+  if (mx != null) { sx = ex = mx; [sy, ey] = B.y0 >= A.y1 ? [A.y1 + 4, B.y0] : [A.y0 - 4, B.y1]; }          // above or below
+  else if (my != null) { sy = ey = my; [sx, ex] = B.x0 >= A.x1 ? [A.x1 + 4, B.x0] : [A.x0 - 4, B.x1]; }      // beside
+  else { sx = B.x0 >= A.x1 ? A.x1 : A.x0; sy = B.y0 >= A.y1 ? A.y1 : A.y0; ex = near(sx, B.x0, B.x1); ey = near(sy, B.y0, B.y1); }   // corner to corner
+  return { d: `M${sx.toFixed(1)},${sy.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)}`, mid: { x: (sx + ex) / 2, y: (sy + ey) / 2 } };
 }
 // a node that appears grows out of the finished chip (when it was folded there), else its parent, anchor or the lead
 function enterFrom(n) {
@@ -770,7 +799,7 @@ function renderGraph(s) {
     p.top = p.y - lb[0].y; p.bottom = lb[1].y + lb[1].h - p.y;
     const d = target(n.id, p.x, p.y, 'node', () => enterFrom(n));
     if (d.r && Math.abs(d.r - p.r) > .5 && posAnim()) d.s *= d.r / p.r;   // a new radius: scale from the old size
-    d.r = p.r; d.top = p.top; d.bottom = p.bottom;
+    d.r = p.r; d.top = p.top; d.bottom = p.bottom; d.half = Math.max(p.r + 12, lb[1].w / 2);
     boxes.push(...lb);
   }
 
@@ -792,13 +821,15 @@ function renderGraph(s) {
       next ? clip(`next ${next.n} · ${next.title}`, 36) : 'nothing queued',
       `MP ${(w.groups.MP || []).filter(r => r.kind !== 'done').length} · LP ${(w.groups.LP || []).filter(r => r.kind !== 'done').length} open`));
     const win = w.window || {};
-    const holderPos = win.holder && pos.get(win.holder);
-    const wx = holderPos ? holderPos.x - 230 : 550;
+    const holderPos = win.held && win.holder && seen.has(win.holder) ? pos.get(win.holder) : null;
     const waiters = (win.waiters || []).map(id => byId.get(id)?.label).filter(Boolean);
     resSeen.add('_window');
-    boxes.push(drawResClear('_window', { x: wx, y: res.y }, boxes, win.held ? 'red' : 'green', win.held ? 'i-lock' : 'i-unlock',
+    const card = ['_window', win.held ? 'red' : 'green', win.held ? 'i-lock' : 'i-unlock',
       `Window · ${w.lock_name || 'lock'}`, win.held ? clip(`${shortWho(win.who)} · ${dur(now - (win.since || now))}`, 38) : 'free',
-      waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''));
+      waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''];
+    // held: right beside its holder, so the lock line is a short link, not a stroke across the diagram
+    const near = holderPos && drawResNear(holderPos, boxes, card[0], win.holder, ...card.slice(1));
+    boxes.push(near || drawResClear(card[0], { x: holderPos ? holderPos.x : pos.get('lead').x, y: res.y }, boxes, ...card.slice(1)));
   }
   for (const [id, r] of S.res) if (!resSeen.has(id)) {
     const d = S.disp.get(id);
@@ -961,6 +992,27 @@ function drawResClear(id, p, boxes, ...rest) {
   return box(x);
 }
 
+// a resource card next to a node: hanging under its labels first, then beside it, the lower corners, above; the
+// first spot that hits nothing (null when none is free)
+function drawResNear(p, boxes, id, nodeId, ...rest) {
+  const { w, h } = drawRes(id, ...rest);
+  const box = (x, y) => ({ x: x - w / 2 - 8, y: y - h / 2 - 8, w: w + 16, h: h + 16 });
+  // beside the node means beside its widest part (a long status label sticks out past the hex)
+  const own = boxes.filter(b => b.node === nodeId);
+  const half = Math.max(p.r, ...own.map(b => Math.max(p.x - b.x, b.x + b.w - p.x)));
+  const below = p.y + (p.bottom || p.r) + 28 + h / 2, above = p.y - (p.top || p.r) - 24 - h / 2, side = half + 30 + w / 2;
+  const cands = [[p.x, below], [p.x - side, p.y], [p.x + side, p.y], [p.x - w / 2 - 34, below], [p.x + w / 2 + 34, below],
+    [p.x, above], [p.x - side, above], [p.x + side, above], [p.x, below + 96]];
+  for (const [x, y] of cands) {
+    const b = box(x, y);
+    if (boxes.some(o => hit(b, o))) continue;
+    const d = target(id, x, y, 'res');
+    d.w = w; d.h = h; d.rr = Math.min(w, h) / 2 + 2;
+    return b;
+  }
+  return null;
+}
+
 function drawChip(p, text) {
   let r = S.res.get('_fin');
   if (!r) {
@@ -1106,7 +1158,11 @@ function fit(boxes, force) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const b of boxes) { x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h); }
   const pad = 30;
-  const vb = { x: x0 - pad, y: y0 - pad - 40, w: Math.max(600, x1 - x0 + 2 * pad), h: Math.max(400, y1 - y0 + 2 * pad + 40) };
+  // never zoom in past 1:1 (a lone lead would fill the stage): a small graph sits centred at its natural size
+  const MAX_ZOOM = 1, svg = $('graph');
+  const cw = x1 - x0 + 2 * pad, ch = y1 - y0 + 2 * pad + 40;
+  const w = Math.max(600, cw, (svg.clientWidth || 0) / MAX_ZOOM), h = Math.max(400, ch, (svg.clientHeight || 0) / MAX_ZOOM);
+  const vb = { x: x0 - pad + cw / 2 - w / 2, y: y0 - pad - 40 + ch / 2 - h / 2, w, h };
   const key = [vb.x, vb.y, vb.w, vb.h].map(v => Math.round(v / 10)).join(',');
   const changed = S.fitKey !== key;
   S.fitKey = key; S.fitVb = vb;

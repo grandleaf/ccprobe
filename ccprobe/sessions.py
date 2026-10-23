@@ -60,11 +60,13 @@ class Tmux:
         if time.time() - self.at >= self.ttl:
             self.at = time.time()
             panes = {}
-            fmt = "#{pane_pid}\t#{session_name}\t#{window_index}.#{pane_index}\t#{pane_title}"
+            fmt = "#{pane_pid}\t#{session_name}\t#{window_index}.#{pane_index}\t#{session_attached}\t#{pane_title}"
             for line in _run(["tmux", "list-panes", "-a", "-F", fmt]).splitlines():
-                parts = line.split("\t")
-                if len(parts) == 4 and parts[0].isdigit():
-                    panes[int(parts[0])] = {"session": parts[1], "pane": parts[2], "title": parts[3]}
+                parts = line.split("\t", 4)
+                if len(parts) == 5 and parts[0].isdigit():
+                    # attached: how many terminals show this tmux session (0: its window was closed, it runs unseen)
+                    panes[int(parts[0])] = {"session": parts[1], "pane": parts[2], "attached": int(parts[3] or 0) if parts[3].isdigit() else None,
+                                            "title": parts[4]}
             self.panes = panes
         return self.panes
 
