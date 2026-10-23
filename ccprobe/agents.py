@@ -24,6 +24,8 @@ QUIET_S = 180          # thinking → "quiet" after this long without a conversa
 STUCK_S = 600          # → "stuck?" after this long
 
 
+ASK_TOOLS = ("AskUserQuestion", "ExitPlanMode")   # tools that leave the lead waiting on the user
+
 def ts_of(d):
     t = d.get("timestamp")
     if not t:
@@ -83,6 +85,7 @@ class Transcript:
         self.received = collections.deque(maxlen=200)     # {t, kind, from, sender, handback}
         self.qstate = collections.deque(maxlen=20)        # {t, n, head, id, error}
         self.who_writes = collections.deque(maxlen=10)    # (t, literal prefix written to <lock>/who)
+        self.stops = {}                        # task or agent id -> when this transcript stopped it (TaskStop)
         self.compactions = collections.deque(maxlen=50)   # (t, pre, post)
         self.limit = None                      # {"since": t, "text": …} while a usage limit holds
         self.title = None
@@ -184,6 +187,10 @@ class Transcript:
                                  "timeout": _num(inp.get("timeout"), 120000) / 1000 if name == "Bash" else None}
         if bg and tid:
             self.bg_pending[tid] = t
+        if name == "TaskStop" and inp.get("task_id"):
+            self.stops[str(inp["task_id"])] = t
+            if tid in self.pending:
+                self.pending[tid]["stop"] = str(inp["task_id"])
         if name == "SendMessage":
             self.messages.append({"t": t, "kind": "send", "to": str(inp.get("to") or ""), "to_id": None, "summary": arg, "tid": tid})
         if cmd:
@@ -215,12 +222,19 @@ class Transcript:
                         if c.get("is_error") or "Error" in _text_of(c.get("content"))[:200]:
                             errs.add(c.get("tool_use_id"))
             elif isinstance(content, str) and content.strip() and not d.get("isMeta"):
+                if d.get("isCompactSummary"):
+                    return                       # a compaction's summary (even "compacted while idle"): the turn is where it was
+                if content.lstrip().startswith("<local-command-stdout>"):
+                    self.last_kind = "turn_end"  # a local slash command (/compact, /model …) is done: back to the user
+                    return
                 self._touch(t)
                 self.last_kind = "user"          # a prompt typed into this session
         known = [i for i in ids if i in self.pending]
         res = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
         for i in known:
             p = self.pending.pop(i)
+            if p.get("stop") and i in errs:
+                self.stops.pop(p["stop"], None)      # the stop failed: nothing was stopped
             if p["name"] == "SendMessage" and res:
                 rid = res.get("resumedAgentId") or res.get("revivedAgentId") or (res.get("pin") or {}).get("id")
                 if rid:
@@ -318,17 +332,21 @@ def lead_state(tr, session, now):
     if tr is None:
         return {"key": "unknown", "label": session.get("status") or "?", "since": 0, "detail": ""}
     p = tr.oldest_pending()
+    asks = next((q for q in tr.pending.values() if q["name"] in ASK_TOOLS), None)
+    if asks:                                   # a question or a plan left open for the user: really waiting for you
+        what = "a plan for you to approve" if asks["name"] == "ExitPlanMode" else "a question for you"
+        return {"key": "waiting_user", "label": "waiting for you", "since": asks["t"], "detail": what}
     if p:
         age = now - p["t"]
         st = pending_state(tr, now, None, False)
         if age > 60:
             st["detail"] = (st.get("detail") or "") + " (or waiting for your approval?)"
         return st
-    if tr.last_kind in ("turn_end", "end", "handback"):
-        return {"key": "waiting_user", "label": "waiting for you", "since": tr.last_ts, "detail": ""}
+    if tr.last_kind in ("turn_end", "end", "handback"):      # its turn is over: idle until you write
+        return {"key": "idle", "label": "idle", "since": tr.last_ts, "detail": ""}
     if tr.last_kind is None:
-        return {"key": "waiting_user" if session.get("status") == "idle" else "unknown",
-                "label": "waiting for you" if session.get("status") == "idle" else "no recent entries", "since": tr.last_ts, "detail": ""}
+        return {"key": "idle" if session.get("status") == "idle" else "unknown",
+                "label": "idle" if session.get("status") == "idle" else "no recent entries", "since": tr.last_ts, "detail": ""}
     return _ladder(tr, now)
 
 

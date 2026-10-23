@@ -4,6 +4,7 @@ Every rule is tuned so the user's normal workflow raises nothing: a worker waiti
 desk-only mode, caffeinate turned off on purpose, the lead holding the window while the user looks at the app.
 """
 import re
+import time
 
 OPEN = ("asks", "active", "paused", "parked", "queued", "other")
 BUSY = ("running", "thinking", "polling")
@@ -45,11 +46,6 @@ def compute(sessions, now, mem):
         lead_busy = (lead.get("state") or {}).get("key") in BUSY
 
         for a in agents.values():
-            pct = a["ctx"] / a["ctx_max"] if a.get("ctx_max") else 0
-            if pct >= 0.8 and not a["finished"]:
-                add(f"ctx:{a['id']}", "red" if pct >= 0.9 else "amber", f"{a['label']}: context {round(pct * 100)}% full",
-                    f"{round(a['ctx'] / 1000)}k of {round(a['ctx_max'] / 1000)}k. It will compact soon and may lose detail it relies on.",
-                    s, a["id"])
             if a["state"]["key"] == "stuck" and not limited:
                 add(f"stuck:{a['id']}", "amber", f"{a['label']}: {a['state']['label']}",
                     "No conversational entries and no model call for 10 min while not waiting on a tool or a message.", s, a["id"])
@@ -94,7 +90,9 @@ def compute(sessions, now, mem):
         # a State write that failed (the auto-mode refusal case); heads with $(…) cannot be compared, so only errors
         for a in agents.values():
             for q in a.get("qstate") or []:
-                if q["error"] and q["n"] in rows and not any(x["n"] == q["n"] and x["t"] > q["t"] and not x["error"] for x in a["qstate"]):
+                if q["error"] and q["n"] in rows and rows[q["n"]]["kind"] not in ("paused", "parked") \
+                        and not _landed(q, rows[q["n"]]["status"]) \
+                        and not any(x["n"] == q["n"] and x["t"] > q["t"] and not x["error"] for x in a["qstate"]):
                     add(f"stale-row:{root}:{q['n']}", "red", f"Row {q['n']} may be stale",
                         f"{a['label']} tried to set it to \"{q['head'][:40]}…\" but the write failed; the queue shows \"{rows[q['n']]['status']}\".",
                         s, a["id"])
@@ -121,7 +119,7 @@ def compute(sessions, now, mem):
         if win.get("held"):
             held_for = now - (win.get("since") or now)
             h = agents.get(holder)
-            holder_bad = holder != "lead" and (h is None or h["state"]["key"] in ("ended", "dead", "stuck"))
+            holder_bad = holder != "lead" and (h is None or h["state"]["key"] in ("ended", "parked", "dead", "stuck"))
             if held_for >= 900 and holder_bad and not w.get("app_running"):
                 add(f"stale-lock:{root}", "red", "Stale window lock?",
                     f"Held by \"{win.get('who')}\" for {_ago(held_for)}; " +
@@ -149,6 +147,17 @@ def compute(sessions, now, mem):
     rank = {"red": 0, "amber": 1, "info": 2}
     out.sort(key=lambda a: (rank[a["sev"]], -a["since"]))
     return out
+
+
+def _landed(q, status):
+    """The queue already shows what the write said: the call failed after it (a later step in the same command)."""
+    for dt in (0, 60):                     # $(date +%H:%M) as it ran, or a minute on
+        head = q["head"].replace("$(date +%H:%M)", time.strftime("%H:%M", time.localtime(q["t"] + dt)))
+        if "$(" in head or "`" in head:
+            return False                   # another substitution: cannot tell
+        if head.split(": ")[0].strip() in status:
+            return True
+    return False
 
 
 def _ago(s):

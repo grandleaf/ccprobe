@@ -19,6 +19,7 @@ AGENT_BACKFILL, AGENT_MAX = 2 << 20, 32 << 20
 HISTORY_S = 2 * 3600            # how far back a transcript is read on first sight (time-based, capped in bytes)
 RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})\s*:")      # "Task 74: Part 5 rebuild" (anchored: audit minor 4)
 RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|task)(\d{1,4})$", re.I)    # meta.name "mp111"
+RE_HP_NAME = re.compile(r"^hp(\d{1,4})$", re.I)                      # the HP worker, one fresh agent per task: "hp154"
 RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|task)\s*(\d{1,4})\b", re.I)
 HOT_S = 60
 DEAD_KEEP_S = 600
@@ -162,20 +163,27 @@ class Collector:
         for c in cands:
             if c["meta"].get("name"):
                 latest_by_name[c["meta"]["name"]] = c["id"]
-        worker_id = latest_by_name.get("worker") if wok else None
+        # the HP worker: the agent named for the running HP task, else the newest hp<N> (or a "worker" from before the
+        # skill named them by task); every other HP agent is retired
+        hp_running = None
+        if wok:
+            m = re.match(r"running\s+(\d+)", w.get("state_file") or "")
+            hp_running = int(m.group(1)) if m else None
+        worker_id = None
+        if wok:
+            worker_id = latest_by_name.get(f"hp{hp_running}") if hp_running is not None else None
+            if not worker_id:
+                hp_named = [c for c in cands if _is_worker_name(c["meta"].get("name"))]
+                worker_id = hp_named[-1]["id"] if hp_named else None
         in_view = [c for c in cands if now - c["mtime"] <= self.window_s or c["id"] == worker_id]
         trs = {c["id"]: self.transcript(c["path"], AGENT_BACKFILL, AGENT_MAX) for c in in_view}
         ids = set(trs)
 
         # row binding: the HP worker by the state file; others by name ("mp111"), anchored description, own writes
-        hp_running = None
-        if wok:
-            m = re.match(r"running\s+(\d+)", w.get("state_file") or "")
-            hp_running = int(m.group(1)) if m else None
         task_of = {}
         for c in in_view:
             aid, meta = c["id"], c["meta"]
-            n = hp_running if aid == worker_id else None
+            n = hp_running if aid == worker_id and meta.get("name") == "worker" else None   # an hp<N> says its own task
             for rx, src in ((RE_NAME_TASK, meta.get("name") or ""), (RE_TASK, meta.get("description") or "")):
                 if n is None:
                     mm = rx.match(src)
@@ -197,7 +205,7 @@ class Collector:
         win = w["window"] if wok else {}
         holder = None
         if win.get("held"):
-            holder = _holder(win.get("who") or "", main, trs, task_of, latest_by_name)
+            holder = _holder(win.get("who") or "", main, trs, task_of, latest_by_name, worker_id)
 
         def resolve(to):
             if not to:
@@ -241,6 +249,13 @@ class Collector:
                 for x in (m["from"], m["to"]):
                     talked[x] = max(talked.get(x, 0), m["t"])
 
+        names = {c["id"]: c["meta"].get("name") for c in in_view}
+        stopped = {}                # agent id -> (when, by whom) it was stopped with TaskStop
+        for src, tr in ([("lead", main)] if main else []) + list(trs.items()):
+            for tid, t in tr.stops.items():
+                if tid in ids and t > stopped.get(tid, (0, None))[0]:
+                    stopped[tid] = (t, src)
+
         agents = []
         for c in in_view:
             aid, meta, tr = c["id"], c["meta"], trs[c["id"]]
@@ -250,17 +265,29 @@ class Collector:
             st = agent_state(tr, now, alive=s["alive"], lock_name=lock_name, is_holder=holder == aid, row_open=row_open,
                              row_waits_window=bool(row and "waiting for the window" in row["status"]),
                              recently_messaged=bool(tr.bg_pending) or now - talked.get(aid, 0) < 1800)
+            stop_t, stopper = stopped.get(aid, (0, None))
+            if stop_t and tr.last_ts <= stop_t + 5 and st["key"] != "dead":   # nothing since the stop: it was not woken again
+                by = "the lead" if stopper == "lead" else (names.get(stopper) or "another agent")
+                st = {"key": "ended", "label": f"stopped by {by}", "since": stop_t, "detail": "", "sub": "stopped"}
+            # a row paused or parked on purpose: an agent that is not at work there is paused, whatever its last turn said
+            if row and row["kind"] in ("paused", "parked") and st["key"] in ("ended", "stuck", "unknown") and st.get("sub") != "stopped":
+                st = {"key": "parked", "label": "paused", "since": st["since"], "detail": "its row says so"}
             if holder == aid and st["key"] in ("running", "polling", "waiting_window"):
                 st = dict(st, key="running", label="holds the window · " + _dur(now - (win.get("since") or now)))
             role = "worker" if aid == worker_id else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
             label = meta.get("name") or _short_desc(meta.get("description")) or aid[:7]
+            hp = RE_HP_NAME.match(meta.get("name") or "")
             if role in ("mp", "lp") and n is not None:
                 label = f"{role.upper()} {n}"
-            # a fresh agent per task reuses the name: an older holder of it is retired once its turn has ended
+            elif hp:
+                label = f"HP {int(hp.group(1))}"
+            # a fresh agent per task: an older holder of a name, or an HP worker that is not the current one, is retired
+            # once its turn has ended
             superseded = bool(meta.get("name")) and latest_by_name.get(meta["name"]) != aid
+            retired = superseded or (_is_worker_name(meta.get("name")) and wok and aid != worker_id)
             if superseded:
                 label = f"{meta['name']} (earlier)"
-            finished = st["key"] == "dead" or (st["key"] == "ended" and (superseded or (st.get("sub") == "done" and now - st["since"] > 120)))
+            finished = st["key"] == "dead" or (st["key"] == "ended" and (retired or st.get("sub") == "stopped" or (st.get("sub") == "done" and now - st["since"] > 120)))
             agents.append({
                 "id": aid, "name": meta.get("name"), "label": label, "desc": clip(redact(meta.get("description") or ""), 120),
                 "role": role, "task": n, "task_title": row["title"] if row else None, "group": row["group"] if row else None,
@@ -318,7 +345,7 @@ class Collector:
                 "recent": list(main.recent) if main else [], "last_ts": main.last_ts if main else 0,
                 "compactions": [x[0] for x in main.compactions if now - x[0] <= self.window_s] if main else [],
                 "limit": main.limit if main else None}
-        if holder == "lead" and lead["state"]["key"] in ("waiting_user", "running", "thinking"):
+        if holder == "lead" and lead["state"]["key"] in ("waiting_user", "idle", "running", "thinking"):
             lead["holds_window"] = True
 
         events = {}
@@ -357,7 +384,11 @@ def _pane_title(s):
     return re.sub(r"^[^\w]+", "", t).strip() or None
 
 
-def _holder(who, main, trs, task_of, by_name):
+def _is_worker_name(name):
+    return name == "worker" or bool(RE_HP_NAME.match(name or ""))
+
+
+def _holder(who, main, trs, task_of, by_name, worker_id=None):
     """The node holding the lock: the transcript that last wrote the literal start of `who` (audit M1), then fallbacks."""
     who = who.strip()
     best, best_t = None, 0
@@ -371,6 +402,8 @@ def _holder(who, main, trs, task_of, by_name):
     if low.startswith("lead"):
         return "lead"
     first = low.split()[0] if low.split() else ""
+    if first == "worker" and worker_id in trs:      # the worker's scripts still write "worker …": the current HP worker
+        return worker_id
     if by_name.get(first) in trs:                 # "worker capture …" → the agent named worker
         return by_name[first]
     m = RE_WHO_ROW.match(who)

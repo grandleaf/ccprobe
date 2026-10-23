@@ -15,13 +15,14 @@ const clip = (s, n) => { s = String(s ?? ''); if (s.length <= n) return s; let c
 const STATUS = {
   running: ['i-run', 'green'], thinking: ['i-think', 'cyan'], polling: ['i-wait', 'slate'], waiting_window: ['i-park', 'amber'],
   ended: ['i-done', 'slate'], ended_bg: ['i-wait', 'slate'], stuck: ['i-stuck', 'amber'], dead: ['i-dead', 'red'],
-  waiting_user: ['i-ask', 'rose'], shell: ['i-wait', 'slate'], unknown: ['i-wait', 'slate'],
+  waiting_user: ['i-ask', 'rose'], idle: ['i-done', 'slate'], shell: ['i-wait', 'slate'], unknown: ['i-wait', 'slate'], parked: ['i-park', 'amber'],
 };
 const ROWKIND = {
   active: ['i-run', 'green'], queued: ['i-wait', 'slate'], paused: ['i-park', 'amber'], parked: ['i-park', 'amber'],
   asks: ['i-ask', 'rose'], done: ['i-done', 'green'], closed: ['i-done', 'slate'], other: ['i-wait', 'slate'],
 };
-const ROLECOL = { lead: 'cyan', worker: 'amber', mp: 'green', lp: 'rose', helper: 'violet' };
+// the hotter the colour, the higher the priority: HP rose, MP amber, LP green
+const ROLECOL = { lead: 'cyan', worker: 'rose', mp: 'amber', lp: 'green', helper: 'violet' };
 const TOOLS = new Set(['Bash', 'Read', 'Edit', 'Write', 'SendMessage', 'Agent']);
 const toolCls = t => TOOLS.has(t) ? t : (t === 'MultiEdit' || t === 'NotebookEdit' ? 'Edit' : 'other');
 const icon = (id, cls = 'ico12') => `<svg class="${cls}"><use href="#${id}"/></svg>`;
@@ -32,10 +33,11 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private window: settings last for this visit */ } },
 };
 const reducedOS = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, compact: false, notify: false },
+const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, compact: false, notify: false, railSort: 'attn' },
   store.get('ccprobe.settings', {}));
 const saveSettings = () => store.set('ccprobe.settings', settings);
 let dismissed = store.get('ccprobe.dismissed', {});    // alert key+title -> until (epoch s; 1e12 = for good)
+let hidden = store.get('ccprobe.hidden', {});          // agent id -> server time the user hid it from the diagram
 
 // ---- page state ----
 const S = {
@@ -131,6 +133,7 @@ function onModel(m) {
     const pick = ss.find(s => s.wts && s.status === 'busy') || ss.find(s => s.status === 'busy') || ss[0];
     S.sid = pick ? pick.id : null;
     S.sel = 'lead'; S.userPanned = false;
+    clearGraph();   // a different graph: cut, never morph
   }
   // new messages become pulses (never the backlog on first load, never while the tab is hidden)
   const fresh = [];
@@ -196,30 +199,296 @@ function renderHeader(m, s) {
 }
 const shortWho = who => String(who || '').replace(/\s+\w{3} \w{3}\s+\d+ [\d:]+ \w{3,4} \d{4}$/, '').replace(/\s+\w{3} \w{3}\s+\d+ /, ' ');
 
-// ---- rail ----
+// ---- rail: the sessions, sorted four ways; in Custom the cards are dragged into place (iOS style) ----
+let railOrder = store.get('ccprobe.railOrder', { v: 1, keys: [] });   // Custom: session keys (cwd) in the user's order
+const railCards = new Map();      // session key -> its card
+const RAIL_EASE = 'cubic-bezier(.2,.8,.2,1)';
+Object.assign(S, { railShown: [], railOrderAt: 0, railHold: false, railMode: null, railForce: false, railDrag: null, railDirty: false });
+
+const byAZ = (a, b) => a.project.localeCompare(b.project, undefined, { numeric: true, sensitivity: 'base' })
+  || (a.cwd || '').localeCompare(b.cwd || '') || (a.started || 0) - (b.started || 0) || a.id.localeCompare(b.id);
+const activity = s => Math.max(s.lead?.last_ts || 0, s.status_since || 0, ...(s.agents || []).map(a => a.last_ts || 0));
+// a session's lasting identity: its directory (ids change on restart, project names can repeat); a second live
+// session in the same directory, by start time, is "cwd#2"
+function railEntries(ss) {
+  const seen = new Map();
+  return ss.slice().sort((a, b) => (a.started || 0) - (b.started || 0)).map(s => {
+    const n = (seen.get(s.cwd) || 0) + 1; seen.set(s.cwd, n);
+    return { s, key: n > 1 ? `${s.cwd}#${n}` : (s.cwd || s.id) };
+  });
+}
+function sortRail(list, m, alerts) {
+  const prev = new Map(S.railShown.map((k, i) => [k, i]));
+  const recent = (x, y) => Math.floor(activity(y.s) / 30) - Math.floor(activity(x.s) / 30)
+    || (prev.get(x.key) ?? 1e9) - (prev.get(y.key) ?? 1e9) || byAZ(x.s, y.s);   // 30 s buckets: busy pairs do not swap every tick
+  const mode = settings.railSort;
+  if (mode === 'az') return list.slice().sort((x, y) => byAZ(x.s, y.s));
+  if (mode === 'recent') return list.slice().sort(recent);
+  if (mode === 'custom') return customOrder(list);
+  const rank = s => {
+    const mine = alerts.filter(a => a.session === s.id);
+    const st = s.lead?.state || {};
+    if (!s.alive || s.error) return 4;
+    if (mine.some(a => a.sev === 'red') || st.key === 'waiting_user') return 0;   // a question or plan for you
+    if (mine.some(a => a.sev === 'amber')) return 1;
+    return BUSY.includes(st.key) || s.status === 'busy' ? 2 : 3;
+  };
+  const r = new Map(list.map(x => [x.key, rank(x.s)]));
+  return list.slice().sort((x, y) => r.get(x.key) - r.get(y.key) || recent(x, y));
+}
+// Custom: the saved order, with sessions it has never seen slotted in by A–Z (after their A–Z predecessor, else
+// before their successor); with nothing saved it is A–Z
+function customOrder(list) {
+  const az = list.slice().sort((x, y) => byAZ(x.s, y.s));
+  const at = new Map(list.map(x => [x.key, x]));
+  const out = railOrder.keys.filter(k => at.has(k)).map(k => at.get(k));
+  const placed = new Set(out.map(x => x.key));
+  az.forEach((x, i) => {
+    if (placed.has(x.key)) return;
+    let j = -1;
+    for (let p = i - 1; p >= 0 && j < 0; p--) if (placed.has(az[p].key)) j = out.findIndex(o => o.key === az[p].key) + 1;
+    for (let q = i + 1; q < az.length && j < 0; q++) if (placed.has(az[q].key)) j = out.findIndex(o => o.key === az[q].key);
+    out.splice(j < 0 ? out.length : j, 0, x); placed.add(x.key);
+  });
+  return out;
+}
+// saved only on a move by the user: the visible order, with sessions not running now kept after the key they followed
+function saveCustom(keys) {
+  const out = keys.slice(), vis = new Set(keys), old = railOrder.keys;
+  old.forEach((k, i) => {
+    if (vis.has(k)) return;
+    const after = old.slice(0, i).reverse().find(p => out.includes(p));
+    out.splice(after ? out.indexOf(after) + 1 : out.length, 0, k);
+  });
+  while (out.length > 100) { const i = out.findIndex(k => !vis.has(k)); if (i < 0) break; out.splice(i, 1); }
+  railOrder = { v: 1, keys: out }; store.set('ccprobe.railOrder', railOrder);
+}
+function cardHtml(s, alerts, now) {
+  const na = (s.agents || []).filter(a => !a.finished).length;
+  const nal = alerts.filter(a => a.session === s.id && a.sev !== 'info').length;
+  const st = s.alive ? s.status : 'dead';
+  return `<div class="n"><span class="st ${esc(st)}"></span><span class="nm">${esc(s.project)}</span>${nal ? `<span class="b alert">${nal}</span>` : na ? `<span class="b">${na} agent${na > 1 ? 's' : ''}</span>` : ''}</div>
+      <div class="m">${esc(s.lead?.state?.label || st)} · ${ago(s.lead?.state?.since || s.status_since, now)}</div>
+      <div class="m">${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) : 'not in tmux'} · v${esc(s.version)}</div>`;
+}
 function renderRail(m) {
   const ss = m?.sessions || [];
   const alerts = liveAlerts(m);
-  let h = `<div class="rail-h">${ss.length} session${ss.length === 1 ? '' : 's'} · ${ss.filter(s => s.tmux).length} in tmux</div>`;
-  for (const s of ss) {
-    const na = (s.agents || []).filter(a => !a.finished).length;
-    const nal = alerts.filter(a => a.session === s.id && a.sev !== 'info').length;
-    const st = s.alive ? s.status : 'dead';
-    h += `<button class="sess ${s.id === S.sid ? 'on' : ''}" data-sid="${esc(s.id)}">
-      <div class="n"><span class="st ${esc(st)}"></span><span class="nm">${esc(s.project)}</span>${nal ? `<span class="b alert">${nal}</span>` : na ? `<span class="b">${na} agent${na > 1 ? 's' : ''}</span>` : ''}</div>
-      <div class="m">${esc(s.lead?.state?.label || st)} · ${ago(s.lead?.state?.since || s.status_since, m.now)}</div>
-      <div class="m">${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) : 'not in tmux'} · v${esc(s.version)}</div></button>`;
+  const nt = ss.filter(s => s.tmux).length;
+  setT($('railCount'), `${ss.length} session${ss.length === 1 ? '' : 's'}`);
+  $('railCount').dataset.tip = `${ss.length} session${ss.length === 1 ? '' : 's'} · ${nt} in tmux`;
+  $('rail').classList.toggle('custom', settings.railSort === 'custom');
+  const list = railEntries(ss);
+  for (const { s, key } of list) {          // contents: every tick, each card only when its text changed
+    let b = railCards.get(key);
+    if (!b) { b = document.createElement('button'); b.className = 'sess'; b.setAttribute('role', 'listitem'); b.dataset.key = key; railCards.set(key, b); }
+    const h = cardHtml(s, alerts, m.now);
+    if (b._html !== h) { b.innerHTML = h; b._html = h; }
+    b.dataset.sid = s.id; b.classList.toggle('on', s.id === S.sid);
+    b.setAttribute('aria-label', `${s.project}, ${s.lead?.state?.label || s.status}`);
   }
-  if ($('rail').innerHTML !== h) $('rail').innerHTML = h;
+  if (S.railDrag) { S.railDirty = true; return; }   // never reorder under a card being dragged
+  const keys = new Set(list.map(x => x.key));
+  for (const [k, b] of railCards) if (!keys.has(k)) { b.remove(); railCards.delete(k); }
+  const want = sortRail(list, m, alerts).map(x => x.key);
+  const dom = [...$('railList').children].map(b => b.dataset.key);
+  const fresh = want.some(k => !railCards.get(k).isConnected);
+  if (!fresh && want.join('\n') === dom.join('\n')) { S.railMode = settings.railSort; return; }
+  const force = S.railForce || S.railMode !== settings.railSort;
+  // live reorders wait: at most one every 4 s, and none while the pointer or focus is in the rail
+  if (!force && !fresh && (S.railHold || performance.now() - S.railOrderAt < 4000)) return;
+  applyRailOrder(want, dom.length > 0 && (force || settings.motion === 'full'));
+  S.railMode = settings.railSort; S.railForce = false;
 }
-$('rail').addEventListener('click', e => {
+// FLIP: read every card, move the nodes, read again, then slide each from where it was
+function applyRailOrder(keys, animate) {
+  const listEl = $('railList');
+  animate = animate && settings.motion !== 'off' && !document.hidden;
+  const first = new Map();
+  if (animate) for (const b of listEl.children) first.set(b.dataset.key, b.getBoundingClientRect());
+  const focused = document.activeElement;
+  keys.forEach((k, i) => { const b = railCards.get(k); if (listEl.children[i] !== b) listEl.insertBefore(b, listEl.children[i] || null); });
+  if (focused && focused !== document.activeElement && listEl.contains(focused)) focused.focus();
+  S.railShown = keys; S.railOrderAt = performance.now();
+  if (!animate) return;
+  const last = keys.map(k => [railCards.get(k), railCards.get(k).getBoundingClientRect(), first.get(k)]);
+  const moved = [];
+  for (const [b, l, f] of last) {
+    if (!f) { b.classList.add('enter'); setTimeout(() => b.classList.remove('enter'), 250); continue; }
+    const dx = f.left - l.left, dy = f.top - l.top;
+    if (dx || dy) { b.style.transition = 'none'; b.style.translate = `${dx}px ${dy}px`; moved.push(b); }
+  }
+  if (!moved.length) return;
+  void listEl.offsetHeight;
+  const ms = settings.motion === 'full' ? 260 : 0;
+  for (const b of moved) { b.style.transition = ms ? `translate ${ms}ms ${RAIL_EASE}` : 'none'; b.style.translate = ''; }
+  setTimeout(() => moved.forEach(b => { b.style.transition = ''; }), ms + 50);
+}
+const railHold = on => {
+  S.railHold = on;
+  clearTimeout(S.railHoldTimer);
+  if (!on) S.railHoldTimer = setTimeout(() => S.model && renderRail(S.model), 600);
+};
+$('rail').addEventListener('pointerenter', () => railHold(true));
+$('rail').addEventListener('pointerleave', () => railHold($('rail').contains(document.activeElement)));
+$('rail').addEventListener('focusin', () => railHold(true));
+$('rail').addEventListener('focusout', e => { if (!$('rail').contains(e.relatedTarget)) railHold($('rail').matches(':hover')); });
+
+$('railList').addEventListener('click', e => {
   const b = e.target.closest('.sess'); if (!b) return;
   selectSession(b.dataset.sid);
 });
+
+// ---- rail: drag to reorder (Custom only); the DOM stays put until the drop, the other cards slide aside ----
+let railPress = null;
+const railAxis = () => { const cs = getComputedStyle($('railList')); return cs.display.includes('flex') && cs.flexDirection === 'row' ? 'x' : 'y'; };   // the strip under 1100 px
+const railTr = (axis, v) => v ? (axis === 'y' ? `0 ${v}px` : `${v}px 0`) : '';
+$('railList').addEventListener('pointerdown', ev => {
+  if (settings.railSort !== 'custom' || ev.button !== 0 || ev.pointerType === 'touch') return;
+  const b = ev.target.closest('.sess');
+  if (b) railPress = { b, id: ev.pointerId, x: ev.clientX, y: ev.clientY };
+});
+addEventListener('pointermove', ev => {
+  if (S.railDrag) { S.railDrag.last = ev; railDragMove(); return; }
+  if (railPress && ev.pointerId === railPress.id && Math.hypot(ev.clientX - railPress.x, ev.clientY - railPress.y) > 5) railDragStart(ev);
+});
+addEventListener('pointerup', () => { railPress = null; if (S.railDrag) railDragEnd(true); });
+addEventListener('pointercancel', () => { railPress = null; if (S.railDrag) railDragEnd(false); });
+addEventListener('blur', () => { if (S.railDrag) railDragEnd(false); });
+
+function railDragStart(ev) {
+  const b = railPress.b; railPress = null;
+  const listEl = $('railList'), sc = $('rail'), axis = railAxis();
+  const cards = [...listEl.children], from = cards.indexOf(b);
+  const lo = axis === 'y' ? 'top' : 'left', hi = axis === 'y' ? 'bottom' : 'right';
+  const scroll = () => axis === 'y' ? sc.scrollTop : sc.scrollLeft;
+  const rects = cards.map(c => c.getBoundingClientRect());
+  const s0 = scroll();
+  const lows = rects.map(r => r[lo] + s0), highs = rects.map(r => r[hi] + s0);   // in content coordinates
+  const gap = cards.length > 1 ? (from + 1 < cards.length ? lows[from + 1] - highs[from] : lows[from] - highs[from - 1]) : 0;
+  const step = highs[from] - lows[from] + gap;
+  S.railDrag = { b, cards, from, to: from, axis, lows, highs, step, start: axis === 'y' ? ev.clientY : ev.clientX, s0, scroll, last: ev, v: 0 };
+  hideTip(); document.body.classList.add('sorting');
+  const full = settings.motion === 'full';
+  b.style.transition = full ? 'scale .15s, box-shadow .15s' : 'none';
+  b.classList.add('lifted');
+  for (const c of cards) if (c !== b) c.style.transition = full ? `translate 200ms ${RAIL_EASE}` : 'none';
+  railDragMove();
+}
+function railDragMove() {
+  const d = S.railDrag, sc = $('rail');
+  const pos = d.axis === 'y' ? d.last.clientY : d.last.clientX;
+  const n = d.cards.length, half = (d.highs[d.from] - d.lows[d.from]) / 2;
+  let delta = pos - d.start + d.scroll() - d.s0;
+  delta = Math.max(d.lows[0] - d.lows[d.from] - half, Math.min(d.highs[n - 1] - d.highs[d.from] + half, delta));
+  d.b.style.translate = railTr(d.axis, delta);
+  const mid = (d.lows[d.from] + d.highs[d.from]) / 2 + delta;
+  let to = 0;
+  for (let i = 0; i < n; i++) if (i !== d.from && (d.lows[i] + d.highs[i]) / 2 < mid) to++;
+  if (to !== d.to) {
+    d.to = to;
+    d.cards.forEach((c, i) => {
+      if (i === d.from) return;
+      const shift = d.from < i && i <= to ? -d.step : to <= i && i < d.from ? d.step : 0;
+      c.style.translate = railTr(d.axis, shift);
+    });
+  }
+  // autoscroll near the ends (below the sticky header), faster the deeper in
+  const r = sc.getBoundingClientRect(), head = d.axis === 'y' ? sc.querySelector('.rail-h').getBoundingClientRect().height : sc.querySelector('.rail-h').getBoundingClientRect().width;
+  const a = (d.axis === 'y' ? r.top : r.left) + head, z = d.axis === 'y' ? r.bottom : r.right;
+  d.v = pos < a + 32 ? -Math.min(12, (a + 32 - pos) / 32 * 12) : pos > z - 32 ? Math.min(12, (pos - z + 32) / 32 * 12) : 0;
+  if (d.v && !d.raf) d.raf = requestAnimationFrame(function tick() {
+    d.raf = 0;
+    if (S.railDrag !== d || !d.v) return;
+    if (d.axis === 'y') sc.scrollTop += d.v; else sc.scrollLeft += d.v;
+    railDragMove();
+  });
+}
+function railDragEnd(commit) {
+  const d = S.railDrag; if (!d || d.ending) return;
+  d.ending = true; d.v = 0;
+  const to = commit ? d.to : d.from;
+  const slot = to > d.from ? d.highs[to] - d.highs[d.from] : d.lows[to] - d.lows[d.from];
+  const ms = settings.motion === 'full' ? 180 : 0;
+  d.b.style.transition = ms ? `translate ${ms}ms ${RAIL_EASE}, scale ${ms}ms, box-shadow ${ms}ms` : 'none';
+  d.b.style.translate = railTr(d.axis, slot);
+  d.b.classList.remove('lifted');
+  if (!commit) for (const c of d.cards) if (c !== d.b) c.style.translate = '';
+  // the click that follows the drop must not select the card
+  const eat = e => { e.stopPropagation(); e.preventDefault(); };
+  addEventListener('click', eat, true); setTimeout(() => removeEventListener('click', eat, true), 0);
+  setTimeout(() => {   // not transitionend: with motion off it never fires
+    const listEl = $('railList');
+    for (const c of d.cards) { c.style.transition = 'none'; c.style.translate = ''; }
+    if (to !== d.from) {
+      const rest = d.cards.filter(c => c !== d.b);
+      listEl.insertBefore(d.b, rest[to] || null);
+    }
+    void listEl.offsetHeight;
+    for (const c of d.cards) c.style.transition = '';
+    document.body.classList.remove('sorting');
+    S.railDrag = null;
+    if (commit && to !== d.from) {
+      const keys = [...listEl.children].map(c => c.dataset.key);
+      saveCustom(keys); S.railShown = keys; S.railOrderAt = performance.now();
+      railSay(d.b, to, keys.length);
+    }
+    if (S.railDirty) { S.railDirty = false; renderRail(S.model); }
+  }, ms ? ms + 50 : 0);
+}
+function railSay(b, i, n) { setT($('railLive'), `${b.querySelector('.nm')?.textContent || 'session'} moved to ${i + 1} of ${n}`); }
+
+// keyboard: arrows move the focus; in Custom, Alt+arrows move the card (Alt+Shift: to the end)
+$('railList').addEventListener('keydown', e => {
+  const b = e.target.closest('.sess'); if (!b) return;
+  const back = e.key === 'ArrowUp' || e.key === 'ArrowLeft', fwd = e.key === 'ArrowDown' || e.key === 'ArrowRight';
+  const ends = e.altKey && (e.key === 'Home' || e.key === 'End');
+  if (!back && !fwd && !ends) return;
+  e.preventDefault();
+  const cards = [...$('railList').children], i = cards.indexOf(b);
+  if (!e.altKey) { (cards[i + (fwd ? 1 : -1)] || b).focus(); return; }
+  if (settings.railSort !== 'custom') { showTip(b, 'Switch to Custom order to reorder'); setTimeout(hideTip, 1500); return; }
+  let j = ends ? (e.key === 'Home' ? 0 : cards.length - 1) : e.shiftKey ? (back ? 0 : cards.length - 1) : i + (back ? -1 : 1);
+  j = Math.max(0, Math.min(cards.length - 1, j));
+  if (j === i) return;
+  const keys = cards.map(c => c.dataset.key);
+  keys.splice(j, 0, keys.splice(i, 1)[0]);
+  saveCustom(keys);
+  applyRailOrder(keys, true);
+  b.focus(); railSay(b, j, keys.length);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.railDrag) { e.stopImmediatePropagation(); railDragEnd(false); } }, true);
 function selectSession(sid) {
   if (sid === S.sid) return;
   S.sid = sid; store.set('ccprobe.sid', sid); S.sel = 'lead'; S.userPanned = false; S.expandFinished = false;
   clearGraph(); render();
+}
+
+// ---- hiding agents by hand: until they write anything new, then they come back by themselves ----
+const BUSY = ['running', 'thinking', 'polling'];
+const canHide = n => n && n.id !== 'lead' && n.role !== 'lead' && !BUSY.includes(n.state?.key);
+// done means finished (its work handed back, or an earlier agent of a reused name) or dead; idle and parked agents are not done
+const isDone = a => a.finished || a.state.key === 'dead';
+function isHidden(a) {
+  const t = hidden[a.id];
+  if (t == null) return false;
+  if ((a.last_ts || 0) > t) { delete hidden[a.id]; store.set('ccprobe.hidden', hidden); return false; }   // at work again
+  return true;
+}
+function hideAgents(ids) {
+  if (!ids.length || !S.model) return;
+  const now = S.model.now;
+  for (const k in hidden) if (hidden[k] < now - 86400) delete hidden[k];   // long gone from the model's window
+  for (const id of ids) hidden[id] = now;
+  store.set('ccprobe.hidden', hidden);
+  if (ids.includes(S.sel)) S.sel = 'lead';
+  hideTip(); render();
+}
+function unhideAgents(ids) {
+  let n = 0;
+  for (const id of ids) if (id in hidden) { delete hidden[id]; n++; }
+  if (n) store.set('ccprobe.hidden', hidden);
+  return n;
 }
 
 // ---- graph: nodes ----
@@ -232,7 +501,7 @@ function buildNodes(s) {
   }];
   const rowOf = rowIndex(s);
   for (const a of s.agents || []) {
-    if (a.finished && !settings.showFinished) continue;
+    if (isHidden(a) || a.finished && !settings.showFinished) continue;
     const row = a.task != null ? rowOf.get(a.task) : null;
     nodes.push(Object.assign({}, a, {
       sub: clip(a.task_title || a.desc || '', 26), rowKind: row ? row.kind : null,
@@ -323,19 +592,172 @@ function layout(nodes, s) {
 function clearGraph() {
   for (const g of ['gEdges', 'gNodes', 'gTethers', 'gCards', 'gPulse']) $(g).textContent = '';
   S.nodes.clear(); S.edges.clear(); S.cards.clear(); S.res.clear(); S.pulses = []; S.prevState.clear();
+  S.disp.clear(); S.leaving.clear(); S.vbD = null; S.snapNext = true; S.prevCollapsed = new Set(); S.fadeUntil = 0;
+  $('hiddenBtn').hidden = $('clearBtn').hidden = true;   // renderGraph shows them again when they apply
+}
+
+// ---- motion: renderGraph sets targets once per tick; one spring loop moves nodes, resources, cards and the view,
+// and redraws the edges and tethers from what is on screen every frame ----
+Object.assign(S, { disp: new Map(), leaving: new Set(), vbD: null, snapNext: true, prevCollapsed: new Set(), fadeUntil: 0, loopT: 0 });
+const W0 = 12;   // a critically damped spring (ω, rad/s): ~90 % of a move in 0.3 s, at rest by ~0.7 s, no overshoot
+const posAnim = () => settings.motion === 'full' && !document.hidden && !S.snapNext;
+const fadeAnim = () => settings.motion !== 'off' && !document.hidden && !S.snapNext;
+// one step in closed form (stable for any dt); a new target mid-flight keeps position and velocity: no restart
+function spr(o, k, v, t, dt, eps = .3, veps = 5) {
+  const d = o[k] - o[t];
+  if (!d && !o[v]) return false;
+  const e = Math.exp(-W0 * dt), a = o[v] + W0 * d;
+  o[k] = o[t] + (d + a * dt) * e; o[v] = (o[v] - W0 * a * dt) * e;
+  if (Math.abs(o[k] - o[t]) < eps && Math.abs(o[v]) < veps) { o[k] = o[t]; o[v] = 0; return false; }
+  return true;
+}
+function fadeTo(o, to, ms, delay = 0) {
+  const now = performance.now();
+  o.f0 = opNow(o, now); o.f1 = to; o.ft = now + delay; o.fd = ms;
+  S.fadeUntil = Math.max(S.fadeUntil, o.ft + ms);
+}
+function opNow(o, now) {
+  if (!o) return 1;
+  if (!o.fd) return o.f1 ?? 1;
+  const k = Math.min(1, Math.max(0, (now - o.ft) / o.fd));
+  return o.f0 + (o.f1 - o.f0) * k;
+}
+const opStr = v => v >= .999 ? '1' : Math.max(0, v).toFixed(3);
+function put(e, a, v) { if (e['_' + a] !== v) { e['_' + a] = v; e.setAttribute(a, v); } }   // per-frame writes, cached
+// a node's or resource's target; a new one grows out of `from()` (its parent, or the finished chip)
+function target(id, x, y, kind, from) {
+  let d = S.disp.get(id);
+  if (!d) {
+    d = { kind, x, y, vx: 0, vy: 0, tx: x, ty: y, s: 1, vs: 0, ts: 1, f1: 1, born: performance.now() };
+    S.disp.set(id, d);
+    const f = posAnim() && from && from();
+    if (f) { d.x = f.x; d.y = f.y; d.s = .5; }
+    if (fadeAnim()) { d.f1 = 0; fadeTo(d, 1, posAnim() ? 220 : 150); }
+    return d;
+  }
+  if (d.leaving) { unleave(d); d.ts = 1; }
+  if (Math.abs(d.tx - x) > .5 || Math.abs(d.ty - y) > .5) {
+    d.tx = x; d.ty = y;
+    if (S.tipAnchor && S.nodes.get(id)?.outer.contains(S.tipAnchor)) hideTip();   // its tip would point at the old spot
+  }
+  if (!posAnim()) { d.x = d.tx; d.y = d.ty; d.vx = d.vy = 0; d.s = d.ts; d.vs = 0; }
+  return d;
+}
+// on the way out: fade (and move or shrink) for `ms`, then `drop` removes it; with motion off it goes at once
+function leave(o, ms, drop, hold = 0) {
+  o.drop = drop;
+  if (!fadeAnim()) { drop(); return; }
+  if (!posAnim() && 'tx' in o) { o.tx = o.x; o.ty = o.y; o.ts = o.s; ms = 150; hold = 0; }   // reduced: fade in place
+  o.leaving = true; o.until = performance.now() + ms;
+  fadeTo(o, 0, ms - hold, hold); S.leaving.add(o);
+}
+function unleave(o) {
+  if (!o.leaving) return;
+  o.leaving = false; S.leaving.delete(o);
+  fadeTo(o, 1, fadeAnim() ? 150 : 0);
+}
+// where an edge or tether meets a node or resource as drawn now
+function geom(id) {
+  const d = S.disp.get(id); if (!d) return null;
+  if (d.kind === 'res') return { x: d.x, y: d.y, r: d.rr, rect: d.w ? { w: d.w, h: d.h } : null };
+  return { x: d.x, y: d.y, r: d.r * d.s, top: (d.top || 0) * d.s, bottom: (d.bottom || 0) * d.s };
+}
+function moving() {
+  const now = performance.now();
+  if (S.leaving.size || now < S.fadeUntil || S.pulses.length) return true;
+  for (const d of S.disp.values()) if (d.x !== d.tx || d.y !== d.ty || d.s !== d.ts) return true;
+  for (const k of S.cards.values()) if (k.swapAt || k.ox !== k.tox || k.oy !== k.toy) return true;
+  const v = S.vbD;
+  return !!v && (v.x !== v.tx || v.y !== v.ty || v.w !== v.tw || v.h !== v.th);
+}
+function kick() { if (!S.raf) { S.loopT = performance.now(); S.raf = requestAnimationFrame(tick); } }
+function tick(now) {
+  S.raf = 0;
+  if (document.hidden) { settleAll(); return; }
+  const dt = Math.min(.064, Math.max(0, (now - S.loopT) / 1000)); S.loopT = now;
+  for (const d of S.disp.values()) { spr(d, 'x', 'vx', 'tx', dt); spr(d, 'y', 'vy', 'ty', dt); spr(d, 's', 'vs', 'ts', dt, .002, .03); }
+  const t0 = performance.now();
+  for (const k of S.cards.values()) {
+    if (!k.swapAt) { spr(k, 'ox', 'vox', 'tox', dt); spr(k, 'oy', 'voy', 'toy', dt); }
+    else if (t0 >= k.swapAt) { k.ox = k.tox; k.oy = k.toy; k.vox = k.voy = 0; k.swapAt = 0; fadeTo(k, 1, 150); }
+  }
+  const v = S.vbD;
+  if (v) { spr(v, 'x', 'vx', 'tx', dt); spr(v, 'y', 'vy', 'ty', dt); spr(v, 'w', 'vw', 'tw', dt); spr(v, 'h', 'vh', 'th', dt); }
+  const t = performance.now();
+  for (const o of S.leaving) if (t >= o.until) { S.leaving.delete(o); o.leaving = false; o.drop(); }
+  drawFrame(t);
+  stepPulses(now);
+  if (moving()) S.raf = requestAnimationFrame(tick);
+}
+// a hidden tab, or coming back to one: everything straight to where it belongs
+function settleAll() {
+  for (const d of S.disp.values()) { d.x = d.tx; d.y = d.ty; d.s = d.ts; d.vx = d.vy = d.vs = 0; d.fd = 0; }
+  for (const k of S.cards.values()) { k.ox = k.tox; k.oy = k.toy; k.vox = k.voy = 0; k.fd = 0; k.swapAt = 0; k.f1 = k.leaving ? 0 : 1; }
+  for (const e of S.edges.values()) e.fd = 0;
+  for (const o of [...S.leaving]) { S.leaving.delete(o); o.leaving = false; o.drop(); }
+  const v = S.vbD;
+  if (v) { v.x = v.tx; v.y = v.ty; v.w = v.tw; v.h = v.th; v.vx = v.vy = v.vw = v.vh = 0; }
+  for (const p of S.pulses) { p.dot.remove(); p.halo.remove(); }
+  S.pulses = []; S.fadeUntil = 0;
+  drawFrame(performance.now());
+}
+function drawFrame(now) {
+  const tf = d => `translate(${d.x.toFixed(1)},${d.y.toFixed(1)})` + (Math.abs(d.s - 1) > .001 ? ` scale(${d.s.toFixed(3)})` : '');
+  for (const [id, p] of S.nodes) {
+    const d = S.disp.get(id); if (!d) continue;
+    put(p.outer, 'transform', tf(d)); put(p.outer, 'opacity', opStr(opNow(d, now)));
+  }
+  for (const [id, r] of S.res) {
+    const d = S.disp.get(id); if (!d) continue;
+    put(r.g, 'transform', tf(d)); put(r.g, 'opacity', opStr(opNow(d, now)));
+  }
+  for (const [key, e] of S.edges) {
+    const a = geom(e.a), b = geom(e.b);
+    if (!a || !b) { e.g.remove(); S.edges.delete(key); S.leaving.delete(e); continue; }
+    const { d, mid } = edgePath(a, b, e.bend);
+    put(e.path, 'd', d);
+    put(e.lbl, 'x', (mid.x + 8).toFixed(1)); put(e.lbl, 'y', (mid.y - 6).toFixed(1));
+    put(e.g, 'opacity', opStr(Math.min(opNow(S.disp.get(e.a), now), opNow(S.disp.get(e.b), now), opNow(e, now))));
+  }
+  for (const [key, k] of S.cards) {
+    const n = geom(k.node);
+    if (!n) { k.g.remove(); k.t.remove(); S.cards.delete(key); S.leaving.delete(k); continue; }
+    const sx = n.x + k.ox, sy = n.y + k.oy;
+    put(k.g, 'transform', `translate(${sx.toFixed(1)},${sy.toFixed(1)})`);
+    const o = Math.min(opNow(k, now), opNow(S.disp.get(k.node), now));
+    put(k.g, 'opacity', opStr(o));
+    // the tether: from the node's rim to the nearest point of the card
+    const cx = Math.max(sx, Math.min(n.x, sx + k.w)), cy = Math.max(sy, Math.min(n.y, sy + k.h));
+    const dx = cx - n.x, dy = cy - n.y, L = Math.hypot(dx, dy) || 1;
+    put(k.t, 'x1', (n.x + dx / L * (n.r + 6)).toFixed(1)); put(k.t, 'y1', (n.y + dy / L * (n.r + 6)).toFixed(1));
+    put(k.t, 'x2', cx.toFixed(1)); put(k.t, 'y2', cy.toFixed(1));
+    const ts = opStr(o * .55); if (k.t._op !== ts) { k.t._op = ts; k.t.style.opacity = ts; }
+  }
+  const v = S.vbD;
+  if (v) { S.vb = { x: v.x, y: v.y, w: v.w, h: v.h }; applyVb(); }
+}
+// a node that appears grows out of the finished chip (when it was folded there), else its parent, anchor or the lead
+function enterFrom(n) {
+  const at = id => { const d = S.disp.get(id); return d ? { x: d.x, y: d.y } : null; };
+  if (S.prevCollapsed.has(n.id)) return at('_fin');
+  return at(n.parent) || at(n.anchor) || at('lead');
 }
 
 function renderGraph(s) {
   const now = S.model.now;
   const nodes = buildNodes(s);
   const { pos, res } = layout(nodes, s);
-  S.pos = pos;
+  S.pos = pos;   // the layout's targets; what is on screen is S.disp
+  const nHidden = (s.agents || []).filter(a => a.id in hidden).length;
+  S.clearable = nodes.filter(n => !n.collapsed && canHide(n) && isDone(n)).map(n => n.id);   // what is drawn, not the chip's
+  $('hiddenBtn').hidden = !nHidden; setT($('hiddenText'), `${nHidden} hidden · show`);
+  $('clearBtn').hidden = !S.clearable.length; setT($('clearText'), `Clear ${S.clearable.length} done`);
   const byId = new Map(nodes.map(n => [n.id, n]));
   if (!byId.has(S.sel) || byId.get(S.sel).collapsed) S.sel = 'lead';
   const alertsBy = new Map();
   for (const a of liveAlerts(S.model)) if (a.session === s.id && a.agent && a.sev !== 'info') alertsBy.set(a.agent, (alertsBy.get(a.agent) || 0) + 1);
 
-  const boxes = [];   // obstacles for card placement and the fit box
+  const boxes = [];   // obstacles for card placement and the fit box, all at the targets
   const seen = new Set();
   for (const n of nodes) {
     if (n.collapsed) continue;
@@ -343,28 +765,30 @@ function renderGraph(s) {
     seen.add(n.id);
     let parts = S.nodes.get(n.id);
     if (!parts) { parts = makeNode(n.id); S.nodes.set(n.id, parts); }
+    parts.outer.classList.remove('leaving'); parts.outer.removeAttribute('aria-hidden');
     const lb = updateNode(parts, n, p, now, alertsBy.get(n.id) || 0);
     p.top = p.y - lb[0].y; p.bottom = lb[1].y + lb[1].h - p.y;
+    const d = target(n.id, p.x, p.y, 'node', () => enterFrom(n));
+    if (d.r && Math.abs(d.r - p.r) > .5 && posAnim()) d.s *= d.r / p.r;   // a new radius: scale from the old size
+    d.r = p.r; d.top = p.top; d.bottom = p.bottom;
     boxes.push(...lb);
   }
-  for (const [id, parts] of S.nodes) if (!seen.has(id)) { parts.g.remove(); S.nodes.delete(id); S.prevState.delete(id); }
 
   // resources: the collapsed-finished chip, the HP queue and the window
   const resSeen = new Set();
   const w = s.wts && !s.wts.error ? s.wts : null;
   if (res.collapsed.length) {
-    const p = { x: pos.get('lead').x - 260, y: 110 };
     resSeen.add('_fin');
-    boxes.push(drawChip(p, `✓ ${res.collapsed.length} finished · show`));
+    boxes.push(drawChip({ x: pos.get('lead').x - 260, y: 110 }, `✓ ${res.collapsed.length} finished · show`));
   }
-  const worker = nodes.find(n => n.role === 'worker' && pos.has(n.id));
+  const worker = nodes.find(n => n.role === 'worker' && seen.has(n.id));
   if (w) {
     const hp = (w.groups.HP || []).filter(r => ['queued', 'active', 'paused', 'parked', 'asks', 'other'].includes(r.kind));
     const next = (w.groups.HP || []).find(r => r.kind === 'queued');
     const qx = worker ? pos.get(worker.id).x - 330 : 120;
     const qy = worker ? pos.get(worker.id).y : res.y;
     resSeen.add('_queue');
-    boxes.push(drawRes('_queue', { x: qx, y: qy }, 'amber', 'i-queue', `HP queue · ${hp.length} open`,
+    boxes.push(drawResClear('_queue', { x: qx, y: qy }, boxes, ROLECOL.worker, 'i-queue', `HP queue · ${hp.length} open`,
       next ? clip(`next ${next.n} · ${next.title}`, 36) : 'nothing queued',
       `MP ${(w.groups.MP || []).filter(r => r.kind !== 'done').length} · LP ${(w.groups.LP || []).filter(r => r.kind !== 'done').length} open`));
     const win = w.window || {};
@@ -372,46 +796,70 @@ function renderGraph(s) {
     const wx = holderPos ? holderPos.x - 230 : 550;
     const waiters = (win.waiters || []).map(id => byId.get(id)?.label).filter(Boolean);
     resSeen.add('_window');
-    boxes.push(drawRes('_window', { x: wx, y: res.y }, win.held ? 'red' : 'green', win.held ? 'i-lock' : 'i-unlock',
+    boxes.push(drawResClear('_window', { x: wx, y: res.y }, boxes, win.held ? 'red' : 'green', win.held ? 'i-lock' : 'i-unlock',
       `Window · ${w.lock_name || 'lock'}`, win.held ? clip(`${shortWho(win.who)} · ${dur(now - (win.since || now))}`, 38) : 'free',
       waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''));
   }
-  for (const [id, r] of S.res) if (!resSeen.has(id)) { r.g.remove(); S.res.delete(id); }
+  for (const [id, r] of S.res) if (!resSeen.has(id)) {
+    const d = S.disp.get(id);
+    if (!d) { r.g.remove(); S.res.delete(id); }
+    else if (!d.leaving) leave(d, 150, () => { r.g.remove(); S.res.delete(id); S.disp.delete(id); });
+  }
 
-  // edges
+  // nodes on the way out: into the finished chip, or faded where they stand (quickly when you hid them)
+  const folded = new Set(res.collapsed.map(n => n.id));
+  for (const [id, parts] of S.nodes) if (!seen.has(id)) {
+    const d = S.disp.get(id);
+    const drop = () => { parts.outer.remove(); S.nodes.delete(id); S.disp.delete(id); };
+    if (!d) { drop(); continue; }
+    if (d.leaving) continue;
+    S.prevState.delete(id);
+    if (parts.g.contains(document.activeElement)) S.nodes.get('lead')?.g.focus({ preventScroll: true });
+    if (S.tipAnchor && parts.outer.contains(S.tipAnchor)) hideTip();
+    parts.outer.classList.add('leaving'); parts.outer.setAttribute('aria-hidden', 'true'); parts.g.setAttribute('tabindex', -1);
+    const chip = folded.has(id) && S.disp.get('_fin');
+    if (chip) { d.tx = chip.tx; d.ty = chip.ty; d.ts = .3; } else if (id in hidden) d.ts = .85;
+    if (chip) leave(d, 400, drop, 150);   // seen flying in: it fades only on the last part of the way
+    else leave(d, id in hidden ? 180 : 250, drop);
+  }
+
+  // edges: their ends are looked up every frame, so they follow the nodes as they move
   const eSeen = new Set();
-  const nodePos = id => pos.get(id) || (S.res.has(id) ? S.res.get(id).anchor : null);
   for (const e of s.edges || []) {
-    const a = pos.get(e.from), b = pos.get(e.to);
-    if (!a || !b) continue;
-    drawEdge(e.key, a, b, `edge ${e.kind}${e.hot ? ' hot' : ''}`, e.kind === 'task' && byId.get(e.to)?.task ? `task ${byId.get(e.to).task}` : '', eSeen);
+    if (!seen.has(e.from) || !seen.has(e.to)) continue;
+    drawEdge(e.key, e.from, e.to, `edge ${e.kind}${e.hot ? ' hot' : ''}`, e.kind === 'task' && byId.get(e.to)?.task ? `task ${byId.get(e.to).task}` : '', eSeen);
   }
-  if (w && w.window && w.window.held && w.window.holder && pos.get(w.window.holder)) {
-    drawEdge('lock', pos.get(w.window.holder), nodePos('_window'), 'edge lock', '', eSeen);
-  }
-  if (w && worker && S.res.has('_queue')) drawEdge('queue', nodePos('_queue'), pos.get(worker.id), 'edge', '', eSeen);
-  for (const [k, e] of S.edges) if (!eSeen.has(k)) { e.g.remove(); S.edges.delete(k); }
+  if (w && w.window && w.window.held && seen.has(w.window.holder) && S.res.has('_window')) drawEdge('lock', w.window.holder, '_window', 'edge lock', '', eSeen);
+  if (w && worker && S.res.has('_queue')) drawEdge('queue', '_queue', worker.id, 'edge', '', eSeen);
+  for (const [k, e] of S.edges) if (!eSeen.has(k) && !e.leaving) leave(e, 150, () => { e.g.remove(); S.edges.delete(k); });
 
   placeCards(nodes, pos, boxes, now);
   fit(boxes);
+  S.prevCollapsed = folded;
+  drawFrame(performance.now());
+  S.snapNext = false;
+  if (moving()) kick();
 }
 
 function makeNode(id) {
-  const g = el('g', { class: 'node', tabindex: 0, role: 'button' }, $('gNodes'));
-  const p = { g };
+  const outer = el('g', {}, $('gNodes'));   // moved and faded by the motion loop
+  const g = el('g', { class: 'node', tabindex: 0, role: 'button' }, outer);
+  const p = { g, outer };
   p.halo = el('circle', { class: 'halo' }, g);
   p.flash = el('polygon', { class: 'flash' }, g);
   p.arc = el('circle', { class: 'arc' }, g);
   p.hex = el('polygon', { class: 'hex' }, g);
   p.selring = el('polygon', { class: 'selring' }, g);
   p.mark = el('use', {}, g); p.mark.setAttribute('class', 'mark');
-  p.pill = el('g', { class: 'pill' }, g); p.pillR = el('rect', { rx: 10, height: 20 }, p.pill); p.pillT = el('text', {}, p.pill);
   p.lbl = el('text', { class: 'lbl' }, g);
   p.sub = el('text', { class: 'sub' }, g);
   p.stat = el('g', { class: 'stat' }, g); p.sico = el('use', { width: 12, height: 12 }, p.stat); p.stxt = el('text', {}, p.stat);
   p.barbg = el('rect', { class: 'barbg', height: 4, rx: 2 }, g); p.bar = el('rect', { class: 'bar', height: 4, rx: 2 }, g);
   p.meta = el('text', { class: 'meta' }, g);
   p.badge = el('g', { class: 'badge' }, g); el('circle', { r: 8 }, p.badge); p.badgeT = el('text', { y: 4 }, p.badge);
+  p.hide = el('g', { class: 'hide' }, g); el('circle', { r: 8 }, p.hide); el('path', { d: 'M-3,-3L3,3M3,-3L-3,3' }, p.hide);
+  el('title', {}, p.hide).textContent = 'Hide from the diagram (H)';
+  p.hide.addEventListener('click', ev => { ev.stopPropagation(); hideAgents([id]); });
   g.addEventListener('click', ev => { ev.stopPropagation(); select(id); });
   g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(id); } });
   g.addEventListener('mouseenter', () => showTip(g, nodeTip(id)));
@@ -423,10 +871,12 @@ function updateNode(p, n, pos, now, nAlerts) {
   const { x, y, r } = pos;
   const st = n.state || { key: 'unknown', label: '?' };
   const [sIcon, sCol] = STATUS[st.key] || STATUS.unknown;
-  const active = ['running', 'thinking', 'polling'].includes(st.key) || (n.role === 'lead' && st.key !== 'waiting_user' && st.key !== 'dead' && st.key !== 'shell');
+  const active = ['running', 'thinking', 'polling'].includes(st.key) || (n.role === 'lead' && !['waiting_user', 'idle', 'dead', 'shell'].includes(st.key));
   const col = n.role === 'lead' ? 'cyan' : ROLECOL[n.role] || 'violet';
-  p.g.setAttribute('class', `node c-${col}${active ? ' active' : ''}${isParked(n) ? ' parked' : ''}${n.finished ? ' finished' : ''}${S.sel === n.id ? ' sel' : ''}`);
-  setA(p.g, { transform: `translate(${x.toFixed(1)},${y.toFixed(1)})`, 'aria-label': `${n.label}, ${st.label}${n.task ? ', task ' + n.task : ''}` });
+  // blocked (paused, parked, waiting for or looping on the window): a dashed hex, at full strength
+  const blocked = !n.finished && n.role !== 'lead' && (isParked(n) || st.key === 'polling');
+  p.g.setAttribute('class', `node c-${col}${active ? ' active' : ''}${isParked(n) ? ' parked' : ''}${blocked ? ' blocked' : ''}${n.finished ? ' finished' : ''}${S.sel === n.id ? ' sel' : ''}`);
+  setA(p.g, { tabindex: 0, 'aria-label': `${n.label}, ${st.label}${n.task ? ', task ' + n.task : ''}` });
   setA(p.halo, { r: r * 1.75 });
   setA(p.hex, { points: hexPts(r) });
   setA(p.selring, { points: hexPts(r + 9) });
@@ -437,13 +887,9 @@ function updateNode(p, n, pos, now, nAlerts) {
   const markId = n.role === 'lead' ? 'i-lead' : isParked(n) ? 'i-park' : (st.key === 'dead' ? 'i-dead' : st.key === 'ended' ? 'i-done' : 'i-think');
   const ms = n.role === 'lead' ? r * .62 : r * .5;
   setA(p.mark, { href: '#' + markId, x: -ms / 2, y: -ms / 2, width: ms, height: ms });
-  // context pill: only when it matters (>= 70 %)
+  // context: the bar under the label only (no "almost full" pill or alert: the user's call)
   const pct = n.ctx_max ? n.ctx / n.ctx_max : 0;
   const lvl = pct >= .9 ? 'crit' : pct >= .8 ? 'warn' : '';
-  p.pill.style.display = pct >= .7 ? '' : 'none';
-  p.pill.setAttribute('class', `pill ${lvl || 'warn'}`);
-  setA(p.pillR, { x: -32, y: -r - 34, width: 64 });
-  setA(p.pillT, { x: 0, y: -r - 20 }); setT(p.pillT, Math.round(pct * 100) + '% ctx');
   // label stack
   let yy = r + 21;
   setA(p.lbl, { y: yy }); setT(p.lbl, clip(n.label, 20));
@@ -466,6 +912,8 @@ function updateNode(p, n, pos, now, nAlerts) {
   } else { p.meta.style.display = 'none'; yy -= 12; }
   p.badge.style.display = nAlerts ? '' : 'none';
   setA(p.badge, { transform: `translate(${(r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` }); setT(p.badgeT, '!');
+  p.hide.style.display = canHide(n) ? '' : 'none';
+  setA(p.hide, { transform: `translate(${(-r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` });
   // a one-shot ring when the state changes
   const prev = S.prevState.get(n.id);
   if (prev && prev !== st.key && settings.motion === 'full' && !document.hidden) {
@@ -479,7 +927,7 @@ function updateNode(p, n, pos, now, nAlerts) {
   ];
 }
 
-function drawRes(id, p, col, ico, h, s1, s2) {
+function drawRes(id, col, ico, h, s1, s2) {
   let r = S.res.get(id);
   if (!r) {
     const g = el('g', { class: 'res' }, $('gNodes'));
@@ -489,15 +937,28 @@ function drawRes(id, p, col, ico, h, s1, s2) {
   }
   const lines = [s1, s2].filter(Boolean);
   const wdt = Math.max(textW(h, 12.5) + 30, ...lines.map(l => textW(l, 11))) + 26, hgt = 30 + lines.length * 16;
-  const x = p.x - wdt / 2, y = p.y - hgt / 2;
+  const x = -wdt / 2, y = -hgt / 2;   // around its centre; the motion loop places it
   r.g.setAttribute('class', `res c-${col}`);
   setA(r.box, { x, y, width: wdt, height: hgt });
   setA(r.ico, { href: '#' + ico, x: x + 12, y: y + 9 });
   setA(r.h, { x: x + 32, y: y + 21 }); setT(r.h, h);
   setA(r.s1, { x: x + 12, y: y + 39 }); setT(r.s1, s1 || '');
   setA(r.s2, { x: x + 12, y: y + 55 }); setT(r.s2, s2 || '');
-  r.anchor = { x: p.x, y: p.y, r: Math.min(wdt, hgt) / 2 + 2, rect: { x, y, w: wdt, h: hgt } };
-  return { x: x - 8, y: y - 8, w: wdt + 16, h: hgt + 16 };
+  return { w: wdt, h: hgt };
+}
+
+// a resource card keeps clear of whatever is already placed: its own spot first, then the nearest free one sideways
+function drawResClear(id, p, boxes, ...rest) {
+  const { w, h } = drawRes(id, ...rest);
+  const box = x => ({ x: x - w / 2 - 8, y: p.y - h / 2 - 8, w: w + 16, h: h + 16 });
+  let x = p.x;
+  for (let k = 0; k <= 24; k++) {
+    const xx = p.x + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 60;
+    if (!boxes.some(o => hit(box(xx), o))) { x = xx; break; }
+  }
+  const d = target(id, x, p.y, 'res');
+  d.w = w; d.h = h; d.rr = Math.min(w, h) / 2 + 2;
+  return box(x);
 }
 
 function drawChip(p, text) {
@@ -509,9 +970,10 @@ function drawChip(p, text) {
     S.res.set('_fin', r);
   }
   const w = textW(text, 11.5) + 24;
-  setA(r.box, { x: p.x - w / 2, y: p.y - 13, width: w, height: 26 });
-  setA(r.t, { x: p.x - w / 2 + 12, y: p.y + 4 }); setT(r.t, text);
-  r.anchor = { x: p.x, y: p.y, r: 14 };
+  setA(r.box, { x: -w / 2, y: -13, width: w, height: 26 });
+  setA(r.t, { x: -w / 2 + 12, y: 4 }); setT(r.t, text);
+  const d = target('_fin', p.x, p.y, 'res');
+  d.rr = 14; d.w = 0;
   return { x: p.x - w / 2 - 6, y: p.y - 19, w: w + 12, h: 38 };
 }
 
@@ -527,21 +989,21 @@ function edgePath(a, b, bend) {
   return { d: `M${p.x.toFixed(1)},${p.y.toFixed(1)} Q${c.x.toFixed(1)},${c.y.toFixed(1)} ${q.x.toFixed(1)},${q.y.toFixed(1)}`, mid: { x: (p.x + 2 * c.x + q.x) / 4, y: (p.y + 2 * c.y + q.y) / 4 } };
 }
 function drawEdge(key, a, b, cls, label, seen) {
-  if (!a || !b) return;
   seen.add(key);
   let e = S.edges.get(key);
   if (!e) {
     const g = el('g', {}, $('gEdges'));
-    e = { g, path: el('path', {}, g), lbl: el('text', { class: 'elbl' }, g) };
+    e = { g, path: el('path', {}, g), lbl: el('text', { class: 'elbl' }, g), f1: 1 };
     S.edges.set(key, e);
+    if (fadeAnim()) { e.f1 = 0; fadeTo(e, 1, 200); }
   }
-  const bend = key === 'lock' || key === 'queue' ? 0 : ((hash(key) % 2) ? .07 : -.07);
-  const { d, mid } = edgePath(a, b, bend);
-  setA(e.path, { d });
+  unleave(e);
+  e.a = a; e.b = b;
+  e.bend = key === 'lock' || key === 'queue' ? 0 : ((hash(key) % 2) ? .07 : -.07);
   if (!e.path.classList.contains('flashy')) e.path.setAttribute('class', cls);
   setA(e.path, { 'marker-end': /\btask\b/.test(cls) ? 'url(#arrTask)' : 'none' });
   e.cls = cls;
-  setA(e.lbl, { x: mid.x + 8, y: mid.y - 6 }); setT(e.lbl, label);
+  setT(e.lbl, label);
 }
 function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
 
@@ -588,7 +1050,10 @@ function placeCards(nodes, pos, boxes, now) {
     seen.add(c.key);
     drawCard(c, spot, p);
   }
-  for (const [k, c] of S.cards) if (!seen.has(k)) { c.g.remove(); c.t.remove(); S.cards.delete(k); }
+  for (const [k, c] of S.cards) if (!seen.has(k) && !c.leaving) {
+    if (S.tipAnchor === c.g) hideTip();
+    leave(c, 150, () => { c.g.remove(); c.t.remove(); S.cards.delete(k); });
+  }
   boxes.push(...placed);
 }
 function wrap(text, n, max) {
@@ -601,23 +1066,38 @@ function wrap(text, n, max) {
 }
 function drawCard(c, spot, p) {
   const col = c.node.role === 'lead' ? 'cyan' : ROLECOL[c.node.role] || 'violet';
+  const ox = spot.x - p.x, oy = spot.y - p.y;   // where it sits relative to its node
   let k = S.cards.get(c.key);
-  const sig = c.lines.join('\n') + '|' + spot.x.toFixed(0) + ',' + spot.y.toFixed(0);
-  if (k && k.sig === sig) return;
-  if (k) { k.g.remove(); k.t.remove(); }
-  const g = el('g', { class: `card ${c.kind} c-${col}` }, $('gCards'));
-  el('rect', { x: spot.x, y: spot.y, width: spot.w, height: spot.h, rx: 7 }, g);
-  let y = spot.y + 18;
-  if (c.head) { const t = el('text', { x: spot.x + 11, y, class: 'k' }, g); t.textContent = c.head; y += 16; }
-  for (const line of c.lines) { const t = el('text', { x: spot.x + 11, y }, g); t.textContent = line; y += 16; }
-  // a thin tether from the node's edge to the card
-  const cx = Math.max(spot.x, Math.min(p.x, spot.x + spot.w)), cy = Math.max(spot.y, Math.min(p.y, spot.y + spot.h));
-  const dx = cx - p.x, dy = cy - p.y, L = Math.hypot(dx, dy) || 1;
-  const t = el('line', { x1: p.x + dx / L * (p.r + 6), y1: p.y + dy / L * (p.r + 6), x2: cx, y2: cy, class: 'tether' }, $('gTethers'));
-  t.setAttribute('class', `tether c-${col}`);
-  g.addEventListener('mouseenter', () => showTip(g, c.kind === 'bubble' ? c.node.said : c.node.state.detail));
-  g.addEventListener('mouseleave', hideTip);
-  S.cards.set(c.key, { g, t, sig });
+  if (!k) {
+    const g = el('g', {}, $('gCards'));
+    k = { g, t: el('line', {}, $('gTethers')), sig: null, f1: 1, ox, oy, tox: ox, toy: oy, vox: 0, voy: 0 };
+    g.addEventListener('mouseenter', () => showTip(g, k.tip));
+    g.addEventListener('mouseleave', hideTip);
+    S.cards.set(c.key, k);
+    const nd = S.disp.get(c.node.id);
+    if (fadeAnim()) { k.f1 = 0; fadeTo(k, 1, 180, nd && performance.now() - nd.born < 50 ? 200 : 0); }   // after a new node arrives
+  } else {
+    unleave(k);
+    if (Math.abs(k.tox - ox) > .5 || Math.abs(k.toy - oy) > .5) {
+      // to the other side of its node, or far: fade out, jump, fade in (a slide would cross the node)
+      const far = Math.hypot(ox - k.ox, oy - k.oy) > 120 || Math.sign(k.ox + k.w / 2) !== Math.sign(ox + spot.w / 2);
+      k.tox = ox; k.toy = oy;
+      if (far && posAnim()) { k.swapAt = performance.now() + 90; fadeTo(k, 0, 90); }
+    }
+    if (!posAnim()) { k.ox = k.tox; k.oy = k.toy; k.vox = k.voy = 0; k.swapAt = 0; }
+  }
+  k.node = c.node.id; k.w = spot.w; k.h = spot.h;
+  k.tip = c.kind === 'bubble' ? c.node.said : c.node.state.detail;
+  const sig = `${c.kind}|${col}|${c.head || ''}|${c.lines.join('\n')}|${spot.w.toFixed(0)},${spot.h.toFixed(0)}`;
+  if (k.sig === sig) return;   // only its text and size; a move never rebuilds it
+  k.sig = sig;
+  k.g.textContent = '';
+  k.g.setAttribute('class', `card ${c.kind} c-${col}`);
+  k.t.setAttribute('class', `tether c-${col}`);
+  el('rect', { x: 0, y: 0, width: spot.w, height: spot.h, rx: 7 }, k.g);
+  let y = 18;
+  if (c.head) { const t = el('text', { x: 11, y, class: 'k' }, k.g); t.textContent = c.head; y += 16; }
+  for (const line of c.lines) { const t = el('text', { x: 11, y }, k.g); t.textContent = line; y += 16; }
 }
 
 // ---- viewport: fit to content, wheel zoom, drag to pan ----
@@ -631,10 +1111,21 @@ function fit(boxes, force) {
   const changed = S.fitKey !== key;
   S.fitKey = key; S.fitVb = vb;
   if (S.userPanned && !force) { $('fitBtn').hidden = !changed && $('fitBtn').hidden; if (changed) $('fitBtn').hidden = false; return; }
-  S.vb = vb; applyVb();
+  vbTarget(vb);
   $('fitBtn').hidden = true;
 }
-function applyVb() { const v = S.vb; $('graph').setAttribute('viewBox', `${v.x.toFixed(1)} ${v.y.toFixed(1)} ${v.w.toFixed(1)} ${v.h.toFixed(1)}`); }
+function vbTarget(vb) {
+  const v = S.vbD;
+  if (!v || !posAnim()) { S.vbD = { ...vb, vx: 0, vy: 0, vw: 0, vh: 0, tx: vb.x, ty: vb.y, tw: vb.w, th: vb.h }; S.vb = { ...vb }; applyVb(); return; }
+  if (v.tx === vb.x && v.ty === vb.y && v.tw === vb.w && v.th === vb.h) return;   // same fit: nothing to move
+  v.tx = vb.x; v.ty = vb.y; v.tw = vb.w; v.th = vb.h;
+  kick();
+}
+function vbRest() {   // the user took the view: stop where it is
+  const v = S.vb; if (!v) return;
+  S.vbD = { ...v, vx: 0, vy: 0, vw: 0, vh: 0, tx: v.x, ty: v.y, tw: v.w, th: v.h };
+}
+function applyVb() { const v = S.vb; put($('graph'), 'viewBox', `${v.x.toFixed(1)} ${v.y.toFixed(1)} ${v.w.toFixed(1)} ${v.h.toFixed(1)}`); }
 function svgPoint(ev) {
   const svg = $('graph'), pt = svg.createSVGPoint();
   pt.x = ev.clientX; pt.y = ev.clientY;
@@ -646,7 +1137,7 @@ $('graph').addEventListener('wheel', ev => {
   const p = svgPoint(ev), k = Math.exp(ev.deltaY * .0015);
   const w = Math.min(S.fitVb.w / .4, Math.max(S.fitVb.w / 3, S.vb.w * k)), f = w / S.vb.w;
   S.vb = { x: p.x - (p.x - S.vb.x) * f, y: p.y - (p.y - S.vb.y) * f, w: S.vb.w * f, h: S.vb.h * f };
-  S.userPanned = true; applyVb(); $('fitBtn').hidden = false;
+  vbRest(); S.userPanned = true; applyVb(); $('fitBtn').hidden = false;
 }, { passive: false });
 let drag = null;
 $('graph').addEventListener('pointerdown', ev => {
@@ -657,11 +1148,15 @@ $('graph').addEventListener('pointerdown', ev => {
 $('graph').addEventListener('pointermove', ev => {
   if (!drag) return;
   const svg = $('graph'), s = drag.vb.w / svg.clientWidth;
+  if (!drag.moved) {
+    if (Math.abs(ev.clientX - drag.x) + Math.abs(ev.clientY - drag.y) <= 3) return;
+    // a drag after all: stop any fit in flight and pan from the view as it is now
+    drag.moved = true; svg.classList.add('panning');
+    vbRest(); drag.x = ev.clientX; drag.y = ev.clientY; drag.vb = { ...S.vb };
+  }
   const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
-  if (Math.abs(dx) + Math.abs(dy) > 3) { drag.moved = true; svg.classList.add('panning'); }
-  if (!drag.moved) return;
   S.vb = { ...drag.vb, x: drag.vb.x - dx * s, y: drag.vb.y - dy * s };
-  S.userPanned = true; applyVb(); $('fitBtn').hidden = false;
+  vbRest(); S.userPanned = true; applyVb(); $('fitBtn').hidden = false;
 });
 $('graph').addEventListener('pointerup', ev => {
   $('graph').classList.remove('panning');
@@ -670,7 +1165,9 @@ $('graph').addEventListener('pointerup', ev => {
 });
 $('graph').addEventListener('dblclick', ev => { if (!ev.target.closest('.node')) doFit(); });
 $('fitBtn').addEventListener('click', doFit);
-function doFit() { S.userPanned = false; if (S.fitVb) { S.vb = S.fitVb; applyVb(); } $('fitBtn').hidden = true; }
+$('clearBtn').addEventListener('click', () => hideAgents(S.clearable || []));
+$('hiddenBtn').addEventListener('click', () => { const s = cur(); if (s && unhideAgents((s.agents || []).map(a => a.id))) render(); });
+function doFit() { S.userPanned = false; if (S.fitVb) vbTarget(S.fitVb); $('fitBtn').hidden = true; }
 
 // ---- pulses: one shared rAF loop ----
 function queuePulse(m) {
@@ -683,15 +1180,13 @@ function queuePulse(m) {
   const forward = m.from < m.to;   // the edge path runs from its first endpoint in the model; check by geometry below
   const halo = el('circle', { r: 9, class: 'pulse-halo' }, $('gPulse'));
   const dot = el('path', { d: 'M-6,-5L6,0L-6,5L-2.5,0Z', class: 'pulse' }, $('gPulse'));   // a chevron: direction reads even in a still frame
-  const fromPos = S.pos.get(m.from);
+  const fromPos = S.disp.get(m.from);   // as drawn now
   const L = e.path.getTotalLength(), p0 = e.path.getPointAtLength(0);
   const rev = fromPos ? Math.hypot(p0.x - fromPos.x, p0.y - fromPos.y) > Math.hypot(e.path.getPointAtLength(L).x - fromPos.x, e.path.getPointAtLength(L).y - fromPos.y) : !forward;
   S.pulses.push({ e, dot, halo, t0: performance.now(), rev, extra: 0, ang: 0 });
-  if (!S.raf) S.raf = requestAnimationFrame(stepPulses);
+  kick();
 }
 function stepPulses(now) {
-  S.raf = 0;
-  if (document.hidden) { for (const p of S.pulses) { p.dot.remove(); p.halo.remove(); } S.pulses = []; return; }
   S.pulses = S.pulses.filter(p => {
     const k = Math.min((now - p.t0) / 1300, 1), ease = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
     if (!p.e.path.isConnected || k >= 1) { p.dot.remove(); p.halo.remove(); return false; }
@@ -702,7 +1197,6 @@ function stepPulses(now) {
     p.halo.setAttribute('cx', pt.x); p.halo.setAttribute('cy', pt.y);
     return true;
   });
-  if (S.pulses.length) S.raf = requestAnimationFrame(stepPulses);
 }
 let tickerTimer = 0;
 function showTicker(m) {
@@ -716,6 +1210,7 @@ function showTicker(m) {
 }
 document.addEventListener('visibilitychange', () => {
   document.body.classList.toggle('paused', document.hidden);
+  if (!document.hidden) settleAll();
   if (!document.hidden && S.away) {
     const t = $('ticker');
     t.innerHTML = `<span class="who">+${S.away} event${S.away > 1 ? 's' : ''} while away</span><span class="what">see the timeline and the agents' messages</span>`;
@@ -726,7 +1221,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---- selection and the side panel ----
-function select(id) { S.sel = id; if (S.tab !== 'agent' && S.tab !== 'wts') S.tab = 'agent'; render(); }
+function select(id) { unhideAgents([id]); S.sel = id; if (S.tab !== 'agent' && S.tab !== 'wts') S.tab = 'agent'; render(); }
 function nodeById(s, id) { return id === 'lead' ? Object.assign({ id: 'lead', role: 'lead', label: s.project }, s.lead) : (s.agents || []).find(a => a.id === id); }
 function nodeTip(id) {
   const s = cur(); if (!s) return '';
@@ -773,6 +1268,7 @@ function agentPanel(s, id) {
   let h = `<div class="ptitle c-${col}"><svg class="hx" viewBox="-10 -10 20 20"><polygon points="${hexPts(8.5)}"/></svg>${esc(label)}
     <span class="s c-${sc}">${icon(si)}${esc(st.label)}</span></div>`;
   h += `<div class="pmeta">${isLead ? esc(s.title || '') + ' · ' : esc(n.desc || '') + ' · '}${esc(modelName(n.model) || 'model ?')}${isLead ? '' : ' · ' + esc(n.id.slice(0, 9)) + '…'}</div>`;
+  if (!isLead && canHide(n)) h += `<div class="pacts"><button class="pbtn" data-hide="${esc(n.id)}">${icon('i-eye')}Hide from the diagram</button><span class="pmeta">it comes back if it starts working again · H</span></div>`;
   if (st.detail) h += `<div class="sec">Now</div><div class="said">${esc(st.detail)}</div>`;
   if (row) h += `<div class="sec">Task</div><div class="taskcell"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}<div class="pmeta">${esc(row.status)}</div></div>`;
   h += `<div class="sec">Context</div>${pbar(pct, lvl)}<div class="pmeta">${n.ctx ? kfmt(n.ctx) + ' / ' + kfmt(n.ctx_max) + ' tokens · ' + Math.round(pct * 100) + '%' : 'not known yet'}${(n.compactions || []).length ? ' · compacted ' + n.compactions.length + '× in view' : ''}</div>`;
@@ -865,12 +1361,14 @@ function alertsPanel() {
 }
 
 $('panel').addEventListener('click', e => {
-  const t = e.target.closest('[data-select],[data-dismiss],[data-snooze],[data-jump]');
+  const t = e.target.closest('[data-select],[data-dismiss],[data-snooze],[data-jump],[data-hide]');
   if (!t) return;
+  if (t.dataset.hide) return hideAgents([t.dataset.hide]);
   if (t.dataset.jump) { $('g-' + t.dataset.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
   if (t.dataset.dismiss) { dismissed[t.dataset.dismiss] = 1e12; store.set('ccprobe.dismissed', dismissed); return render(); }
   if (t.dataset.snooze) { dismissed[t.dataset.snooze] = Date.now() / 1000 + 3600; store.set('ccprobe.dismissed', dismissed); return render(); }
   if (t.dataset.sid && t.dataset.sid !== S.sid) selectSession(t.dataset.sid);
+  unhideAgents([t.dataset.select]);   // asked to see it: put it back on the diagram
   S.sel = t.dataset.select;
   if (S.tab === 'alerts') S.tab = 'agent';
   render();
@@ -886,7 +1384,7 @@ function renderTimeline(s) {
   const W = svg.clientWidth || 800, span = settings.span, now = S.model.now, t0 = now - span, X0 = 100;
   const agents = new Map((s.agents || []).map(a => [a.id, a]));
   const lanes = S.order.filter(id => id === 'lead' || agents.has(id));
-  const fin = (s.agents || []).filter(a => a.finished && !lanes.includes(a.id)).map(a => a.id);
+  const fin = (s.agents || []).filter(a => a.finished && !lanes.includes(a.id) && !(a.id in hidden)).map(a => a.id);
   const LH = 15, rows = Math.min(lanes.length + (fin.length ? 1 : 0), 14), H = rows * LH + 22;
   const x = t => X0 + (t - t0) / span * (W - X0 - 14);
   const step = span <= 900 ? 180 : span <= 2700 ? 300 : span <= 7200 ? 900 : 3600;
@@ -925,7 +1423,8 @@ function renderTimeline(s) {
     h += `<path class="arc${m.from === S.sel || m.to === S.sel ? ' sel' : ''}" marker-end="url(#tlArrow)" d="M${xx},${y1} Q${xx + 14},${(y1 + y2) / 2} ${xx},${y2 - Math.sign(y2 - y1) * 1.5}"><title>${hhmm(m.t, 1)} ${esc(nameIn(s, m.from))} → ${esc(nameIn(s, m.to))}: ${esc(m.summary)}</title></path>`;
   }
   h += `<line class="now" x1="${W - 14}" x2="${W - 14}" y1="2" y2="${H - 16}"/>`;
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('height', H);
+  // drawn in CSS pixels (W is its own width); its height eases, so the graph above resizes smoothly, never in a jump
+  svg.removeAttribute('viewBox'); svg.style.height = H + 'px';
   svg.innerHTML = '<defs><marker id="tlArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto"><path class="tl-ah" d="M0,0L10,5L0,10z"/></marker></defs>' + h;
   const nEv = lanes.concat(fin).reduce((k, id) => k + ((s.events || {})[id] || []).filter(e => e[0] >= t0).length, 0);
   setT($('tlTitle'), `${s.project} · last ${dur(span)} · ${nEv} tool calls · ${(s.messages || []).filter(m => m.t >= t0).length} messages`);
@@ -937,6 +1436,7 @@ new ResizeObserver(() => { if (S.model) renderTimeline(cur()); }).observe($('tl'
 let tipTimer = 0;
 function showTip(anchor, text) {
   if (!text) return;
+  S.tipAnchor = anchor;
   clearTimeout(tipTimer);
   tipTimer = setTimeout(() => {
     const t = $('tip'), r = anchor.getBoundingClientRect();
@@ -948,7 +1448,7 @@ function showTip(anchor, text) {
     t.style.left = x + 'px'; t.style.top = Math.max(8, y) + 'px';
   }, 150);
 }
-function hideTip() { clearTimeout(tipTimer); $('tip').hidden = true; }
+function hideTip() { clearTimeout(tipTimer); $('tip').hidden = true; S.tipAnchor = null; }
 document.addEventListener('mouseover', e => {
   const t = e.target.closest('[data-tip]');
   if (t && !t.closest('#graph')) showTip(t, t.dataset.tip);
@@ -970,7 +1470,10 @@ function notify(m) {
 
 // ---- settings popover ----
 function syncSettingsUi() {
-  document.querySelectorAll('.seg[data-set]').forEach(seg => seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', String(settings[seg.dataset.set]) === b.dataset.v)));
+  document.querySelectorAll('.seg[data-set]').forEach(seg => seg.querySelectorAll('button').forEach(b => {
+    const on = String(settings[seg.dataset.set]) === b.dataset.v;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+  }));
   document.querySelectorAll('input[data-set]').forEach(i => { i.checked = !!settings[i.dataset.set]; });
 }
 document.addEventListener('click', e => {
@@ -996,11 +1499,13 @@ document.querySelectorAll('input[data-set]').forEach(i => i.addEventListener('ch
     } catch (e) { settings.notify = false; i.checked = false; }
   }
   saveSettings(); applyTheme();
-  if (S.model) { clearGraph(); render(); }
+  if (S.model) render();
 }));
 $('resetBtn').addEventListener('click', () => {
   dismissed = {}; store.set('ccprobe.dismissed', dismissed);
-  setSideW(SIDE_DEFAULT, true);
+  hidden = {}; store.set('ccprobe.hidden', hidden);
+  railOrder = { v: 1, keys: [] }; store.set('ccprobe.railOrder', railOrder); S.railForce = true;
+  resetSplitters();
   S.expandFinished = false; S.userPanned = false;
   if (S.model) { clearGraph(); render(); }
 });
@@ -1010,49 +1515,63 @@ document.addEventListener('keydown', e => {
   if (e.target.closest('input, textarea, select')) return;
   if (e.key === 'Escape') { if (!$('settings').hidden) $('settings').hidden = true; else select('lead'); }
   else if (e.key === 'f' || e.key === 'F') doFit();
+  else if (e.key === 'h' || e.key === 'H' || e.key === 'Delete' || e.key === 'Backspace') {
+    const s = cur(), n = s && S.sel !== 'lead' ? nodeById(s, S.sel) : null;
+    if (canHide(n)) { e.preventDefault(); hideAgents([n.id]); }
+  }
   else if (e.key === '1' || e.key === '2' || e.key === '3') { S.tab = ['agent', 'wts', 'alerts'][+e.key - 1]; renderPanel(); }
   else if (e.key === '[' || e.key === ']') {
-    const ss = S.model?.sessions || []; const i = ss.findIndex(s => s.id === S.sid);
-    if (ss.length) selectSession(ss[(i + (e.key === ']' ? 1 : -1) + ss.length) % ss.length].id);
+    const ss = [...$('railList').children].map(b => b.dataset.sid); const i = ss.indexOf(S.sid);   // as shown
+    if (ss.length) selectSession(ss[(i + (e.key === ']' ? 1 : -1) + ss.length) % ss.length]);
   }
 });
 
-// ---- splitter: drag to resize the side panel (its width is remembered in settings) ----
-const SIDE_MIN = 280, SIDE_DEFAULT = 380;
-function setSideW(w, save) {
-  const max = Math.max(SIDE_MIN, Math.round(innerWidth * 0.6));
-  w = Math.round(Math.min(max, Math.max(SIDE_MIN, w)));
-  document.documentElement.style.setProperty('--side-w', w + 'px');   // CSSOM: allowed by the CSP
-  $('splitter').setAttribute('aria-valuenow', w);
-  $('splitter').setAttribute('aria-valuemax', max);
-  if (save) { settings.sideW = w; saveSettings(); }
-  return w;
-}
-const sideW = () => parseInt(getComputedStyle(document.documentElement).getPropertyValue('--side-w'), 10) || SIDE_DEFAULT;
-$('splitter').addEventListener('pointerdown', ev => {
-  if (ev.button !== 0) return;
-  ev.preventDefault();
-  const sp = $('splitter'), grab = innerWidth - ev.clientX - sideW();   // keep the pointer where it took hold
-  sp.setPointerCapture(ev.pointerId);
-  sp.classList.add('drag'); document.body.classList.add('resizing'); hideTip();
-  const move = e => setSideW(innerWidth - e.clientX - grab, false);
-  const up = e => {
-    sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up); sp.removeEventListener('pointercancel', up);
-    sp.classList.remove('drag'); document.body.classList.remove('resizing');
-    setSideW(innerWidth - e.clientX - grab, true);
-    if (S.model) renderTimeline(cur());
+// ---- splitters: drag to resize the sessions panel (left) and the side panel (right); widths are kept in settings ----
+const STAGE_MIN = 360;   // the graph keeps at least this much between the two panels
+function splitter(id, { cssVar, key, min, def, frac, left }) {
+  const sp = $(id);
+  const width = () => parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10) || def;
+  const other = () => (left ? sideW : railW)();
+  const set = (w, save) => {
+    const max = Math.max(min, Math.round(Math.min(innerWidth * frac, innerWidth - other() - STAGE_MIN - 14)));
+    w = Math.round(Math.min(max, Math.max(min, w)));
+    document.documentElement.style.setProperty(cssVar, w + 'px');   // CSSOM: allowed by the CSP
+    sp.setAttribute('aria-valuenow', w); sp.setAttribute('aria-valuemin', min); sp.setAttribute('aria-valuemax', max);
+    if (save) { settings[key] = w; saveSettings(); }
+    return w;
   };
-  sp.addEventListener('pointermove', move); sp.addEventListener('pointerup', up); sp.addEventListener('pointercancel', up);
-});
-$('splitter').addEventListener('dblclick', () => setSideW(SIDE_DEFAULT, true));
-$('splitter').addEventListener('keydown', e => {
-  const step = e.shiftKey ? 80 : 20;
-  if (e.key === 'ArrowLeft') { e.preventDefault(); setSideW(sideW() + step, true); }        // the panel grows to the left
-  else if (e.key === 'ArrowRight') { e.preventDefault(); setSideW(sideW() - step, true); }
-  else if (e.key === 'Home') { e.preventDefault(); setSideW(SIDE_DEFAULT, true); }
-});
-addEventListener('resize', () => setSideW(settings.sideW || SIDE_DEFAULT, false));   // re-clamp to the new window
-setSideW(settings.sideW || SIDE_DEFAULT, false);
+  const at = x => left ? x : innerWidth - x;   // the panel's width if its edge sat at x
+  sp.addEventListener('pointerdown', ev => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    const grab = at(ev.clientX) - width();   // keep the pointer where it took hold
+    sp.setPointerCapture(ev.pointerId);
+    sp.classList.add('drag'); document.body.classList.add('resizing'); hideTip();
+    const move = e => set(at(e.clientX) - grab, false);
+    const up = e => {
+      sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up); sp.removeEventListener('pointercancel', up);
+      sp.classList.remove('drag'); document.body.classList.remove('resizing');
+      set(at(e.clientX) - grab, true);
+      if (S.model) renderTimeline(cur());
+    };
+    sp.addEventListener('pointermove', move); sp.addEventListener('pointerup', up); sp.addEventListener('pointercancel', up);
+  });
+  sp.addEventListener('dblclick', () => set(def, true));
+  sp.addEventListener('keydown', e => {
+    const step = (e.shiftKey ? 80 : 20) * (left ? 1 : -1);   // the arrow points the way the edge moves
+    if (e.key === 'ArrowRight') { e.preventDefault(); set(width() + step, true); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); set(width() - step, true); }
+    else if (e.key === 'Home') { e.preventDefault(); set(def, true); }
+  });
+  return { set, width, def, key };
+}
+const SIDE = splitter('splitter', { cssVar: '--side-w', key: 'sideW', min: 280, def: 380, frac: .6, left: false });
+const RAIL = splitter('splitterL', { cssVar: '--rail-w', key: 'railW', min: 160, def: 230, frac: .35, left: true });
+function sideW() { return SIDE.width(); }
+function railW() { return RAIL.width(); }
+const resetSplitters = () => { RAIL.set(RAIL.def, true); SIDE.set(SIDE.def, true); };
+addEventListener('resize', () => { RAIL.set(settings.railW || RAIL.def, false); SIDE.set(settings.sideW || SIDE.def, false); });   // re-clamp to the new window
+RAIL.set(settings.railW || RAIL.def, false); SIDE.set(settings.sideW || SIDE.def, false);
 
 applyTheme();
 syncSettingsUi();

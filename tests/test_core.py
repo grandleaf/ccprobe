@@ -160,7 +160,33 @@ class StateTests(Base):
         self.w.add(text(self.now - 300, "Here it is.", stop="end_turn"),
                    {"type": "system", "subtype": "turn_duration", "timestamp": iso(self.now - 299)})
         st = lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now)
-        self.assertEqual(st["key"], "waiting_user")
+        self.assertEqual(st["key"], "idle")
+
+    def test_lead_waits_for_user_only_on_a_question(self):
+        self.w.add(tool_use(self.now - 300, "toolu_q1", "AskUserQuestion", {"questions": []}))
+        st = lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now)
+        self.assertEqual((st["key"], st["detail"]), ("waiting_user", "a question for you"))
+
+    def test_idle_compaction_is_not_a_prompt(self):
+        self.w.add(text(self.now - 1900, "Done.", stop="end_turn"),
+                   {"type": "system", "subtype": "compact_boundary", "timestamp": iso(self.now - 1800), "compactMetadata": {"trigger": "auto"}},
+                   {"type": "user", "timestamp": iso(self.now - 1800), "isCompactSummary": True, "isVisibleInTranscriptOnly": True,
+                    "message": {"role": "user", "content": "This session is being continued from a previous conversation…"}})
+        st = lead_state(self.tr(), {"alive": True, "status": "idle"}, self.now)
+        self.assertEqual(st["key"], "idle")
+
+    def test_local_command_output_returns_to_the_user(self):
+        self.w.add({"type": "user", "timestamp": iso(self.now - 1200), "message": {"content": "<command-name>/model</command-name>"}},
+                   {"type": "user", "timestamp": iso(self.now - 1199), "message": {"content": "<local-command-stdout>Set model to Opus</local-command-stdout>"}})
+        st = lead_state(self.tr(), {"alive": True, "status": "idle"}, self.now)
+        self.assertEqual(st["key"], "idle")
+
+    def test_taskstop_recorded_unless_it_failed(self):
+        self.w.add(tool_use(self.now - 60, "toolu_s1", "TaskStop", {"task_id": "agent123"}), result(self.now - 59, "toolu_s1"),
+                   tool_use(self.now - 30, "toolu_s2", "TaskStop", {"task_id": "agent456"}), result(self.now - 29, "toolu_s2", err=True))
+        tr = self.tr()
+        self.assertIn("agent123", tr.stops)
+        self.assertNotIn("agent456", tr.stops)
 
     def test_usage_limit_state(self):
         self.w.add({"type": "system", "subtype": "informational", "timestamp": iso(self.now - 100),
@@ -179,6 +205,9 @@ class HolderTests(Base):
         tr = self.tr()
         self.assertEqual(_holder("art-advisor round1 captures Thu Oct 22", None, {"adv": tr}, {}, {}), "adv")
         self.assertEqual(_holder("worker capture Thu", None, {"w1": Transcript(self.path, 1)}, {}, {"worker": "w1"}), "w1")
+        # a fresh worker per task (hp<N>): "worker …" means the current one, not an old agent named worker
+        trs = {"old": Transcript(self.path, 1), "hp129": Transcript(self.path, 1)}
+        self.assertEqual(_holder("worker capture Thu", None, trs, {}, {"worker": "old"}, "hp129"), "hp129")
         self.assertEqual(_holder("lead build+show 152", None, {}, {}, {}), "lead")
         self.assertEqual(_holder("MP 111 build + captures", None, {"m": tr}, {"m": 111}, {}), "m")
 
@@ -232,6 +261,27 @@ class AlertTests(unittest.TestCase):
         mem, now = alerts.Memory(), time.time()
         alerts.compute([s], now - 300, mem)
         self.assertNotIn("waiting-free", {x["key"].split(":")[0] for x in alerts.compute([s], now, mem)})
+
+    def test_stale_row_only_when_the_write_did_not_land(self):
+        now = time.time()
+        hm = time.strftime("%H:%M", time.localtime(now - 60))
+        a = agent("w", "running", now - 5, role="worker")
+        a["qstate"] = [{"t": now - 60, "n": 5, "head": "in progress $(date +%H:%M): built", "id": "x", "error": True}]
+        landed = [{"n": 5, "kind": "active", "status": f"⏩ in progress {hm}", "title": "t", "agent": "w"}]
+        self.assertNotIn("stale-row", self.keys(session([a], landed), now))
+        refused = [{"n": 5, "kind": "active", "status": "⏩ in progress 03:00", "title": "t", "agent": "w"}]
+        self.assertIn("stale-row", self.keys(session([a], refused), now))
+
+    def test_no_stale_row_while_paused(self):
+        now = time.time()
+        a = agent("l", "parked", now - 5, role="lp")
+        a["qstate"] = [{"t": now - 60, "n": 77, "head": "in progress $(date +%H:%M): at the desk", "id": "x", "error": True}]
+        rows = [{"n": 77, "kind": "paused", "status": "✋ paused 14:14", "title": "t", "agent": "l"}]
+        self.assertNotIn("stale-row", self.keys(session([a], rows), now))
+
+    def test_no_context_alert(self):
+        a = agent("w", "running", role="worker", ctx=950000, ctx_max=1000000)
+        self.assertNotIn("ctx", self.keys(session([a], [])))
 
 
 if __name__ == "__main__":

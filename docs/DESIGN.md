@@ -161,7 +161,7 @@ Kept per transcript (main or agent), updated from new entries only:
 
 ### 5.6 Context gauge
 `ctx_max` = 1 000 000 by default (the Opus 5.5 / Fable sessions here run 1M windows; one compaction shows `preTokens`
-967 765), and `--ctx-max` overrides it. Shown as a bar. The pill shows only at ≥ 70 %: amber at ≥ 80 %, red at ≥ 90 %.
+967 765), and `--ctx-max` overrides it. Shown as a bar (amber at ≥ 80 %, red at ≥ 90 %). No pill and no alert: removed at the user's request (2026-10-22).
 
 ## 6. WTS bridge (`wts.py`), for goal G3
 
@@ -201,7 +201,6 @@ session, agent?}`. `since` = the first tick its key was seen; it is kept in memo
 | amber | `hp-state:<root>` | `state` = `running N` but row N is not active/done; or `stopped`/`paused` while the worker is `running` on an HP row; or `stopped` with open HP rows and the worker `ended` |
 | amber | `mode-breach:<root>:<grp>` | MP or LP is `desk`/`paused`, but an agent of that group holds the lock |
 | amber | `waiting-free:<agent>` | a waiter exists and the lock has been free ≥ 2 min |
-| amber/red | `ctx:<agent>` | context ≥ 80 % (red at ≥ 90 %) |
 | amber | `stuck:<agent>` | state `stuck` |
 | amber | `caffeinate:<root>` | caffeinate is off while any row is open or any agent is `running`/`thinking` |
 | info | `done:<n>` | a row turned `done` in the last 30 min |
@@ -301,7 +300,6 @@ Each node shows:
 - a halo;
 - a hex in `--c`;
 - an inner mark: the ✳ path for the lead, a pause glyph when parked, a dot otherwise;
-- a context pill (≥ 70 % only);
 - the label, with the task title below it (24 chars);
 - a status line with its icon;
 - a context bar;
