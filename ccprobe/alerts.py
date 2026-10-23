@@ -1,0 +1,156 @@
+"""Alert rules (DESIGN.md §7, with the audit's M2 fixes): pure checks over the model; first-seen times kept across ticks.
+
+Every rule is tuned so the user's normal workflow raises nothing: a worker waiting on its advisor, rows parked in
+desk-only mode, caffeinate turned off on purpose, the lead holding the window while the user looks at the app.
+"""
+import re
+
+OPEN = ("asks", "active", "paused", "parked", "queued", "other")
+BUSY = ("running", "thinking", "polling")
+LIVE = BUSY + ("waiting_window", "ended_bg")
+
+
+class Memory:
+    def __init__(self):
+        self.first_seen = {}       # alert key -> first tick it was present
+        self.cond_since = {}       # condition key -> first tick it held (for grace periods)
+        self.row_kind = {}         # (root, n) -> last kind seen
+        self.done_at = {}          # (root, n) -> time it turned done
+
+    def held_for(self, key, cond, now):
+        """How long `cond` has held without a break (0 when it does not hold)."""
+        if not cond:
+            self.cond_since.pop(key, None)
+            return 0
+        return now - self.cond_since.setdefault(key, now)
+
+
+def compute(sessions, now, mem):
+    out, keys = [], set()
+
+    def add(key, sev, title, detail, s, agent=None):
+        if key in keys:              # two sessions in one project report its WTS once
+            return
+        keys.add(key)
+        out.append({"key": key, "sev": sev, "title": title, "detail": detail, "session": s["id"], "agent": agent,
+                    "project": s.get("project")})
+
+    for s in sessions:
+        lead = s.get("lead") or {}
+        limited = bool(lead.get("limit"))
+        if limited:
+            add(f"usage-limit:{s['id']}", "red", f"{s['project']}: usage limit reached", lead["limit"]["text"], s, "lead")
+        agents = {a["id"]: a for a in s.get("agents") or []}
+        name = lambda aid: "lead" if aid == "lead" else (agents[aid]["label"] if aid in agents else aid)
+        lead_busy = (lead.get("state") or {}).get("key") in BUSY
+
+        for a in agents.values():
+            pct = a["ctx"] / a["ctx_max"] if a.get("ctx_max") else 0
+            if pct >= 0.8 and not a["finished"]:
+                add(f"ctx:{a['id']}", "red" if pct >= 0.9 else "amber", f"{a['label']}: context {round(pct * 100)}% full",
+                    f"{round(a['ctx'] / 1000)}k of {round(a['ctx_max'] / 1000)}k. It will compact soon and may lose detail it relies on.",
+                    s, a["id"])
+            if a["state"]["key"] == "stuck" and not limited:
+                add(f"stuck:{a['id']}", "amber", f"{a['label']}: {a['state']['label']}",
+                    "No conversational entries and no model call for 10 min while not waiting on a tool or a message.", s, a["id"])
+        if (lead.get("state") or {}).get("key") == "stuck" and not limited:
+            add(f"stuck:{s['id']}:lead", "amber", f"{s['project']} lead: {lead['state']['label']}", "", s, "lead")
+
+        w = s.get("wts")
+        if not w or w.get("error"):
+            continue
+        root = w["root"]
+        rows = {r["n"]: dict(r, group=g) for g, rs in w["groups"].items() for r in rs}
+
+        def related_live(aid):
+            """Someone this agent works with (spawned, messaged, was messaged by in 30 min) is still at work."""
+            for m in s.get("messages") or []:
+                if now - m["t"] > 1800 or aid not in (m["from"], m["to"]):
+                    continue
+                other = m["to"] if m["from"] == aid else m["from"]
+                if other in agents and agents[other]["state"]["key"] in LIVE:
+                    return True
+            return any(x["parent"] == aid and x["state"]["key"] in LIVE for x in agents.values())
+
+        for r in rows.values():
+            if r["kind"] == "asks":
+                add(f"asks:{root}:{r['n']}", "red", f"{r['n']} needs you", r["title"], s, r.get("agent"))
+            k = (root, r["n"])
+            if mem.row_kind.get(k) not in (None, "done") and r["kind"] == "done":
+                mem.done_at[k] = now
+            mem.row_kind[k] = r["kind"]
+            if k in mem.done_at and now - mem.done_at[k] <= 1800 and r["kind"] == "done":
+                add(f"done:{root}:{r['n']}", "info", f"{r['n']} done", f"{r['title']} · {r['status']}", s, r.get("agent"))
+
+            a = agents.get(r.get("agent"))
+            if r["kind"] == "active" and a:
+                st = a["state"]
+                orphan = st["key"] == "dead" or (st["key"] == "ended" and now - st["since"] >= 600
+                                                 and not related_live(a["id"]) and not lead_busy)
+                if orphan:
+                    add(f"orphan-row:{root}:{r['n']}", "red", f"Row {r['n']} says in progress, but {a['label']} is {st['label']}",
+                        f"{a['label']} last wrote {_ago(now - st['since'])} ago, and nobody it works with is busy.", s, a["id"])
+
+        # a State write that failed (the auto-mode refusal case); heads with $(…) cannot be compared, so only errors
+        for a in agents.values():
+            for q in a.get("qstate") or []:
+                if q["error"] and q["n"] in rows and not any(x["n"] == q["n"] and x["t"] > q["t"] and not x["error"] for x in a["qstate"]):
+                    add(f"stale-row:{root}:{q['n']}", "red", f"Row {q['n']} may be stale",
+                        f"{a['label']} tried to set it to \"{q['head'][:40]}…\" but the write failed; the queue shows \"{rows[q['n']]['status']}\".",
+                        s, a["id"])
+
+        # the HP state file against the worker (a deliberate stop is not an alert: wts shows ■ stopped)
+        worker = next((a for a in agents.values() if a["role"] == "worker"), None)
+        sf = (w.get("state_file") or "").strip()
+        m = re.match(r"running\s+(\d+)", sf)
+        if m:
+            r = rows.get(int(m.group(1)))
+            bad = not r or r["kind"] not in ("active", "done", "closed")
+            if mem.held_for(f"hp-run:{root}", bad, now) >= 120:
+                add(f"hp-state:{root}", "amber", "HP state file disagrees with the queue",
+                    f"state says \"{sf}\", but row {m.group(1)} is {r['status'] if r else 'not in the queue'}.", s, worker and worker["id"])
+        else:
+            mem.held_for(f"hp-run:{root}", False, now)
+        working = bool(sf.startswith(("stopped", "paused")) and worker and worker["state"]["key"] in BUSY)
+        if mem.held_for(f"hp-stop:{root}", working, now) >= 300:
+            add(f"hp-state:{root}", "amber", "HP state file disagrees with the worker",
+                f"state says \"{sf}\", but the worker has been working for 5 min: {worker['state']['label']}.", s, worker["id"])
+
+        win = w.get("window") or {}
+        holder = win.get("holder")
+        if win.get("held"):
+            held_for = now - (win.get("since") or now)
+            h = agents.get(holder)
+            holder_bad = holder != "lead" and (h is None or h["state"]["key"] in ("ended", "dead", "stuck"))
+            if held_for >= 900 and holder_bad and not w.get("app_running"):
+                add(f"stale-lock:{root}", "red", "Stale window lock?",
+                    f"Held by \"{win.get('who')}\" for {_ago(held_for)}; " +
+                    (f"{h['label']} is {h['state']['label']}" if h else "no live agent matches it") +
+                    (f", and {w.get('app')} is not running." if w.get("app") else "."), s, holder if h else None)
+            if h and h.get("group") in ("MP", "LP") and (w.get("modes") or {}).get(h["group"]) in ("desk", "paused"):
+                add(f"mode-breach:{root}:{h['group']}", "amber",
+                    f"{h['label']} holds the window in {h['group']} {w['modes'][h['group']]} mode", f"Lock: {win.get('who')}", s, h["id"])
+        # waiters that really poll for the lock, in a group allowed to use it, while it sits free
+        polling = [x for x in win.get("waiters") or [] if x in agents and agents[x]["state"].get("via") == "loop"
+                   and (agents[x].get("group") in (None, "HP") or (w.get("modes") or {}).get(agents[x].get("group")) == "running")]
+        if mem.held_for(f"free:{root}", bool(polling) and not win.get("held"), now) >= 120:
+            add(f"waiting-free:{root}", "amber", f"Window free, {', '.join(name(x) for x in polling)} still waiting",
+                "The lock has been free for 2 min, but their lock loops have not taken it.", s, polling[0])
+
+        busy = sf.startswith("running") or any(a["state"]["key"] in BUSY for a in agents.values())
+        if not w.get("caffeinate") and busy:
+            add(f"caffeinate:{root}", "amber", "caffeinate is off while work is running",
+                "The Mac may sleep and stop the agents.", s)
+
+    for a in out:
+        a["since"] = mem.first_seen.setdefault(a["key"], now)
+    for k in [k for k in mem.first_seen if k not in keys]:
+        del mem.first_seen[k]
+    rank = {"red": 0, "amber": 1, "info": 2}
+    out.sort(key=lambda a: (rank[a["sev"]], -a["since"]))
+    return out
+
+
+def _ago(s):
+    s = int(max(0, s))
+    return f"{s // 60}m" if s < 3600 else f"{s // 3600}h {s % 3600 // 60}m"

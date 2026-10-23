@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+# the mockup's captured session data and its build output (regenerate: python3 mockup/snapshot.py && python3 mockup/build.py)
+mockup/snapshot.json
+mockup/index.html
