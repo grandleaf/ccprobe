@@ -81,7 +81,8 @@ def read(root):
         after = os.stat(qpath)
         prev = _last_good.get(root)
         torn = (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size) or after.st_size == 0
-        if prev and (torn or len(rows) < prev[0] * 0.8):
+        settled = time.time_ns() - after.st_mtime_ns > 2_000_000_000     # untouched for 2 s: not mid-rewrite
+        if prev and (torn or (len(rows) < prev[0] * 0.8 and not settled)):
             return prev[1]           # read during a rewrite: show the last good table this tick
         pinned = q.pinned()
         groups = {}

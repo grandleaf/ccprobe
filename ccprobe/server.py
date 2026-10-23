@@ -79,7 +79,7 @@ def make_handler(collector, token, port, use_token=True, host=None):
                     k, _, v = part.strip().partition("=")
                     if k == COOKIE:
                         got = v
-            return bool(got) and hmac.compare_digest(got, token)
+            return bool(got) and hmac.compare_digest(got.encode(), token.encode())
 
         def do_HEAD(self):
             self.do_GET()
@@ -90,7 +90,7 @@ def make_handler(collector, token, port, use_token=True, host=None):
             url = urllib.parse.urlsplit(self.path)
             q = urllib.parse.parse_qs(url.query)
             if use_token and "t" in q:
-                if hmac.compare_digest(q["t"][0], token):
+                if hmac.compare_digest(q["t"][0].encode(), token.encode()):
                     cookie = f"{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
                     return self._send(303, "text/plain", "ok\n", {"Location": "/", "Set-Cookie": cookie})
                 return self._send(403, "text/plain", "bad token\n")
@@ -102,8 +102,8 @@ def make_handler(collector, token, port, use_token=True, host=None):
             if path == "/":
                 path = "/index.html"
             if path == "/api/state":
-                model, _ = collector.snapshot()
-                return self._send(200, "application/json", json.dumps(model or {"v": 1, "loading": True}, default=str))
+                body = collector.snapshot_json()
+                return self._send(200, "application/json", body or json.dumps({"v": 1, "loading": True}))
             if path == "/api/health":
                 return self._send(200, "application/json", json.dumps({"ok": True, "ready": collector.snapshot()[0] is not None}))
             if path == "/api/events":
@@ -124,6 +124,8 @@ def make_handler(collector, token, port, use_token=True, host=None):
             self.send_header("X-Accel-Buffering", "no")
             self.send_header("Connection", "close")
             self.end_headers()
+            if self.command == "HEAD":          # headers only: never hold a HEAD request open as a stream
+                return
             last, ping = None, time.time()
             try:
                 self.wfile.write(b"retry: 2000\n\n")
@@ -131,7 +133,7 @@ def make_handler(collector, token, port, use_token=True, host=None):
                     model, digest = collector.snapshot()
                     if model is not None and digest != last:
                         last = digest
-                        self.wfile.write(b"data: " + json.dumps(model, default=str).encode() + b"\n\n")
+                        self.wfile.write(b"data: " + collector.snapshot_json().encode() + b"\n\n")
                         self.wfile.flush()
                         ping = time.time()
                     elif time.time() - ping >= 5:

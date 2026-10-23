@@ -120,6 +120,7 @@ class Transcript:
         elif typ == "attachment":
             att = d.get("attachment") or {}
             if att.get("type") == "queued_command":
+                self._touch(t)
                 self._received(att.get("origin") or {}, str(att.get("prompt") or ""), t)
         elif typ == "system":
             st = d.get("subtype")

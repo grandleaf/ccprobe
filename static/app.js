@@ -7,7 +7,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const hhmm = (t, sec) => t ? new Date(t * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: sec ? '2-digit' : undefined }) : '—';
 const dur = s => { s = Math.max(0, Math.round(s)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 172800 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : `${Math.floor(s / 86400)}d`; };
 const ago = (t, now) => !t ? '—' : (now - t < 45 ? 'just now' : dur(now - t) + ' ago');
-const kfmt = n => n >= 1e6 ? (n / 1e6).toFixed(n % 1e6 ? 2 : 0).replace(/\.?0+$/, '') + 'M' : Math.round(n / 1e3) + 'k';
+const kfmt = n => n >= 1e6 ? parseFloat((n / 1e6).toFixed(2)) + 'M' : Math.round(n / 1e3) + 'k';
 const modelName = m => (m || '').replace(/^claude-/, '').replace(/\[.*\]$/, '').replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/^\w/, c => c.toUpperCase());
 const clip = (s, n) => { s = String(s ?? ''); if (s.length <= n) return s; let c = s.slice(0, n - 1); const sp = c.lastIndexOf(' '); if (sp > n * .6) c = c.slice(0, sp); return c.trimEnd() + '…'; };
 
@@ -74,7 +74,11 @@ let es = null, errs = 0, pollTimer = 0;
 function connect() {
   try { es = new EventSource('/api/events'); } catch (e) { return startPolling(); }
   es.onmessage = e => { errs = 0; S.lastMsgAt = Date.now(); setConn('live'); try { onModel(JSON.parse(e.data)); } catch (x) { console.error(x); } };
-  es.addEventListener('ping', () => { errs = 0; S.lastMsgAt = Date.now(); if (S.conn !== 'live') setConn('live'); });
+  es.addEventListener('ping', e => {
+    errs = 0; S.lastMsgAt = Date.now(); if (S.conn !== 'live') setConn('live');
+    const t = parseFloat(e.data);
+    if (S.model && t > S.model.now) { S.model.now = t; render(); }
+  });
   es.onerror = () => {
     errs++;
     if (errs >= 3) { es.close(); es = null; checkAuthThenPoll(); }
@@ -90,6 +94,7 @@ async function checkAuthThenPoll() {
 function startPolling() {
   clearTimeout(pollTimer);
   const tick = async () => {
+    if (es && es.readyState === EventSource.OPEN) return;    // the stream is back: it takes over
     try {
       const r = await fetch('/api/state', { cache: 'no-store' });
       if (r.status === 401) { S.authFailed = true; setConn('down'); return showEmpty('Not signed in: open the URL the ccprobe server printed.'); }
@@ -127,17 +132,18 @@ function onModel(m) {
     S.sid = pick ? pick.id : null;
     S.sel = 'lead'; S.userPanned = false;
   }
-  const s = cur();
   // new messages become pulses (never the backlog on first load, never while the tab is hidden)
+  const fresh = [];
   for (const x of ss) for (const msg of x.messages || []) {
     if (S.seen.has(msg.id)) continue;
     S.seen.add(msg.id);
     if (!S.first && x.id === S.sid && m.now - msg.t < 60) {
-      if (document.hidden) S.away++; else queuePulse(msg);
+      if (document.hidden) S.away++; else fresh.push(msg);
     }
   }
   notify(m);
-  render();
+  render();               // first, so the edges of new agents and new pairs exist for their pulses
+  fresh.forEach(queuePulse);
   S.first = false;
 }
 const cur = () => (S.model?.sessions || []).find(s => s.id === S.sid) || null;

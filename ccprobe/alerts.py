@@ -112,8 +112,8 @@ def compute(sessions, now, mem):
         else:
             mem.held_for(f"hp-run:{root}", False, now)
         working = bool(sf.startswith(("stopped", "paused")) and worker and worker["state"]["key"] in BUSY)
-        if mem.held_for(f"hp-stop:{root}", working, now) >= 300:
-            add(f"hp-state:{root}", "amber", "HP state file disagrees with the worker",
+        if mem.held_for(f"hp-stop:{s['id']}:{root}", working, now) >= 300:
+            add(f"hp-state-worker:{root}", "amber", "HP state file disagrees with the worker",
                 f"state says \"{sf}\", but the worker has been working for 5 min: {worker['state']['label']}.", s, worker["id"])
 
         win = w.get("window") or {}
@@ -133,7 +133,7 @@ def compute(sessions, now, mem):
         # waiters that really poll for the lock, in a group allowed to use it, while it sits free
         polling = [x for x in win.get("waiters") or [] if x in agents and agents[x]["state"].get("via") == "loop"
                    and (agents[x].get("group") in (None, "HP") or (w.get("modes") or {}).get(agents[x].get("group")) == "running")]
-        if mem.held_for(f"free:{root}", bool(polling) and not win.get("held"), now) >= 120:
+        if mem.held_for(f"free:{s['id']}:{root}", bool(polling) and not win.get("held"), now) >= 120:
             add(f"waiting-free:{root}", "amber", f"Window free, {', '.join(name(x) for x in polling)} still waiting",
                 "The lock has been free for 2 min, but their lock loops have not taken it.", s, polling[0])
 

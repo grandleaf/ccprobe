@@ -37,6 +37,7 @@ class Collector:
         self.lock = threading.Lock()
         self.model = None
         self.digest = None
+        self._json, self._json_for = None, None
         self.started = time.time()
         self.stopping = False
         self.changed = threading.Event()
@@ -95,6 +96,15 @@ class Collector:
     def snapshot(self):
         with self.lock:
             return self.model, self.digest
+
+    def snapshot_json(self):
+        """The current model as JSON, serialized once per tick however many clients ask (None before the first tick)."""
+        with self.lock:
+            if self.model is None:
+                return None
+            if self._json_for is not self.model:
+                self._json, self._json_for = json.dumps(self.model, default=str), self.model
+            return self._json
 
     # --- transcripts ----------------------------------------------------------------------------------------
     def transcript(self, path, backfill, max_backfill):
@@ -215,8 +225,8 @@ class Collector:
                 if m["kind"] == "send":
                     to = m.get("to_id") if m.get("to_id") in ids else resolve(m["to"])
                 else:
-                    near = [r for (t, r, snd) in recv_handback if snd == src and 0 <= t - m["t"] <= 600]
-                    to = near[0] if near else parent_of.get(src, "lead")
+                    near = [(t - m["t"], r) for (t, r, snd) in recv_handback if snd == src and 0 <= t - m["t"] <= 600]
+                    to = min(near)[1] if near else parent_of.get(src, "lead")
                 if to and (to == "lead" or to in ids) and to != src:
                     msgs.append({"id": f"{src}>{to}@{m['t']:.3f}", "t": m["t"], "from": src, "to": to, "kind": m["kind"],
                                  "summary": m["summary"]})
