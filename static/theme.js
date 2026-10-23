@@ -9,4 +9,5 @@
   var m = s.motion || (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'reduced' : 'full');
   root.setAttribute('data-motion', m);
   if (s.compact) root.setAttribute('data-compact', '1');
+  if (s.sideW > 0) root.style.setProperty('--side-w', Math.min(s.sideW, Math.max(280, innerWidth * 0.6)) + 'px');
 })();

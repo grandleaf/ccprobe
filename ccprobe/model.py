@@ -256,7 +256,11 @@ class Collector:
             label = meta.get("name") or _short_desc(meta.get("description")) or aid[:7]
             if role in ("mp", "lp") and n is not None:
                 label = f"{role.upper()} {n}"
-            finished = st["key"] == "dead" or (st["key"] == "ended" and st.get("sub") == "done" and now - st["since"] > 120)
+            # a fresh agent per task reuses the name: an older holder of it is retired once its turn has ended
+            superseded = bool(meta.get("name")) and latest_by_name.get(meta["name"]) != aid
+            if superseded:
+                label = f"{meta['name']} (earlier)"
+            finished = st["key"] == "dead" or (st["key"] == "ended" and (superseded or (st.get("sub") == "done" and now - st["since"] > 120)))
             agents.append({
                 "id": aid, "name": meta.get("name"), "label": label, "desc": clip(redact(meta.get("description") or ""), 120),
                 "role": role, "task": n, "task_title": row["title"] if row else None, "group": row["group"] if row else None,

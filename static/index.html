@@ -54,6 +54,8 @@
     <svg id="graph" role="img" aria-label="Agents of the selected session">
       <defs>
         <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5"/></filter>
+        <!-- task edges point at the agent doing the work -->
+        <marker id="arrTask" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="ah-task" d="M0,0L10,5L0,10L3,5z"/></marker>
       </defs>
       <g id="vp"><g id="gEdges"></g><g id="gNodes"></g><g id="gTethers"></g><g id="gCards"></g><g id="gPulse"></g></g>
     </svg>
@@ -62,13 +64,15 @@
     <div class="empty" id="empty"><div class="skel"></div><div id="emptyText">Connecting to the ccprobe server…</div></div>
     <details class="legend" id="legend">
       <summary>Legend</summary>
-      <div><i class="lg lg-task"></i>task in flight</div>
+      <div><i class="lg lg-task"></i>task in flight, toward the agent doing it</div>
       <div><i class="lg lg-msg"></i>messages (hot when recent)</div>
       <div><i class="lg lg-spawn"></i>spawned by</div>
       <div><i class="lg lg-lock"></i>holds the window</div>
-      <div><i class="lg lg-pulse"></i>message in transit</div>
+      <div><i class="lg lg-pulse"></i>message in transit (points its way)</div>
     </details>
   </section>
+  <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize the side panel"
+       aria-valuemin="280" tabindex="0" data-tip="Drag to resize · double-click to reset"></div>
   <aside class="side">
     <nav class="tabs" role="tablist">
       <button data-tab="agent" role="tab">Agent</button>

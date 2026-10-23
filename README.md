@@ -13,8 +13,10 @@ python3 ccprobe.py --help        # --port, --window 6h, --ctx-max, --interval, -
 What you see:
 - **Graph.** The lead sits on top, the HP worker and running agents below it, helpers next to the agent they serve,
   and parked agents in the right-hand column. The HP queue and the shared window are their own cards, and a red line
-  runs to whoever holds the lock. Dashed lines flow while work is in flight, and a dot travels along an edge for every
-  message, hand-back or spawn.
+  runs to whoever holds the lock. Dashed lines flow while work is in flight, and amber task lines end in an arrow at the agent
+  doing the work. A chevron travels along an edge for every message, hand-back or spawn, pointing from the sender to
+  the receiver. Timeline arcs end in an arrowhead on the receiver's lane. An older agent whose name a newer one now
+  holds (a fresh agent per task) reads "worker (earlier)" and folds into the finished chip once its turn ends.
 - **States** come from the transcripts (DESIGN.md §5.5): running a tool (for how long), thinking, quiet, stuck?, polling,
   waiting for the window, holds the window, turn ended (waiting / done), waiting for you (the lead), dead.
 - **WTS tab.** This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
@@ -26,6 +28,8 @@ What you see:
   compact nodes, notifications.
 - **Keys:** `1` `2` `3` switch tabs · `[` `]` switch sessions · `F` fits the graph · `Esc` deselects · wheel zooms and
   dragging pans.
+- **Side panel width:** drag the splitter left of it (or focus it and use ← →), and double-click it to reset. The width is
+  remembered in this browser.
 
 Safety:
 - The server listens on loopback only.

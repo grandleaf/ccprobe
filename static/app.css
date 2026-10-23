@@ -74,10 +74,16 @@ svg use { pointer-events: none; }
 .pop-foot { color: var(--muted); font-size: 11px; margin-top: 8px; }
 
 /* layout */
-.layout { display: grid; grid-template-columns: 230px minmax(0, 1fr) 380px; min-height: 0; }
+.layout { display: grid; grid-template-columns: 230px minmax(0, 1fr) 7px var(--side-w, 380px); min-height: 0; }
 .rail, .side { background: var(--panel); min-height: 0; overflow: auto; }
 .rail { border-right: 1px solid var(--line); padding: 12px 10px; }
-.side { border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+.side { display: flex; flex-direction: column; }
+/* the splitter between the graph and the side panel: a 1px line in a 7px grab area */
+.splitter { position: relative; cursor: col-resize; background: var(--panel); touch-action: none; outline: none; }
+.splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: var(--line); transition: background .15s; }
+.splitter:hover::after, .splitter.drag::after, .splitter:focus-visible::after { left: 2px; width: 3px; background: var(--cyan); }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing #graph { pointer-events: none; }
 .rail-h { color: var(--muted); font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase; margin: 2px 4px 10px; }
 .sess { display: block; width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }
 .sess:hover { border-color: var(--line2); }
@@ -113,7 +119,7 @@ svg use { pointer-events: none; }
 .legend div { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
 .lg { display: inline-block; width: 26px; height: 0; border-top: 2px dashed var(--amber); }
 .lg-msg { border-top-color: var(--violet); } .lg-spawn { border-top: 2px dotted var(--slate); } .lg-lock { border-top: 2.5px solid var(--red); }
-.lg-pulse { width: 9px; height: 9px; border: 0; border-radius: 50%; background: var(--pulse); box-shadow: 0 0 0 2px var(--violet); }
+.lg-pulse { width: 11px; height: 10px; border: 0; background: var(--violet); clip-path: polygon(0 0, 100% 50%, 0 100%, 28% 50%); }
 
 /* graph nodes */
 .node { cursor: pointer; outline: none; }
@@ -163,7 +169,8 @@ svg use { pointer-events: none; }
 .edge.lock { stroke: var(--red); stroke-dasharray: none; stroke-width: 2.4; opacity: .85; }
 .edge.flashy { stroke-width: 3; opacity: 1; }
 .elbl { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
-.pulse { fill: var(--pulse); stroke: var(--violet); stroke-width: 1.5; }
+.pulse { fill: var(--pulse); stroke: var(--violet); stroke-width: 1.3; stroke-linejoin: round; }
+.ah-task { fill: var(--amber); }
 .pulse-halo { fill: var(--violet); opacity: .3; }
 
 /* speech bubbles and tool cards */
@@ -253,7 +260,8 @@ body.paused .edge.hot, body.paused .node .arc, body.paused .conn .dot, body.paus
 #tl .lane-l { cursor: pointer; } #tl .lane-l.sel { fill: var(--text-strong); font-weight: 600; }
 #tl .lane { stroke: var(--line); } #tl .gridl { stroke: var(--grid); }
 #tl .now { stroke: var(--amber); stroke-width: 1.4; }
-#tl .arc { fill: none; stroke: var(--violet); opacity: .25; stroke-width: 1.2; } #tl .arc.sel { opacity: .9; }
+#tl .arc { fill: none; stroke: var(--violet); opacity: .3; stroke-width: 1.2; } #tl .arc.sel { opacity: .9; }
+#tl .tl-ah { fill: var(--violet); }
 #tl .cmp { fill: var(--rose); }
 #tl .ev-Bash { fill: var(--amber); } #tl .ev-Read { fill: var(--cyan); } #tl .ev-Edit, #tl .ev-Write { fill: var(--green); }
 #tl .ev-SendMessage { fill: var(--violet); } #tl .ev-Agent { fill: var(--rose); } #tl .ev-other { fill: var(--slate); }
@@ -268,6 +276,7 @@ body.paused .edge.hot, body.paused .node .arc, body.paused .conn .dot, body.paus
   .rail-h { display: none; }
   .sess { min-width: 200px; margin: 0; }
   .stage { height: 62vh; }
-  .side { border-left: 0; border-top: 1px solid var(--line); max-height: none; }
+  .side { border-top: 1px solid var(--line); max-height: none; }
+  .splitter { display: none; }
   .chips .chip:not(.win) { display: none; }
 }

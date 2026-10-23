@@ -263,8 +263,12 @@ function layout(nodes, s) {
   const agents = vis.slice(1);
   const fin = agents.filter(n => n.finished);
   const live = agents.filter(n => !n.finished);
-  const sats = live.filter(n => n.role === 'helper' && n.anchor && ids.has(n.anchor) && n.anchor !== 'lead' && !isParked(n));
-  const parked = live.filter(n => isParked(n) && !sats.includes(n));
+  // a helper orbits its anchor only when the anchor is itself placed in a row or the parked column
+  // (not another satellite, not finished); otherwise it takes a place in the row like everyone else
+  const parked = live.filter(isParked);
+  const liveIds = new Set(live.map(n => n.id));
+  const cand = new Set(live.filter(n => n.role === 'helper' && n.anchor && n.anchor !== 'lead' && !isParked(n)).map(n => n.id));
+  const sats = live.filter(n => cand.has(n.id) && liveIds.has(n.anchor) && !cand.has(n.anchor));
   const main = live.filter(n => !sats.includes(n) && !parked.includes(n));
   const rank = { worker: 0, mp: 1, lp: 2, helper: 3 };
   main.sort((a, b) => rank[a.role] - rank[b.role] || (a.task || 0) - (b.task || 0) || a.born - b.born);
@@ -277,22 +281,21 @@ function layout(nodes, s) {
     pos.set(n.id, { x, y, r: radius(n) });
     maxY = Math.max(maxY, y); maxX = Math.max(maxX, x); minX = Math.min(minX, x);
   });
-  // satellites: fixed angular slots below their anchor, handed out in spawn order
-  const ANG = [62, 118, 28, 152, 90, 0, 180];
+  // satellites: fixed angular slots around their anchor, handed out in spawn order
   const byAnchor = new Map();
   for (const n of sats.sort((a, b) => a.born - b.born)) {
     if (!byAnchor.has(n.anchor)) byAnchor.set(n.anchor, []);
     byAnchor.get(n.anchor).push(n);
   }
-  for (const [anc, list] of byAnchor) {
-    const p = pos.get(anc);
-    if (!p) { list.forEach(n => main.push(n)); continue; }
+  const orbit = (anc, angles) => {
+    const p = pos.get(anc), list = byAnchor.get(anc);
     list.forEach((n, i) => {
-      const a = ANG[i % ANG.length] * Math.PI / 180, R = 200 + Math.floor(i / ANG.length) * 120;
+      const a = angles[i % angles.length] * Math.PI / 180, R = 200 + Math.floor(i / angles.length) * 120;
       const q = { x: p.x + R * Math.cos(a), y: p.y + R * Math.sin(a), r: radius(n) };
       pos.set(n.id, q); maxY = Math.max(maxY, q.y); maxX = Math.max(maxX, q.x); minX = Math.min(minX, q.x);
     });
-  }
+  };
+  for (const anc of byAnchor.keys()) if (pos.has(anc)) orbit(anc, [62, 118, 28, 152, 90, 0, 180]);   // below a row agent
   // parked column on the right
   const px = Math.max(maxX + 250, W / 2 + 330);
   parked.forEach((n, i) => {
@@ -301,6 +304,7 @@ function layout(nodes, s) {
     const q = { x: px + col * 210, y: 110 + k * 205, r: radius(n) };
     pos.set(n.id, q); maxY = Math.max(maxY, q.y); maxX = Math.max(maxX, q.x);
   });
+  for (const anc of byAnchor.keys()) if (parked.some(n => n.id === anc)) orbit(anc, [180, 145, 215, 110, 250]);   // left of a parked one
   // finished (expanded) row
   let y = maxY + 230;
   if (fin.length) {
@@ -312,7 +316,7 @@ function layout(nodes, s) {
   }
   const collapsed = nodes.filter(n => n.collapsed);
   const res = { y, collapsed };
-  S.order = ['lead', ...main.map(n => n.id), ...sats.map(n => n.id), ...parked.map(n => n.id), ...fin.map(n => n.id)];
+  S.order = [...new Set(['lead', ...main.map(n => n.id), ...sats.map(n => n.id), ...parked.map(n => n.id), ...fin.map(n => n.id)])];
   return { pos, res, minX, maxX };
 }
 
@@ -535,6 +539,7 @@ function drawEdge(key, a, b, cls, label, seen) {
   const { d, mid } = edgePath(a, b, bend);
   setA(e.path, { d });
   if (!e.path.classList.contains('flashy')) e.path.setAttribute('class', cls);
+  setA(e.path, { 'marker-end': /\btask\b/.test(cls) ? 'url(#arrTask)' : 'none' });
   e.cls = cls;
   setA(e.lbl, { x: mid.x + 8, y: mid.y - 6 }); setT(e.lbl, label);
 }
@@ -677,11 +682,11 @@ function queuePulse(m) {
   if (S.pulses.length >= 3) { S.pulses[S.pulses.length - 1].extra++; return; }
   const forward = m.from < m.to;   // the edge path runs from its first endpoint in the model; check by geometry below
   const halo = el('circle', { r: 9, class: 'pulse-halo' }, $('gPulse'));
-  const dot = el('circle', { r: 4.5, class: 'pulse' }, $('gPulse'));
+  const dot = el('path', { d: 'M-6,-5L6,0L-6,5L-2.5,0Z', class: 'pulse' }, $('gPulse'));   // a chevron: direction reads even in a still frame
   const fromPos = S.pos.get(m.from);
   const L = e.path.getTotalLength(), p0 = e.path.getPointAtLength(0);
   const rev = fromPos ? Math.hypot(p0.x - fromPos.x, p0.y - fromPos.y) > Math.hypot(e.path.getPointAtLength(L).x - fromPos.x, e.path.getPointAtLength(L).y - fromPos.y) : !forward;
-  S.pulses.push({ e, dot, halo, t0: performance.now(), rev, extra: 0 });
+  S.pulses.push({ e, dot, halo, t0: performance.now(), rev, extra: 0, ang: 0 });
   if (!S.raf) S.raf = requestAnimationFrame(stepPulses);
 }
 function stepPulses(now) {
@@ -690,8 +695,11 @@ function stepPulses(now) {
   S.pulses = S.pulses.filter(p => {
     const k = Math.min((now - p.t0) / 1300, 1), ease = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
     if (!p.e.path.isConnected || k >= 1) { p.dot.remove(); p.halo.remove(); return false; }
-    const L = p.e.path.getTotalLength(), pt = p.e.path.getPointAtLength((p.rev ? 1 - ease : ease) * L);
-    p.dot.setAttribute('cx', pt.x); p.dot.setAttribute('cy', pt.y); p.halo.setAttribute('cx', pt.x); p.halo.setAttribute('cy', pt.y);
+    const L = p.e.path.getTotalLength(), at = (p.rev ? 1 - ease : ease) * L, pt = p.e.path.getPointAtLength(at);
+    const ahead = p.e.path.getPointAtLength(Math.max(0, Math.min(L, at + (p.rev ? -2 : 2))));
+    if (Math.hypot(ahead.x - pt.x, ahead.y - pt.y) > .01) p.ang = Math.atan2(ahead.y - pt.y, ahead.x - pt.x) * 180 / Math.PI;
+    p.dot.setAttribute('transform', `translate(${pt.x.toFixed(1)},${pt.y.toFixed(1)}) rotate(${p.ang.toFixed(1)})`);
+    p.halo.setAttribute('cx', pt.x); p.halo.setAttribute('cy', pt.y);
     return true;
   });
   if (S.pulses.length) S.raf = requestAnimationFrame(stepPulses);
@@ -871,6 +879,7 @@ $('panel').addEventListener('click', e => {
 });
 
 // ---- timeline ----
+const nameIn = (s, id) => id === 'lead' ? 'lead' : ((s.agents || []).find(a => a.id === id)?.label || id.slice(0, 7));
 function renderTimeline(s) {
   const svg = $('tl');
   if (!s || !S.model) { svg.textContent = ''; return; }
@@ -912,11 +921,12 @@ function renderTimeline(s) {
     const y1 = laneY.get(m.from), y2 = laneY.get(m.to);
     if (y1 == null || y2 == null || y1 === y2) continue;
     const xx = x(m.t);
-    h += `<path class="arc${m.from === S.sel || m.to === S.sel ? ' sel' : ''}" d="M${xx},${y1} C${xx + 9},${y1} ${xx + 9},${y2} ${xx},${y2}"><title>${hhmm(m.t, 1)} ${esc(m.summary)}</title></path>`;
+    // a bow from the sender's lane that lands on the receiver's lane with an arrowhead
+    h += `<path class="arc${m.from === S.sel || m.to === S.sel ? ' sel' : ''}" marker-end="url(#tlArrow)" d="M${xx},${y1} Q${xx + 14},${(y1 + y2) / 2} ${xx},${y2 - Math.sign(y2 - y1) * 1.5}"><title>${hhmm(m.t, 1)} ${esc(nameIn(s, m.from))} → ${esc(nameIn(s, m.to))}: ${esc(m.summary)}</title></path>`;
   }
   h += `<line class="now" x1="${W - 14}" x2="${W - 14}" y1="2" y2="${H - 16}"/>`;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('height', H);
-  svg.innerHTML = h;
+  svg.innerHTML = '<defs><marker id="tlArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto"><path class="tl-ah" d="M0,0L10,5L0,10z"/></marker></defs>' + h;
   const nEv = lanes.concat(fin).reduce((k, id) => k + ((s.events || {})[id] || []).filter(e => e[0] >= t0).length, 0);
   setT($('tlTitle'), `${s.project} · last ${dur(span)} · ${nEv} tool calls · ${(s.messages || []).filter(m => m.t >= t0).length} messages`);
 }
@@ -990,6 +1000,7 @@ document.querySelectorAll('input[data-set]').forEach(i => i.addEventListener('ch
 }));
 $('resetBtn').addEventListener('click', () => {
   dismissed = {}; store.set('ccprobe.dismissed', dismissed);
+  setSideW(SIDE_DEFAULT, true);
   S.expandFinished = false; S.userPanned = false;
   if (S.model) { clearGraph(); render(); }
 });
@@ -1005,6 +1016,43 @@ document.addEventListener('keydown', e => {
     if (ss.length) selectSession(ss[(i + (e.key === ']' ? 1 : -1) + ss.length) % ss.length].id);
   }
 });
+
+// ---- splitter: drag to resize the side panel (its width is remembered in settings) ----
+const SIDE_MIN = 280, SIDE_DEFAULT = 380;
+function setSideW(w, save) {
+  const max = Math.max(SIDE_MIN, Math.round(innerWidth * 0.6));
+  w = Math.round(Math.min(max, Math.max(SIDE_MIN, w)));
+  document.documentElement.style.setProperty('--side-w', w + 'px');   // CSSOM: allowed by the CSP
+  $('splitter').setAttribute('aria-valuenow', w);
+  $('splitter').setAttribute('aria-valuemax', max);
+  if (save) { settings.sideW = w; saveSettings(); }
+  return w;
+}
+const sideW = () => parseInt(getComputedStyle(document.documentElement).getPropertyValue('--side-w'), 10) || SIDE_DEFAULT;
+$('splitter').addEventListener('pointerdown', ev => {
+  if (ev.button !== 0) return;
+  ev.preventDefault();
+  const sp = $('splitter'), grab = innerWidth - ev.clientX - sideW();   // keep the pointer where it took hold
+  sp.setPointerCapture(ev.pointerId);
+  sp.classList.add('drag'); document.body.classList.add('resizing'); hideTip();
+  const move = e => setSideW(innerWidth - e.clientX - grab, false);
+  const up = e => {
+    sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up); sp.removeEventListener('pointercancel', up);
+    sp.classList.remove('drag'); document.body.classList.remove('resizing');
+    setSideW(innerWidth - e.clientX - grab, true);
+    if (S.model) renderTimeline(cur());
+  };
+  sp.addEventListener('pointermove', move); sp.addEventListener('pointerup', up); sp.addEventListener('pointercancel', up);
+});
+$('splitter').addEventListener('dblclick', () => setSideW(SIDE_DEFAULT, true));
+$('splitter').addEventListener('keydown', e => {
+  const step = e.shiftKey ? 80 : 20;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); setSideW(sideW() + step, true); }        // the panel grows to the left
+  else if (e.key === 'ArrowRight') { e.preventDefault(); setSideW(sideW() - step, true); }
+  else if (e.key === 'Home') { e.preventDefault(); setSideW(SIDE_DEFAULT, true); }
+});
+addEventListener('resize', () => setSideW(settings.sideW || SIDE_DEFAULT, false));   // re-clamp to the new window
+setSideW(settings.sideW || SIDE_DEFAULT, false);
 
 applyTheme();
 syncSettingsUi();
