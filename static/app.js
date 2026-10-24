@@ -982,18 +982,17 @@ function routeEdge(key, A, B, ida, idb, bend) {
     const lo = { x: L.x, y: L.y - L.top - 4 };
     const between = (S.bands || []).filter(b => b > bu && b < bl);
     if (!between.length) {
-      // the line does its sideways travel early and turns while well clear of the agent, so the end runs straight
-      // down into the arrowhead (the arrowhead itself stays where it is)
-      const tail = Math.max(28, Math.min(64, (lo.y - up.y) * .35));
-      const st = { x: lo.x, y: lo.y - tail }, my = up.y + (st.y - up.y) * .45 + lane;
-      out = curve(up, { x: up.x, y: my }, { x: st.x, y: my }, st);
+      // an S over the whole gap: the handles reach past the middle so both turns are wide, and only the arrowhead's
+      // length at the end runs straight, so the arrowhead sits on a straight piece (it stays where it is)
+      const st = { x: lo.x, y: lo.y - 12 }, h = (st.y - up.y) * .62;
+      out = curve(up, { x: up.x, y: up.y + h + lane }, { x: st.x, y: st.y - h + lane }, st);
       out.d += ` L${P(lo)}`;
     } else {
       const c1 = S.chan.get(bu) + lane, c2 = S.chan.get(between[between.length - 1]) + lane;
       // the column gap next to the lower end, on the side the line comes from
       const k = (lo.x - LEAD_X) / COLW, side = up.x < lo.x ? -.5 : .5;
       const gx = LEAD_X + (Math.round(k) + side) * COLW + lane;
-      out = rounded([up, { x: up.x, y: c1 }, { x: gx, y: c1 }, { x: gx, y: c2 }, { x: lo.x, y: c2 }, lo], 16);
+      out = rounded([up, { x: up.x, y: c1 }, { x: gx, y: c1 }, { x: gx, y: c2 }, { x: lo.x, y: c2 }, lo], 28);
     }
   }
   if (flip) out.d = reversePath(out.d);
