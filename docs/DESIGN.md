@@ -472,3 +472,74 @@ Times are epoch seconds. The page does all formatting.
 Testing as built: 21 unit tests (`python3 -m unittest discover -s tests`). `python3 tests/smoke_live.py` checks the live
 sessions, and that the WTS rows match `queue.py wts`. Headless Chrome screenshots in dark and light use `#poll`, because
 headless virtual time never settles with an open EventSource.
+
+
+## 16. Layout, revision 3 (2026-10-23)
+
+Measured on live data before the change, the "spawned by" lines from the lead caused every crossing (10 of 10 with the
+finished agents expanded), and adding or removing one agent re-centred its whole row. The rework follows the standard
+methods, kept small:
+
+- **Fewer lines (clutter):** the lead's spawn lines are drawn only for a new agent's first 2 minutes or for the
+  selected agent. Messages fade after the first minute and go after 10. Selection dims every other line
+  (focus + context).
+- **Layered drawing (Sugiyama-style):** the lead, then a grid of rows at fixed heights (five columns each), then
+  finished, then the shelf. Order within a row is chosen to cut crossings.
+- **Incremental, mental-map preserving (DynaDAG; yFiles incremental hints; ELK semi-interactive):** each agent keeps its
+  slot (remembered per session, by line of succession: the HP worker, or the agent name). A newcomer takes the free
+  slot with the least cost: distance to its neighbours, plus 5 per row away, plus 2 per crossing it adds. A freed
+  slot stays reserved for 5 minutes. Gaps close, and swaps that remove 2+ crossings happen, only after 2 quiet
+  minutes, or on Tidy.
+- **Routing:** lines go from under the upper agent's labels to the top of the lower one (S-curves), dip into the
+  channel for agents in the same row, and run down column gaps past rows in between. Parallel runs get lanes.
+
+Verified with scripted checks (scratchpad `layout_test.py`, `stress_test.py`, `cross_test.py`):
+- **Stability:** no existing agent moves for a new agent, a hidden agent, a blocked agent, a new helper or an HP
+  handover (the new worker takes the old slot), and places survive a reload.
+- **Busy synthetic scene (18 agents):** crossings went 32 → 2, and lines through an agent 8 → 0.
+
+## 17. Token statistics (2026-10-23)
+
+- **Source.** Each `assistant` entry's `message.usage`: input, cache creation, cache read and output tokens (thinking is
+  in output). One reply is written as one entry per content block, all with the same message id and identical usage,
+  so the last entry per id wins (a recent-id map undoes the earlier one). Usage quoted inside a `user` entry (an Agent
+  tool's result) is not counted: a subagent counts once, in its own file. Checked on live transcripts: 376 of 469
+  replies were split, none with differing usage.
+- **Reading** (`ccprobe/tokens.py`). A `Ledger` per transcript reads forward from byte 0, once, then only appended
+  bytes. Only lines holding `"usage":{` and `"type":"assistant"` are decoded; a reply line over 8 MB has its usage object
+  cut out of the raw bytes. 5.3 GB (one session, 116 files) count in about 3 s. A ledger keeps totals, per-day totals and
+  reply counts, compactions, and per-minute buckets for the last 6 h 10 m. A replaced or truncated file is counted again.
+- **Books.** One background thread (`Books.run`, every 3 s) reads the files the collector asked for (`want`: each
+  session's lead transcript and every subagent file, in view or not) first, then every transcript under
+  `~/.claude/projects` written today, for the all-sessions total. Ledgers no one asked for in 10 minutes and not written
+  today are dropped. `--once` counts synchronously. Nothing is written anywhere.
+- **Model.** `session.tokens` = `{v: [in, cw, cr, out], today, n, cx, ready, agents: [{id, label, role, task, shown,
+  finished, v, n, cx, model}], tasks: {n: {v, agents}}, series: {t0, roles, rows: [[minute, role, fresh, read, out]]}}`;
+  `lead.tokens` and each agent's `tokens` = its own `{v, n, cx, model}`; top level `tokens_today` = `{day, v, n,
+  ready}`. An agent's task is its name (`hp129`, `mp112`, `adv129` when 129 is a row) or description (`Task 74: …`),
+  else its parent agent's.
+- **UI** (advice: a UI advisor's spec, kept here in short). Output is the headline: cache reads are context × replies
+  and would flatten everything. Three tiles pick one metric for the whole tab, each on its own linear scale (no log
+  scale). Kinds get no hue; hue stays role (lead cyan, HP rose, MP amber, LP green, helpers violet). `tfmt` never
+  exceeds 5 characters; exact values in tooltips with thin-space grouping. Agent list: top 12 then "show all"; finished
+  agents stay (✓, muted, faded bar). Task list: top 8. Lists keep their order while the pointer is on them. The chart
+  bins by 1 minute up to 2 h, 3 minutes at 6 h; the minute still going is drawn faded. The tab shows when the session
+  has a counted reply; the chip sits last among the top chips, next to the bell, and opens a per-session popover.
+
+## 18. A still view, smooth flow (2026-10-23)
+
+- **View hysteresis.** `fit(core, cards)` fits the graph's own boxes (agents and their labels, the finished chip, the
+  shelf); speech and tool cards are checked against it. The current view is kept while it still *serves*: every box
+  is at least 8 px inside what the screen shows, the empty margins left/right (and top/bottom) differ by no more than
+  40% of the view, and the zoom a fresh fit would pick is within 6%. Otherwise the view goes to the graph's own
+  centred fit, or to the fit around the cards too when they would stick out of that one. A card going away never
+  shifts the view back by itself. `placeCards` tries the candidate spots inside the current view first.
+- **Line flow.** The CSS loop (28 px per 1.2 s) jumped 4 px each loop on the violet lines (dash period 12) and stopped
+  dead 60 s after a message. Now `flowStep` (rAF, only while a line flows) moves `stroke-dashoffset` itself: 23 px/s
+  for a busy task line and for a message line in its first minute, easing linearly to 0 at 5 minutes; the speed eases
+  toward its target with a 0.7 s time constant, and the offset wraps at 5040 (a multiple of every dash period). Line
+  opacity changes (hot → faint, dimming) fade over 0.8 s. Full motion only.
+
+- **Selection.** The selected (or keyboard-focused) hex fills with a tint of its own border colour (18% dark theme, 10%
+  light) and its border thickens to 3; the outer selection ring is gone, so the busy arc (r + 10) never meets it.
+  Dashed still means blocked, glow active, faded finished.

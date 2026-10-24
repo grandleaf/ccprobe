@@ -6,7 +6,7 @@
   --text: #c8d3f0; --text-strong: #eef3ff; --muted: #7d8ab0; --dim: #55628a;
   --cyan: #5cc8ff; --amber: #f4b740; --violet: #b48cff; --green: #5fe0a0; --rose: #ff7a90; --slate: #8592b3; --red: #ff5d5d;
   --lift-shadow: 0 12px 28px rgb(0 0 0 / .55), 0 0 0 1px var(--cyan);
-  --node-fill: rgb(10 15 34 / .94); --halo-op: .09; --pulse: #ffffff; --star: #9fb3ff; --star-op: .45;
+  --node-fill: rgb(10 15 34 / .94); --sel-tint: 18%; --halo-op: .09; --pulse: #ffffff; --star: #9fb3ff; --star-op: .45;
   --glow: drop-shadow(0 0 6px var(--c)); --card-shadow: 0 6px 24px rgb(0 0 0 / .35);
   --crit-bg: rgb(255 93 93 / .08); --warn-bg: rgb(244 183 64 / .07); --info-bg: rgb(92 200 255 / .06);
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -18,7 +18,7 @@
   --text: #1b2440; --text-strong: #0b1020; --muted: #55607f; --dim: #8a93ab;
   --cyan: #0b74b0; --amber: #9a5f00; --violet: #6a3fc8; --green: #0f7a46; --rose: #c8325a; --slate: #5f6b88; --red: #c02626;
   --lift-shadow: 0 8px 24px rgb(20 30 60 / .18), 0 0 0 1px var(--cyan);
-  --node-fill: #ffffff; --halo-op: .06; --pulse: var(--violet); --star: #b9c3da; --star-op: .7;
+  --node-fill: #ffffff; --sel-tint: 10%; --halo-op: .06; --pulse: var(--violet); --star: #b9c3da; --star-op: .7;
   --glow: none; --card-shadow: 0 1px 2px rgb(20 30 60 / .08), 0 4px 12px rgb(20 30 60 / .06);
   --crit-bg: #fdecee; --warn-bg: #fdf4e2; --info-bg: #eaf4fb;
 }
@@ -129,6 +129,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .stagebar { position: absolute; right: 14px; top: 12px; display: flex; gap: 6px; }
 .fitbtn { display: flex; gap: 6px; align-items: center; background: var(--card); border: 1px solid var(--line2); border-radius: 7px; padding: 4px 9px; color: var(--muted); }
 .fitbtn svg { width: 13px; height: 13px; }
+.fitbtn .n { display: inline-block; min-width: 2ch; text-align: center; font-variant-numeric: tabular-nums; }   /* a count going 9 → 10 does not shift the buttons */
 .fitbtn:hover { color: var(--text-strong); border-color: var(--muted); }
 .empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--muted); pointer-events: none; }
 .empty[hidden] { display: none; }
@@ -138,7 +139,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .legend summary { cursor: pointer; }
 .legend div { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
 .lg { display: inline-block; width: 26px; height: 0; border-top: 2px dashed var(--amber); }
-.lg-msg { border-top-color: var(--violet); } .lg-spawn { border-top: 2px dotted var(--slate); } .lg-lock { border-top: 2.5px solid var(--red); }
+.lg-msg { border-top-color: var(--violet); } .lg-spawn { border-top: 2px dashed var(--slate); } .lg-lock { border-top: 2.5px solid var(--red); }
 .lg-blocked { width: 14px; height: 14px; border: 2px dashed var(--muted); border-radius: 3px; }
 .lg-pulse { width: 11px; height: 10px; border: 0; background: var(--violet); clip-path: polygon(0 0, 100% 50%, 0 100%, 28% 50%); }
 
@@ -149,8 +150,10 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .node .hex { fill: var(--node-fill); stroke: var(--c); stroke-width: 2.4; }
 .node.active .hex { filter: var(--glow); }
 .node:hover .hex { stroke-width: 3; }
-.node .selring { fill: none; stroke: var(--c); stroke-width: 1.5; opacity: 0; }
-.node.sel .selring, .node:focus-visible .selring { opacity: .9; filter: drop-shadow(0 0 4px var(--c)); }   /* solid: dotted means blocked */
+/* selected (or focused from the keyboard): the hex fills with a tint of its own border colour. Nothing is drawn
+   outside the hex, so the busy arc around it never runs into a selection mark */
+.node.sel .hex, .node:focus-visible .hex { fill: color-mix(in srgb, var(--c) var(--sel-tint), var(--node-fill)); stroke-width: 3; }
+:root[data-motion="full"] .node .hex { transition: fill .25s, stroke-width .25s; }
 .node .mark { color: var(--c); }
 .node .arc { fill: none; stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; transform-box: fill-box; transform-origin: center; animation: spin 2.6s linear infinite; }
 .node .flash { fill: none; stroke: var(--c); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center; }
@@ -190,9 +193,16 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .edge { fill: none; stroke: var(--slate); stroke-width: 1.2; stroke-dasharray: 2 7; opacity: .5; }
 .edge.task { stroke: var(--amber); stroke-dasharray: 7 7; stroke-width: 1.6; opacity: .85; }
 .edge.msg { stroke: var(--violet); stroke-dasharray: 5 7; stroke-width: 1.3; opacity: .55; }
-.edge.hot { opacity: .9; animation: flow 1.2s linear infinite; }
-.edge.lock { stroke: var(--red); stroke-dasharray: none; stroke-width: 1.6; opacity: .8; }   /* a short link to the card beside it */
+.edge.spawn { stroke-width: 1.6; stroke-dasharray: 3 5; opacity: .8; }   /* spawned by: plain slate, but it must read on the dark ground */
+.edge.hot { opacity: .9; }                         /* its dashes flow: flowStep in app.js eases them in and out */
+:root[data-motion="full"] .edge { transition: opacity .8s; }   /* a line going faint fades, it does not snap */
+.edge.lock { stroke: var(--red); stroke-dasharray: none; stroke-width: 1.6; opacity: .8; }   /* routed through the gaps to the shelf */
 .edge.flashy { stroke-width: 3; opacity: 1; }
+.edge.queue { stroke: var(--rose); stroke-dasharray: 2 5; opacity: .45; }
+.edge.faint { opacity: .3; }                       /* a message line that is no longer hot */
+.edge.dim, .edge.hot.dim { opacity: .12; }         /* an agent is selected: lines that are not its own step back */
+.node .lockm circle { fill: var(--card); stroke: var(--red); stroke-width: 1.4; }
+.node .lockm use { color: var(--red); }
 .elbl { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
 .pulse { fill: var(--pulse); stroke: var(--violet); stroke-width: 1.3; stroke-linejoin: round; }
 .ah-task { fill: var(--amber); }
@@ -205,16 +215,14 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .card.tool text { fill: var(--c); }
 .tether { stroke: var(--c); stroke-width: 1; opacity: .55; }
 
-@keyframes flow { to { stroke-dashoffset: -28; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes blink { 50% { opacity: .35; } }
 @keyframes flash { from { opacity: .9; transform: scale(1); } to { opacity: 0; transform: scale(1.45); } }
 
-:root[data-motion="reduced"] .edge.hot, :root[data-motion="off"] .edge.hot { animation: none; }
 :root[data-motion="reduced"] .node .arc, :root[data-motion="off"] .node .arc { animation: none; }
 :root[data-motion="off"] *, :root[data-motion="off"] *::before { animation: none !important; transition: none !important; }
 /* a hidden tab stops the looping animations only (a one-shot pop frozen on its first frame would leave a card invisible) */
-body.paused .edge.hot, body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
+body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 
 /* side panel */
 .tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
@@ -254,8 +262,12 @@ body.paused .edge.hot, body.paused .node .arc, body.paused .conn .dot, body.paus
 .winrow svg { width: 13px; height: 13px; color: var(--c); flex: none; }
 .winrow .w { overflow-wrap: anywhere; }
 .jump { position: sticky; top: -14px; background: var(--panel); padding: 8px 0; display: flex; gap: 12px; z-index: 1; }
-.jump a { color: var(--cyan); text-decoration: none; cursor: pointer; }
-.gh { display: flex; align-items: center; gap: 8px; margin: 14px 0 4px; color: var(--text-strong); }
+.jump a { color: var(--c, var(--cyan)); text-decoration: none; cursor: pointer; font-weight: 600; padding: 1px 8px; border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--c, var(--cyan)) 50%, transparent); }
+.jump a:hover { background: color-mix(in srgb, var(--c, var(--cyan)) 16%, transparent); }
+.gh { display: flex; align-items: center; gap: 8px; margin: 18px 0 4px; padding-bottom: 6px; color: var(--text-strong);
+  border-bottom: 2px solid color-mix(in srgb, var(--c) 70%, transparent); }
+.gh .gname { padding: 1px 9px; border-radius: 6px; background: var(--c); color: var(--bg); font-weight: 800; font-size: 14px; letter-spacing: .04em; }   /* HP / MP / LP: solid, in the group's colour */
 .gh .gm { color: var(--muted); font-size: 11.5px; display: inline-flex; align-items: center; gap: 5px; }
 .gh svg { width: 11px; height: 11px; }
 .wrow { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 6px; padding: 5px 4px; border-bottom: 1px solid var(--line); cursor: default; }
@@ -263,8 +275,15 @@ body.paused .edge.hot, body.paused .node .arc, body.paused .conn .dot, body.paus
 .wrow.cur { background: color-mix(in srgb, var(--amber) 8%, transparent); }
 .wrow .n { color: var(--muted); }
 .wrow .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wrow.open .t, .wrow.cur .t { white-space: normal; }
+.wrow.open .t, .wrow.cur .t, .wrow.live .t { white-space: normal; }
 .wrow .st2 { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; color: var(--c); }
+/* live rows (in progress, paused, asking) stand out: a filled pill and a bar down the left edge */
+.wrow .st2.pill { align-self: start; padding: 1px 8px 1px 6px; border-radius: 999px; font-weight: 600;
+  background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
+.wrow.live { box-shadow: inset 3px 0 0 var(--c); }
+.wrow.live .n { color: var(--c); font-weight: 600; }
+.gh .mode { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+  color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
 .wrow .obs { grid-column: 2 / 4; color: var(--muted); font-size: 11px; display: flex; gap: 6px; align-items: center; }
 .wrow .obs.mismatch { color: var(--amber); }
 .wrow .ro { grid-column: 2 / 4; color: var(--dim); font-size: 11px; }
@@ -312,3 +331,54 @@ body.paused .edge.hot, body.paused .node .arc, body.paused .conn .dot, body.paus
   .splitter { display: none; }
   .chips .chip:not(.win) { display: none; }
 }
+
+/* ---- tokens: three tiles (one picks the metric), the split by role, a per-minute chart, then agents and tasks ---- */
+.tktiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tktile { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 9px; text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; color: var(--text); }
+.tktile span { color: var(--muted); font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase; }
+.tktile b { color: var(--text-strong); font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tktile:hover { border-color: var(--muted); }
+.tktile.on { border-color: var(--cyan); box-shadow: inset 0 0 0 1px var(--cyan); }
+.tkroles { display: block; width: 100%; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 2px; }
+.tkroles rect, .tkchart rect:not(.hit) { fill: var(--c); }
+.tklegend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.tklegend span { color: var(--c); display: inline-flex; align-items: center; gap: 5px; }
+.tklegend i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
+.tkhead { display: flex; justify-content: space-between; gap: 8px; }
+.tkhead span:last-child { text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.tkchart { display: block; width: 100%; height: 72px; }
+.tkchart .peak { stroke: var(--line2); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
+.tkchart .now { opacity: .45; }                    /* the minute still going: not a drop */
+.tkchart .hit { fill: transparent; }
+.tkchart .hit:hover { fill: color-mix(in srgb, var(--text) 8%, transparent); }
+.tkaxis { display: flex; justify-content: space-between; color: var(--dim); font-size: 10.5px; margin-top: 2px; }
+.tkrow { display: grid; grid-template-columns: 128px minmax(0, 1fr) 5ch; gap: 8px; align-items: center; min-height: 22px;
+  border-bottom: 1px dashed var(--line); }
+.tkrow .nm { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--c, var(--text)); text-align: left; padding: 0; }
+.tkrow .nm span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tkrow .nm svg { width: 11px; height: 11px; flex: none; }
+.tkrow button.nm:hover span { text-decoration: underline; }
+.tkrow.task { grid-template-columns: minmax(0, 1fr) 30% 5ch; }
+.tkrow.task .nm { color: var(--text); }
+.tkrow.task .nm b { color: var(--c); flex: none; }
+.tkrow .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-strong); }
+.tkrow.fin .nm { color: var(--muted); }
+.tkrow.fin .tkbar { opacity: .6; }
+.tkrow.sel { background: color-mix(in srgb, var(--cyan) 8%, transparent); }
+.tkbar { display: block; width: 100%; height: 6px; }
+.tkbar .bg { fill: var(--line); } .tkbar .fg { fill: var(--c); }
+:root[data-theme="light"] .tkrow.fin .tkbar { opacity: .7; }
+.tkline { display: block; margin: -6px 0 12px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: left; }
+.tkline b { color: var(--text-strong); font-weight: 600; }
+.tkline:hover { color: var(--text); }
+.chip.tok { color: var(--text); cursor: pointer; font-variant-numeric: tabular-nums; }
+.chip.tok svg { color: var(--cyan); }
+.chip.tok:hover { border-color: var(--muted); }
+#tokPop { right: 60px; width: 320px; }
+.tkpop { display: grid; grid-template-columns: minmax(0, 1fr) repeat(3, 6ch); gap: 4px 10px; align-items: baseline; font-variant-numeric: tabular-nums; }
+.tkpop > :nth-child(4n+2), .tkpop > :nth-child(4n+3), .tkpop > :nth-child(4n+4) { text-align: right; }
+.tkpop > :nth-child(-n+4) { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; }
+.tkpop button { text-align: left; color: var(--cyan); padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tkpop button:hover { text-decoration: underline; }
+.tkpop b { color: var(--text-strong); border-top: 1px solid var(--line); padding-top: 4px; }

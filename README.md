@@ -11,24 +11,29 @@ python3 ccprobe.py --help        # --port, --window 6h, --ctx-max, --interval, -
 ```
 
 What you see:
-- **Graph.** The lead sits on top, the HP worker and running agents below it, helpers next to the agent they serve,
-  and parked agents in the right-hand column. The HP queue and the shared window are their own cards. While the window
-  is held, its card sits right next to the holder (below, beside or above it, wherever nothing else is), joined by a
-  short red line; while it is free, it sits in the bottom row. Dashed lines flow while work is in flight, and amber task lines end in an arrow at the agent
-  doing the work. A chevron travels along an edge for every message, hand-back or spawn, pointing from the sender to
-  the receiver. Timeline arcs end in an arrowhead on the receiver's lane. The HP worker is the agent named for the
-  running HP task (`hp128`, shown as "HP 128"). With a fresh agent per task, earlier HP agents and an older agent whose
-  name a newer one now holds ("lp74 (earlier)") fold into the finished chip once their turn ends.
-- **Motion:** when the layout changes, agents glide to their new places instead of jumping. New agents grow out of
-  their parent, and finished ones fly into the "✓ finished" chip (and back out when you open it). Hidden ones fade
-  out, and the edges, cards and view follow along. A second change mid-move bends the motion smoothly. A session
-  switch cuts straight to the new graph. ⚙ Motion: Reduced only fades, Off snaps.
-- **Blocked agents** (paused, parked, or waiting for the window) get a dashed hexagon outline, at full strength. Finished
-  ones have a dashed outline too, but are faded. The selected agent has a solid, softly glowing ring.
-- **Hiding agents.** Hover or select an agent that is not at work and click the × at its top-left (or press `H`), or use
+- **Graph.** The lead sits on top. Below it is a grid of rows at fixed heights, five places per row; every agent keeps
+  its place. A new agent goes to the free place nearest the agents it works with (a helper under the agent it serves),
+  chosen so it adds the fewest crossing lines. A blocked agent stays where it is with a dashed outline. A fresh HP
+  worker takes the previous worker's place, and a reused name takes its predecessor's. When an agent leaves, its place
+  stays free for 5 minutes. After that, once nothing has changed for 2 minutes, the row closes up; neighbours that
+  would remove 2+ crossings are swapped at most every 5 minutes. **Tidy** (top right, shown when there is something to
+  tidy) does it all at once. Places survive a reload. The view itself stays put while everything is on screen: a speech
+  or tool card that appears (it takes a free spot inside the view when there is one) moves the view only if it would
+  stick out, or if the empty space would pile up on one side (the margins differ by more than 40% of the view).
+- **Lines** carry information only: tasks (amber, arrow at the agent doing the work), recent messages (violet, fading
+  after the first minute, gone after 10; their dashes flow at full speed for a minute after a message, then slow to a
+  stop by 5 minutes), and spawns by another agent. A new agent's "spawned by" line shows for 2
+  minutes. Selecting an agent shows all of its lines and dims the rest; ⚙ "Show all relationships" draws every line all the
+  time (the placement does not change). Lines run in the channels between rows and down
+  the gaps between columns, never across an agent. A chevron travels along a line for every message, pointing from
+  sender to receiver. Timeline arcs end in an arrowhead on the receiver's lane.
+- **The shelf** at the bottom holds the HP queue and the window cards, always in the same place. The agent holding the
+  window has a red lock mark, and a red line runs from it to the window card. An older agent whose name a newer one now
+  holds reads "lp74 (earlier)" and folds into the finished chip once its turn ends; so do earlier HP agents.
+- **Hiding agents.** Hover or select an agent that is not at work (and not paused) and click the × at its top-left (or press `H`), or use
   "Hide from the diagram" in its panel. "Clear N done" (top right) hides the finished and dead agents drawn on the
   graph (not the ones already folded into the finished chip); idle and parked agents are not done, so it leaves them.
-  "N hidden · show" brings them all back. A hidden agent comes back by itself as soon as
+  "N hidden · show" (always in the top-right corner) brings them all back. A hidden agent comes back by itself as soon as
   it writes anything new, and opening it from an alert or a message link shows it again. Hiding happens only in this
   browser and only on the page; it never stops an agent.
 - **Unseen sessions:** a tmux session that no terminal shows (its window was closed) is greyed out in the sessions
@@ -42,14 +47,23 @@ What you see:
 - **States** come from the transcripts (DESIGN.md §5.5): running a tool (for how long), thinking, quiet, stuck?, polling,
   waiting for the window, holds the window, turn ended (waiting / done), idle or waiting for you (the lead: waiting for you only
   when it asked you a question or left a plan for you to approve), dead.
-- **WTS tab.** This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
+- **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
   its agent is actually doing, and amber marks a mismatch.
-- **Alerts tab.** Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
+- **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. Desktop
   notifications are opt-in (⚙).
+- **Tokens tab** (key `4`). Every API reply of the session counted once, over its whole life: the lead and every agent it
+  ever had, not only those on the graph. Three tiles: **Output** (what the models wrote, thinking included), **Fresh in**
+  (input + cache writes) and **Cache read** (the context read again on every reply, usually 95%+ of all tokens). Click
+  one to pick the metric the rest of the tab shows: the split by role, a per-minute chart over the timeline's span, each
+  agent (click one to select it on the graph) and each WTS task (its agents plus the helpers they spawned). Exact
+  values are in the tooltips. The selected agent's own figures sit under its Context bar; click them to open the tab.
+  The **chip at the top** shows today's output across all sessions since 00:00 (including transcripts of sessions that
+  are no longer running); click it for each session's share. Counting reads each transcript once, on its own thread
+  (several GB take a few seconds), then only what it gains.
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
   compact nodes, notifications.
-- **Keys:** `1` `2` `3` switch tabs · `[` `]` switch sessions · `F` fits the graph · `H` hides the selected agent · `Esc` deselects · wheel zooms and
+- **Keys:** `1` `2` `3` `4` switch tabs · `[` `]` switch sessions · `F` fits the graph · `H` hides the selected agent · `Esc` deselects · wheel zooms and
   dragging pans.
 - **Panel widths:** drag the splitter on either side of the graph (or focus one and use ← →) to resize the sessions list
   or the side panel, and double-click a splitter to reset it. Both widths are remembered in this browser, and the graph

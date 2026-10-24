@@ -8,6 +8,13 @@ const hhmm = (t, sec) => t ? new Date(t * 1000).toLocaleTimeString('en-GB', { ho
 const dur = s => { s = Math.max(0, Math.round(s)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 172800 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : `${Math.floor(s / 86400)}d`; };
 const ago = (t, now) => !t ? '—' : (now - t < 45 ? 'just now' : dur(now - t) + ' ago');
 const kfmt = n => n >= 1e6 ? parseFloat((n / 1e6).toFixed(2)) + 'M' : Math.round(n / 1e3) + 'k';
+// token counts: never more than 5 characters (940 · 4.2k · 88k · 6.8M · 244M · 3.4B), exact values go in tooltips
+const tfmt = n => {
+  n = Math.round(n || 0);
+  if (n < 1000) return String(n);
+  for (const [d, u] of [[1e3, 'k'], [1e6, 'M'], [1e9, 'B']]) { const x = n / d; if (x < 999.5 || u === 'B') return (x < 99.95 ? x.toFixed(1) : Math.round(x)) + u; }
+};
+const exact = n => Math.round(n || 0).toLocaleString('en-US').replace(/,/g, '\u2009');
 const modelName = m => (m || '').replace(/^claude-/, '').replace(/\[.*\]$/, '').replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/^\w/, c => c.toUpperCase());
 const clip = (s, n) => { s = String(s ?? ''); if (s.length <= n) return s; let c = s.slice(0, n - 1); const sp = c.lastIndexOf(' '); if (sp > n * .6) c = c.slice(0, sp); return c.trimEnd() + '…'; };
 
@@ -33,7 +40,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private window: settings last for this visit */ } },
 };
 const reducedOS = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, compact: false, notify: false, railSort: 'attn', hideUnseen: false },
+const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, compact: false, notify: false, railSort: 'attn', hideUnseen: false, allEdges: false },
   store.get('ccprobe.settings', {}));
 const saveSettings = () => store.set('ccprobe.settings', settings);
 let dismissed = store.get('ccprobe.dismissed', {});    // alert key+title -> until (epoch s; 1e12 = for good)
@@ -45,6 +52,7 @@ const S = {
   seen: new Set(), first: true, prevState: new Map(), userPanned: false, vb: null, fitVb: null, away: 0,
   notified: new Set(), expandFinished: false, nodes: new Map(), edges: new Map(), cards: new Map(), res: new Map(),
   pos: new Map(), order: [], pulses: [], raf: 0, panelHtml: '', authFailed: false,
+  tokKind: store.get('ccprobe.tokKind', 'out'), tokAll: false, tokHold: false, tokOrder: { agents: [], tasks: [] },
 };
 
 function applyTheme() {
@@ -189,13 +197,39 @@ function renderHeader(m, s) {
     }
     h += `<span class="chip c-${w.caffeinate ? 'green' : 'amber'}" data-tip="caffeinate keeps the Mac awake">${icon('i-cup')}${w.caffeinate ? 'awake' : 'may sleep'}</span>`;
   }
+  const tt = m?.tokens_today;
+  if (tt && tt.n) {
+    const v = tt.v;
+    h += `<button class="chip tok" id="tokChip" aria-haspopup="true" data-tip="${esc(`Today since 00:00 · all sessions${tt.ready ? '' : ' (still counting)'}\nOutput ${exact(v[3])} · fresh in ${tfmt(v[0] + v[1])} · cache read ${tfmt(v[2])}\n${exact(tt.n)} replies · click for each session`)}">${icon('i-tokens')}${tfmt(v[3])} out today</button>`;
+  }
   if ($('chips').innerHTML !== h) $('chips').innerHTML = h;
+  if (!$('tokPop').hidden) renderTokPop(m);
   const live = liveAlerts(m);
-  const n = live.length, red = live.some(a => a.sev === 'red');
-  for (const [id, cls] of [['alertCount', 'count'], ['tabCount', 'tcount']]) {
-    const e = $(id); e.hidden = !n; e.textContent = n; e.className = cls + (red ? ' red' : '');
+  const n = live.length;
+  const mine = live.filter(a => a.session === S.sid);   // the tab counts this session's; the bell, every session's
+  for (const [id, cls, list] of [['alertCount', 'count', live], ['tabCount', 'tcount', mine]]) {
+    const e = $(id), k = list.length; e.hidden = !k; e.textContent = k; e.className = cls + (list.some(a => a.sev === 'red') ? ' red' : '');
   }
   document.title = (n ? `(${n}) ` : '') + 'ccprobe';
+}
+// today's tokens per session (the chip's popover); clicking one opens its Tokens tab
+function renderTokPop(m) {
+  const tt = m?.tokens_today;
+  if (!tt) return;
+  const ss = (m.sessions || []).filter(s => s.tokens && s.tokens.today && s.tokens.today.some(Boolean))
+    .sort((a, b) => b.tokens.today[3] - a.tokens.today[3]);
+  const known = [0, 0, 0, 0];
+  let h = `<div class="pop-h">Tokens today <span class="pmeta">since 00:00</span></div><div class="tkpop"><span></span><span>out</span><span>in</span><span>read</span>`;
+  for (const s of ss) {
+    const v = s.tokens.today;
+    v.forEach((x, i) => { known[i] += x; });
+    h += `<button data-tksid="${esc(s.id)}">${esc(s.project)}</button><span>${tfmt(v[3])}</span><span>${tfmt(v[0] + v[1])}</span><span>${tfmt(v[2])}</span>`;
+  }
+  const rest = tt.v.map((x, i) => x - known[i]);
+  if (rest.some(x => x > 0)) h += `<span class="pmeta" data-tip="Transcripts written today by sessions that are no longer running">other</span><span>${tfmt(rest[3])}</span><span>${tfmt(rest[0] + rest[1])}</span><span>${tfmt(rest[2])}</span>`;
+  h += `<b>all</b><b>${tfmt(tt.v[3])}</b><b>${tfmt(tt.v[0] + tt.v[1])}</b><b>${tfmt(tt.v[2])}</b></div>`;
+  h += `<div class="pop-foot">out: what the models wrote (thinking included) · in: input + cache writes · read: cache reads</div>`;
+  if ($('tokPop').innerHTML !== h) $('tokPop').innerHTML = h;
 }
 const shortWho = who => String(who || '').replace(/\s+\w{3} \w{3}\s+\d+ [\d:]+ \w{3,4} \d{4}$/, '').replace(/\s+\w{3} \w{3}\s+\d+ /, ' ');
 
@@ -480,7 +514,8 @@ function selectSession(sid) {
 
 // ---- hiding agents by hand: until they write anything new, then they come back by themselves ----
 const BUSY = ['running', 'thinking', 'polling'];
-const canHide = n => n && n.id !== 'lead' && n.role !== 'lead' && !BUSY.includes(n.state?.key);
+// a paused agent (or one waiting for the window) still has its task in hand, so it has no × either
+const canHide = n => n && n.id !== 'lead' && n.role !== 'lead' && !BUSY.includes(n.state?.key) && !isParked(n);
 // done means finished (its work handed back, or an earlier agent of a reused name) or dead; idle and parked agents are not done
 const isDone = a => a.finished || a.state.key === 'dead';
 function isHidden(a) {
@@ -514,11 +549,13 @@ function buildNodes(s) {
     ctx: lead.ctx, ctx_max: lead.ctx_max, said: lead.said, recent: lead.recent || [], last_ts: lead.last_ts, model: lead.model,
   }];
   const rowOf = rowIndex(s);
+  const win = s.wts && !s.wts.error && s.wts.window || {};
+  nodes[0].holds = !!win.held && win.holder === 'lead';
   for (const a of s.agents || []) {
     if (isHidden(a) || a.finished && !settings.showFinished) continue;
     const row = a.task != null ? rowOf.get(a.task) : null;
     nodes.push(Object.assign({}, a, {
-      sub: clip(a.task_title || a.desc || '', 26), rowKind: row ? row.kind : null,
+      sub: clip(a.task_title || a.desc || '', 26), rowKind: row ? row.kind : null, holds: !!win.held && win.holder === a.id,
       collapsed: a.finished && now - (a.state.since || now) > 240 && !S.expandFinished,
     }));
   }
@@ -536,77 +573,230 @@ const radius = n => {
   return n.role === 'lead' ? (c ? 40 : 52) : n.role === 'worker' ? (c ? 32 : 42) : (n.finished ? 22 : c ? 22 : 30);
 };
 
-// role-band layout with stable ordering (ui.md §3)
+// ---- layout: rows by role (lead · agents · helpers · finished · shelf), every agent in a sticky column ----
+// Known methods, kept simple: a layered (Sugiyama-style) drawing whose order within a row is chosen to cut crossings,
+// made incremental the way DynaDAG and yFiles' incremental mode are: what is on screen keeps its place, newcomers go
+// into the gap that suits them best, and a freed place stays free for a while. Tidying (closing gaps, swapping
+// neighbours to remove crossings) happens only at a quiet moment, or when you press Tidy.
+const LEAD_X = 550, COLW = 240, MAXC = 2, Y_AGENTS = 420, ROW_GAP = 270, GHOST_MS = 300000, QUIET_MS = 120000, REORDER_MS = 300000;
+// rows: the lead 0; then one grid of rows 1, 1.1, 1.2 … (five slots each, columns −2…2) at fixed heights, shared by
+// agents and helpers (a helper's place is under its anchor, one row down); finished 3; the shelf 4. Because every row
+// has a fixed height, a new row never pushes anything.
+const BAND = { lead: 0, agents: 1, finished: 3, shelf: 4 };
+S.mem = new Map();   // session id -> { agents: Map(key -> {sub, col, seen}), sig, since, lastReorder }
+// the place belongs to a line of succession: the HP worker's place passes to the next hp<N>, a name's to its successor
+const lineage = n => n.role === 'worker' ? 'worker' : n.name ? 'name:' + n.name : n.id;
+const slotKey = (sub, col) => sub + ':' + col;
+function memFor(sid) {
+  let m = S.mem.get(sid);
+  if (!m) {
+    m = { agents: new Map(), sig: '', since: performance.now(), lastReorder: 0 };
+    const saved = store.get('ccprobe.layout', {})[sid];   // a reload keeps the places
+    if (saved) for (const [k, sub, col] of saved.agents || []) if (Math.abs(col) <= MAXC) m.agents.set(k, { sub, col, seen: performance.now() });
+    S.mem.set(sid, m);
+  }
+  return m;
+}
+function saveMem(sid, m) {
+  const all = store.get('ccprobe.layout', {});
+  all[sid] = { agents: [...m.agents].map(([k, e]) => [k, e.sub, e.col]), t: Date.now() };
+  for (const k of Object.keys(all)) if (Date.now() - (all[k].t || 0) > 7 * 86400e3) delete all[k];
+  store.set('ccprobe.layout', all);
+}
+// which lines count for the layout (and are drawn without a selection): see edgeShow
+function layoutEdges(s, now, born) {
+  return (s.edges || []).filter(e => edgeShow(e, now, born, null).show).map(e => [e.from, e.to]);
+}
+// lines that say something: tasks, recent messages, one agent spawning another, a newborn's spawn (2 min);
+// the rest only for the selected agent
+function edgeShow(e, now, born, sel, all = false) {   // all: the "Show all relationships" setting
+  const age = now - (e.last || 0), talked = e.last > 0 && age < 600;
+  const mine = !!sel && sel !== 'lead' && (e.from === sel || e.to === sel);
+  const kind = e.kind === 'spawn' && talked ? 'msg' : e.kind;
+  let show = e.kind === 'task' || talked || (e.kind === 'spawn' && e.from !== 'lead') || (e.kind === 'spawn' && now - (born.get(e.to) || 0) < 120);
+  if (!show && (mine || all)) show = true;
+  return { show, kind, faint: kind === 'msg' && !e.hot, dim: !!sel && sel !== 'lead' && !mine };
+}
+// line crossings with rows and columns: two lines between the same pair of rows cross when their ends swap order;
+// two dips under one row cross when they interleave
+function crossings(E, at) {
+  let n = 0;
+  for (let i = 0; i < E.length; i++) {
+    let p = at(E[i][0]), q = at(E[i][1]); if (!p || !q) continue;
+    if (p.row > q.row) [p, q] = [q, p];
+    for (let j = i + 1; j < E.length; j++) {
+      if (E[j][0] === E[i][0] || E[j][0] === E[i][1] || E[j][1] === E[i][0] || E[j][1] === E[i][1]) continue;
+      let r = at(E[j][0]), t = at(E[j][1]); if (!r || !t) continue;
+      if (r.row > t.row) [r, t] = [t, r];
+      if (p.row === q.row && r.row === t.row && p.row === r.row) {
+        const a = Math.min(p.col, q.col), b = Math.max(p.col, q.col), c = Math.min(r.col, t.col), d = Math.max(r.col, t.col);
+        if ((a < c && c < b && b < d) || (c < a && a < d && d < b)) n++;
+      } else if (p.row === r.row && q.row === t.row && p.row !== q.row && (p.col - r.col) * (q.col - t.col) < 0) n++;
+    }
+  }
+  return n;
+}
+// the grid: remembered slots first; then each newcomer takes the free slot that costs least (distance from the slot it
+// wants, 5 per row away from the row it wants, plus 2 per crossing it adds); the slots of agents that left stay
+// reserved for GHOST_MS
+function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `slots` (id -> {sub, col}), which `at` reads
+  const keyOf = new Map();
+  for (const n of members.slice().sort((a, b) => (b.born || 0) - (a.born || 0))) {   // the newest of a line inherits
+    const k = lineage(n);
+    keyOf.set(n.id, [...keyOf.values()].includes(k) ? n.id : k);
+  }
+  const present = new Set(keyOf.values());
+  for (const [k, e] of rm) if (!present.has(k) && now - e.seen > GHOST_MS) rm.delete(k);
+  const used = new Set();
+  for (const n of members) {
+    const e = rm.get(keyOf.get(n.id));
+    if (e && !used.has(slotKey(e.sub, e.col))) { slots.set(n.id, { sub: e.sub, col: e.col }); used.add(slotKey(e.sub, e.col)); }
+  }
+  const ghosts = [...rm].filter(([k]) => !present.has(k)).map(([, e]) => slotKey(e.sub, e.col));
+  let fresh = members.filter(n => !slots.has(n.id));
+  if (!slots.size && !ghosts.length) {
+    // nothing remembered (first sight): the agents in role order, rows of five centred under the lead
+    const rank = { worker: 0, mp: 1, lp: 2, helper: 3 }, per = 2 * MAXC + 1;
+    const first = fresh.filter(n => !isHelper(n)).sort((a, b) => (rank[a.role] ?? 3) - (rank[b.role] ?? 3) || (a.task || 0) - (b.task || 0) || (a.born || 0) - (b.born || 0));
+    first.forEach((n, i) => {
+      const sub = Math.floor(i / per), inRow = Math.min(per, first.length - sub * per);
+      slots.set(n.id, { sub, col: i % per - Math.floor((inRow - 1) / 2) });
+    });
+    fresh = fresh.filter(n => !slots.has(n.id));
+  }
+  for (const n of fresh.sort((a, b) => (isHelper(a) - isHelper(b)) || (a.born || 0) - (b.born || 0))) {   // helpers after their anchors
+    const busy = new Set([...[...slots.values()].map(v => slotKey(v.sub, v.col)), ...ghosts]);
+    const maxSub = Math.max(0, ...[...slots.values()].map(v => v.sub), ...ghosts.map(g => +g.split(':')[0]));
+    const w = want(n, slots);
+    let best = null;
+    for (let sub = 0; sub <= Math.max(maxSub, w.sub) + 1; sub++) for (let col = -MAXC; col <= MAXC; col++) {
+      if (busy.has(slotKey(sub, col))) continue;
+      slots.set(n.id, { sub, col });
+      const cost = Math.abs(col - w.col) + 5 * Math.abs(sub - w.sub) + 2 * crossings(E, at) + .01 * Math.abs(col);
+      if (!best || cost < best.cost) best = { sub, col, cost };
+    }
+    slots.set(n.id, { sub: best.sub, col: best.col });
+  }
+  for (const n of members) { const v = slots.get(n.id); rm.set(keyOf.get(n.id), { sub: v.sub, col: v.col, seen: now }); }
+  return { keyOf, ghosts: ghosts.length };
+}
+// close the gaps within each row, toward the one nearest the centre (nobody changes rows or sides); `fixed` slots
+// (helpers under their anchors) stay where they are and are stepped over
+function compactRow(rm, keys, fixed = []) {
+  const rows = new Map(), held = new Set(fixed.map(e => slotKey(e.sub, e.col)));
+  for (const k of keys) { const e = rm.get(k); if (!rows.has(e.sub)) rows.set(e.sub, []); rows.get(e.sub).push(e); }
+  let moved = 0;
+  for (const [sub, items] of rows) {
+    items.sort((a, b) => a.col - b.col);
+    const pivot = items.reduce((b, it, i) => Math.abs(it.col) < Math.abs(items[b].col) ? i : b, 0);
+    const free = c => !held.has(slotKey(sub, c));
+    let c = items[pivot].col;
+    for (let i = pivot + 1; i < items.length; i++) { c++; while (!free(c)) c++; if (items[i].col !== c) { items[i].col = c; moved++; } }
+    c = items[pivot].col;
+    for (let i = pivot - 1; i >= 0; i--) { c--; while (!free(c)) c--; if (items[i].col !== c) { items[i].col = c; moved++; } }
+  }
+  return moved;
+}
+// swap neighbours within a row while that removes crossings; returns how many it removed
+function untangleRow(rm, keyOf, members, E, at) {
+  let removed = 0;
+  for (let pass = 0; pass < 8; pass++) {
+    const order = members.map(n => rm.get(keyOf.get(n.id))).sort((a, b) => a.sub - b.sub || a.col - b.col);
+    let better = false;
+    for (let i = 0; i + 1 < order.length; i++) {
+      const A = order[i], B = order[i + 1];
+      if (A.sub !== B.sub) continue;
+      const before = crossings(E, at);
+      [A.col, B.col] = [B.col, A.col];
+      const after = crossings(E, at);
+      if (after < before) { removed += before - after; better = true; } else [A.col, B.col] = [B.col, A.col];
+    }
+    if (!better) break;
+  }
+  return removed;
+}
+
 function layout(nodes, s) {
-  const pos = new Map(), W = 1100;
-  const vis = nodes.filter(n => !n.collapsed);
-  const ids = new Set(vis.map(n => n.id));
-  const lead = vis[0];
-  pos.set('lead', { x: W / 2, y: 110, r: radius(lead) });
-  const agents = vis.slice(1);
-  const fin = agents.filter(n => n.finished);
-  const live = agents.filter(n => !n.finished);
-  // a helper orbits its anchor only when the anchor is itself placed in a row or the parked column
-  // (not another satellite, not finished); otherwise it takes a place in the row like everyone else
-  const parked = live.filter(isParked);
+  const now = performance.now(), mem = memFor(s.id);
+  const pos = new Map(), vis = nodes.filter(n => !n.collapsed);
+  pos.set('lead', { x: LEAD_X, y: 110, r: radius(vis[0]) });
+  const agents = vis.slice(1), fin = agents.filter(n => n.finished), live = agents.filter(n => !n.finished);
   const liveIds = new Set(live.map(n => n.id));
-  const cand = new Set(live.filter(n => n.role === 'helper' && n.anchor && n.anchor !== 'lead' && !isParked(n)).map(n => n.id));
-  const sats = live.filter(n => cand.has(n.id) && liveIds.has(n.anchor) && !cand.has(n.anchor));
-  const main = live.filter(n => !sats.includes(n) && !parked.includes(n));
-  const rank = { worker: 0, mp: 1, lp: 2, helper: 3 };
-  main.sort((a, b) => rank[a.role] - rank[b.role] || (a.task || 0) - (b.task || 0) || a.born - b.born);
-  parked.sort((a, b) => rank[a.role] - rank[b.role] || (a.task || 0) - (b.task || 0) || a.born - b.born);
-  const per = 5, gap = 240;
-  let maxY = 110, maxX = W / 2, minX = W / 2;
-  main.forEach((n, i) => {
-    const row = Math.floor(i / per), cnt = Math.min(per, main.length - row * per), col = i % per;
-    const x = W / 2 + (col - (cnt - 1) / 2) * gap, y = 420 + row * 280;
-    pos.set(n.id, { x, y, r: radius(n) });
-    maxY = Math.max(maxY, y); maxX = Math.max(maxX, x); minX = Math.min(minX, x);
-  });
-  // satellites: fixed angular slots around their anchor, handed out in spawn order
-  const byAnchor = new Map();
-  for (const n of sats.sort((a, b) => a.born - b.born)) {
-    if (!byAnchor.has(n.anchor)) byAnchor.set(n.anchor, []);
-    byAnchor.get(n.anchor).push(n);
-  }
-  const orbit = (anc, angles) => {
-    const p = pos.get(anc), list = byAnchor.get(anc);
-    list.forEach((n, i) => {
-      const a = angles[i % angles.length] * Math.PI / 180, R = 200 + Math.floor(i / angles.length) * 120;
-      const q = { x: p.x + R * Math.cos(a), y: p.y + R * Math.sin(a), r: radius(n) };
-      pos.set(n.id, q); maxY = Math.max(maxY, q.y); maxX = Math.max(maxX, q.x); minX = Math.min(minX, q.x);
-    });
+  // a helper that serves another agent on screen wants the slot under it
+  const isHelper = n => n.role === 'helper' && n.anchor && n.anchor !== 'lead' && n.anchor !== n.id && liveIds.has(n.anchor);
+  const born = new Map(agents.map(n => [n.id, n.born || 0]));
+  const E = layoutEdges(s, S.model.now, born);
+  const slot = new Map();
+  const at = id => id === 'lead' ? { row: 0, col: 0 } : slot.has(id) ? { row: 1 + slot.get(id).sub / 10, col: slot.get(id).col } : null;
+  const nbrs = id => E.filter(e => e[0] === id || e[1] === id).map(e => e[0] === id ? e[1] : e[0]);
+  // where a newcomer wants to be: a helper under its anchor; an agent among those it talks to, else at the row's end
+  const want = (n, slots) => {
+    if (isHelper(n) && slots.has(n.anchor)) return { sub: slots.get(n.anchor).sub + 1, col: slots.get(n.anchor).col };
+    const near = nbrs(n.id).filter(x => slots.has(x)).map(x => slots.get(x));
+    if (near.length) return { sub: Math.min(...near.map(v => v.sub)), col: near.reduce((a, v) => a + v.col, 0) / near.length };
+    return { sub: 0, col: n.role === 'worker' ? -MAXC : MAXC };
   };
-  for (const anc of byAnchor.keys()) if (pos.has(anc)) orbit(anc, [62, 118, 28, 152, 90, 0, 180]);   // below a row agent
-  // parked column on the right
-  const px = Math.max(maxX + 250, W / 2 + 330);
-  parked.forEach((n, i) => {
-    const col = parked.length > 4 ? Math.floor(i / Math.ceil(parked.length / 2)) : 0;
-    const k = parked.length > 4 ? i % Math.ceil(parked.length / 2) : i;
-    const q = { x: px + col * 210, y: 110 + k * 205, r: radius(n) };
-    pos.set(n.id, q); maxY = Math.max(maxY, q.y); maxX = Math.max(maxX, q.x);
-  });
-  for (const anc of byAnchor.keys()) if (parked.some(n => n.id === anc)) orbit(anc, [180, 145, 215, 110, 250]);   // left of a parked one
-  // finished (expanded) row
-  let y = maxY + 230;
-  if (fin.length) {
-    fin.sort((a, b) => a.born - b.born).forEach((n, i) => {
-      const cnt = fin.length;
-      pos.set(n.id, { x: W / 2 + (i - (cnt - 1) / 2) * 150, y, r: radius(n) });
-    });
-    y += 190;
+  const g = placeRow(mem.agents, live, want, E, at, now, slot, isHelper);
+
+  // quiet-time upkeep: once nothing has come or gone for QUIET_MS, close the gaps within rows (after the reserved slots
+  // have lapsed) and, rarely, swap neighbours that remove 2+ crossings. Tidy does it all now, and puts helpers back
+  // under their anchors.
+  const sig = live.map(n => n.id).sort().join();
+  if (sig !== mem.sig) { mem.sig = sig; mem.since = now; }
+  const quiet = now - mem.since > QUIET_MS, tidy = S.tidyNow;
+  S.tidyNow = false;   // asked once, done once (never left set if anything below fails)
+  const reserved = () => [...mem.agents.keys()].filter(k => ![...g.keyOf.values()].includes(k));
+  const sync = () => { for (const n of live) { const e = mem.agents.get(g.keyOf.get(n.id)); if (e) slot.set(n.id, { sub: e.sub, col: e.col }); } };   // helpers being re-placed have none yet
+  // a helper sits under a regular agent (helpers anchored to helpers keep their own place)
+  const byId = new Map(live.map(n => [n.id, n]));
+  const underAgent = n => isHelper(n) && !isHelper(byId.get(n.anchor));
+  const agentKeys = live.filter(n => !isHelper(n)).map(n => g.keyOf.get(n.id));
+  const helperSlots = () => live.filter(isHelper).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean);
+  if (tidy) {
+    for (const k of reserved()) mem.agents.delete(k);
+    // the agents close up first; then the helpers that serve one go back under it
+    const hs = live.filter(underAgent);
+    for (const n of hs) { mem.agents.delete(g.keyOf.get(n.id)); slot.delete(n.id); }
+    compactRow(mem.agents, agentKeys, helperSlots()); sync();
+    placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
+  } else if (quiet && !reserved().length) { compactRow(mem.agents, agentKeys, helperSlots()); sync(); }
+  if (tidy || (quiet && now - mem.lastReorder > REORDER_MS)) {
+    const saved = [...mem.agents.values()].map(e => [e, e.col]);
+    const gain = untangleRow(mem.agents, g.keyOf, live, E, id => (sync(), at(id)));
+    if (gain >= (tidy ? 1 : 2)) mem.lastReorder = now;
+    else for (const [e, c] of saved) e.col = c;   // not worth moving anyone
+    sync();
   }
-  const collapsed = nodes.filter(n => n.collapsed);
-  const res = { y, collapsed };
-  S.order = [...new Set(['lead', ...main.map(n => n.id), ...sats.map(n => n.id), ...parked.map(n => n.id), ...fin.map(n => n.id)])];
-  return { pos, res, minX, maxX };
+  if (tidy) mem.lastReorder = now;
+  // can Tidy do anything? (a gap inside a row, a reserved slot, or a helper away from its anchor)
+  const rowsOf = new Map();
+  for (const n of live) { if (isHelper(n)) continue; const v = slot.get(n.id); if (!rowsOf.has(v.sub)) rowsOf.set(v.sub, []); rowsOf.get(v.sub).push(v.col); }
+  const gap = [...rowsOf.values()].some(c => Math.max(...c) - Math.min(...c) + 1 > c.length);
+  const astray = live.some(n => underAgent(n) && slot.has(n.anchor) && (slot.get(n.id).sub !== slot.get(n.anchor).sub + 1 || Math.abs(slot.get(n.id).col - slot.get(n.anchor).col) > 1));
+  S.canTidy = gap || reserved().length > 0 || astray;
+  const key = JSON.stringify([...mem.agents].map(([k, e]) => [k, e.sub, e.col]));
+  if (key !== mem.savedKey) { mem.savedKey = key; saveMem(s.id, mem); }
+
+  // rows at fixed heights from Y_AGENTS down; then finished; then the shelf
+  let maxY = 110;
+  for (const n of live) { const v = slot.get(n.id), y = Y_AGENTS + v.sub * ROW_GAP; pos.set(n.id, { x: LEAD_X + v.col * COLW, y, r: radius(n) }); maxY = Math.max(maxY, y); }
+  let y = maxY + (maxY > 110 ? 260 : 300);
+  if (fin.length) {
+    fin.sort((p, q) => (p.born || 0) - (q.born || 0)).forEach((n, i) => pos.set(n.id, { x: LEAD_X + (i - (fin.length - 1) / 2) * 150, y, r: radius(n) }));
+    y += 230;
+  }
+  // which row everything is in, for the line router
+  S.band = new Map([['lead', BAND.lead]]);
+  for (const n of live) S.band.set(n.id, BAND.agents + slot.get(n.id).sub / 10);
+  for (const n of fin) S.band.set(n.id, BAND.finished);
+  S.order = [...new Set(['lead', ...live.slice().sort((p, q) => slot.get(p.id).sub - slot.get(q.id).sub || slot.get(p.id).col - slot.get(q.id).col).map(n => n.id), ...fin.map(n => n.id)])];
+  return { pos, res: { y: y - 30, collapsed: nodes.filter(n => n.collapsed) } };
 }
 
 function clearGraph() {
   for (const g of ['gEdges', 'gNodes', 'gTethers', 'gCards', 'gPulse']) $(g).textContent = '';
   S.nodes.clear(); S.edges.clear(); S.cards.clear(); S.res.clear(); S.pulses = []; S.prevState.clear();
-  S.disp.clear(); S.leaving.clear(); S.vbD = null; S.snapNext = true; S.prevCollapsed = new Set(); S.fadeUntil = 0;
+  S.disp.clear(); S.leaving.clear(); S.vbD = null; S.fitVb = null; S.snapNext = true; S.prevCollapsed = new Set(); S.fadeUntil = 0;
   $('hiddenBtn').hidden = $('clearBtn').hidden = true;   // renderGraph shows them again when they apply
 }
 
@@ -673,7 +863,7 @@ function unleave(o) {
 // where an edge or tether meets a node or resource as drawn now
 function geom(id) {
   const d = S.disp.get(id); if (!d) return null;
-  if (d.kind === 'res') return { x: d.x, y: d.y, r: d.rr, rect: d.w ? { w: d.w, h: d.h } : null };
+  if (d.kind === 'res') return { x: d.x, y: d.y, r: d.rr, rect: d.w ? { w: d.w, h: d.h } : null, top: (d.h || 2 * d.rr) / 2, bottom: (d.h || 2 * d.rr) / 2 };
   return { x: d.x, y: d.y, r: d.r * d.s, top: (d.top || 0) * d.s, bottom: (d.bottom || 0) * d.s, half: (d.half || d.r) * d.s };
 }
 function moving() {
@@ -728,8 +918,7 @@ function drawFrame(now) {
   for (const [key, e] of S.edges) {
     const a = geom(e.a), b = geom(e.b);
     if (!a || !b) { e.g.remove(); S.edges.delete(key); S.leaving.delete(e); continue; }
-    // the lock link: the shortest straight line from the holder (hex and labels) to the window card
-    const { d, mid } = key === 'lock' && b.rect ? rimLink(a, b) : edgePath(a, b, e.bend);
+    const { d, mid } = routeEdge(key, a, b, e.a, e.b, e.bend);
     put(e.path, 'd', d);
     put(e.lbl, 'x', (mid.x + 8).toFixed(1)); put(e.lbl, 'y', (mid.y - 6).toFixed(1));
     put(e.g, 'opacity', opStr(Math.min(opNow(S.disp.get(e.a), now), opNow(S.disp.get(e.b), now), opNow(e, now))));
@@ -751,19 +940,69 @@ function drawFrame(now) {
   const v = S.vbD;
   if (v) { S.vb = { x: v.x, y: v.y, w: v.w, h: v.h }; applyVb(); }
 }
-// the shortest straight link between two boxes: the node with its labels, and the card. It never crosses the
-// node's own text, and never lines up with edges that enter the hex
-function rimLink(n, c) {
-  const A = { x0: n.x - n.half, x1: n.x + n.half, y0: n.y - n.top, y1: n.y + n.bottom };
-  const B = { x0: c.x - c.rect.w / 2, x1: c.x + c.rect.w / 2, y0: c.y - c.rect.h / 2, y1: c.y + c.rect.h / 2 };
-  const span = (a0, a1, b0, b1) => Math.max(a0, b0) <= Math.min(a1, b1) ? (Math.max(a0, b0) + Math.min(a1, b1)) / 2 : null;
-  const mx = span(A.x0, A.x1, B.x0, B.x1), my = span(A.y0, A.y1, B.y0, B.y1);
-  const near = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
-  let sx, sy, ex, ey;
-  if (mx != null) { sx = ex = mx; [sy, ey] = B.y0 >= A.y1 ? [A.y1 + 4, B.y0] : [A.y0 - 4, B.y1]; }          // above or below
-  else if (my != null) { sy = ey = my; [sx, ex] = B.x0 >= A.x1 ? [A.x1 + 4, B.x0] : [A.x0 - 4, B.x1]; }      // beside
-  else { sx = B.x0 >= A.x1 ? A.x1 : A.x0; sy = B.y0 >= A.y1 ? A.y1 : A.y0; ex = near(sx, B.x0, B.x1); ey = near(sy, B.y0, B.y1); }   // corner to corner
-  return { d: `M${sx.toFixed(1)},${sy.toFixed(1)} L${ex.toFixed(1)},${ey.toFixed(1)}`, mid: { x: (sx + ex) / 2, y: (sy + ey) / 2 } };
+// ---- line routing: lines travel in the channels between rows and down the gaps between columns, never across an
+// agent. Neighbouring rows: an S-curve from under the upper agent's labels to the top of the lower one. Same row: a dip
+// into the channel below it. Rows in between: along the channel, down the nearest column gap, across, and in.
+const P = p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+function curve(p0, c1, c2, p3) {
+  return { d: `M${P(p0)} C${P(c1)} ${P(c2)} ${P(p3)}`, mid: { x: (p0.x + 3 * c1.x + 3 * c2.x + p3.x) / 8, y: (p0.y + 3 * c1.y + 3 * c2.y + p3.y) / 8 } };
+}
+function rounded(pts, r) {
+  pts = pts.filter((p, i) => !i || Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y) > .5);
+  let d = `M${P(pts[0])}`, total = 0;
+  const lens = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1], b = pts[i], c = pts[i + 1], l1 = lens[i - 1], l2 = lens[i], k = Math.min(r, l1 / 2, l2 / 2);
+    d += ` L${P({ x: b.x + (a.x - b.x) / l1 * k, y: b.y + (a.y - b.y) / l1 * k })} Q${P(b)} ${P({ x: b.x + (c.x - b.x) / l2 * k, y: b.y + (c.y - b.y) / l2 * k })}`;
+  }
+  d += ` L${P(pts[pts.length - 1])}`;
+  for (const l of lens) total += l;
+  let half = total / 2, mid = pts[0];
+  for (let i = 0; i < lens.length; i++) { if (half <= lens[i]) { const f = half / (lens[i] || 1); mid = { x: pts[i].x + (pts[i + 1].x - pts[i].x) * f, y: pts[i].y + (pts[i + 1].y - pts[i].y) * f }; break; } half -= lens[i]; }
+  return { d, mid };
+}
+function routeEdge(key, A, B, ida, idb, bend) {
+  const band = id => S.band?.get(id) ?? (S.disp.get(id)?.kind === 'res' ? BAND.shelf : null);
+  const ba = band(ida), bb = band(idb);
+  if (ba == null || bb == null || !S.chan) return edgePath(A, B, bend);
+  const flip = ba > bb || (ba === bb && A.x > B.x);
+  const [U, L, bu, bl] = flip ? [B, A, bb, ba] : [A, B, ba, bb];
+  const lane = ((hash(key) % 5) - 2) * 6;   // parallel runs sit a little apart
+  const up = { x: U.x, y: U.y + U.bottom + 4 };
+  let out;
+  if (bu === bl) {
+    const lp = { x: L.x, y: L.y + L.bottom + 4 }, cy = (S.chan.get(bu) ?? up.y + 60) + lane + Math.min(30, Math.abs(L.x - U.x) / 25);
+    out = curve(up, { x: up.x, y: cy }, { x: lp.x, y: cy }, lp);
+  } else {
+    const lo = { x: L.x, y: L.y - L.top - 4 };
+    const between = (S.bands || []).filter(b => b > bu && b < bl);
+    if (!between.length) {
+      // the line does its sideways travel early and turns while well clear of the agent, so the end runs straight
+      // down into the arrowhead (the arrowhead itself stays where it is)
+      const tail = Math.max(28, Math.min(64, (lo.y - up.y) * .35));
+      const st = { x: lo.x, y: lo.y - tail }, my = up.y + (st.y - up.y) * .45 + lane;
+      out = curve(up, { x: up.x, y: my }, { x: st.x, y: my }, st);
+      out.d += ` L${P(lo)}`;
+    } else {
+      const c1 = S.chan.get(bu) + lane, c2 = S.chan.get(between[between.length - 1]) + lane;
+      // the column gap next to the lower end, on the side the line comes from
+      const k = (lo.x - LEAD_X) / COLW, side = up.x < lo.x ? -.5 : .5;
+      const gx = LEAD_X + (Math.round(k) + side) * COLW + lane;
+      out = rounded([up, { x: up.x, y: c1 }, { x: gx, y: c1 }, { x: gx, y: c2 }, { x: lo.x, y: c2 }, lo], 16);
+    }
+  }
+  if (flip) out.d = reversePath(out.d);
+  return out;
+}
+// the same path drawn the other way (so arrowheads and pulses keep their direction)
+function reversePath(d) {
+  const segs = d.match(/[MLQC][^MLQC]*/g).map(s => ({ t: s[0], p: s.slice(1).trim().split(/\s+/).map(v => v.split(',').map(Number)) }));
+  const out = [];
+  let cur = segs[0].p[0];
+  for (const s of segs.slice(1)) { out.push({ t: s.t, from: cur, ctrl: s.p.slice(0, -1), to: s.p[s.p.length - 1] }); cur = s.p[s.p.length - 1]; }
+  let r = `M${cur.map(v => v.toFixed(1)).join(',')}`;
+  for (const s of out.reverse()) r += ` ${s.t}${[...s.ctrl.slice().reverse(), s.from].map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}`;
+  return r;
 }
 // a node that appears grows out of the finished chip (when it was folded there), else its parent, anchor or the lead
 function enterFrom(n) {
@@ -779,8 +1018,9 @@ function renderGraph(s) {
   S.pos = pos;   // the layout's targets; what is on screen is S.disp
   const nHidden = (s.agents || []).filter(a => a.id in hidden).length;
   S.clearable = nodes.filter(n => !n.collapsed && canHide(n) && isDone(n)).map(n => n.id);   // what is drawn, not the chip's
-  $('hiddenBtn').hidden = !nHidden; setT($('hiddenText'), `${nHidden} hidden · show`);
-  $('clearBtn').hidden = !S.clearable.length; setT($('clearText'), `Clear ${S.clearable.length} done`);
+  $('hiddenBtn').hidden = !nHidden; setT($('hiddenN'), nHidden);
+  $('clearBtn').hidden = !S.clearable.length; setT($('clearN'), S.clearable.length);
+  $('tidyBtn').hidden = !S.canTidy;
   const byId = new Map(nodes.map(n => [n.id, n]));
   if (!byId.has(S.sel) || byId.get(S.sel).collapsed) S.sel = 'lead';
   const alertsBy = new Map();
@@ -802,6 +1042,18 @@ function renderGraph(s) {
     d.r = p.r; d.top = p.top; d.bottom = p.bottom; d.half = Math.max(p.r + 12, lb[1].w / 2);
     boxes.push(...lb);
   }
+  // the channels between rows (from label bottoms to the hex tops of the next row): lines travel in them
+  const ext = new Map();
+  for (const n of nodes) {
+    const p = pos.get(n.id), b = S.band.get(n.id); if (!p || b == null || n.collapsed) continue;
+    const e = ext.get(b) || { lo: Infinity, hi: -Infinity };
+    e.lo = Math.min(e.lo, p.y - p.top); e.hi = Math.max(e.hi, p.y + p.bottom); ext.set(b, e);
+  }
+  ext.set(BAND.shelf, { lo: res.y - 40, hi: res.y + 40 });
+  const bands = [...ext.keys()].sort((x, y) => x - y);
+  S.chan = new Map();
+  bands.forEach((b, i) => { if (i + 1 < bands.length) S.chan.set(b, (ext.get(b).hi + ext.get(bands[i + 1]).lo) / 2); else S.chan.set(b, ext.get(b).hi + 40); });
+  S.bands = bands;
 
   // resources: the collapsed-finished chip, the HP queue and the window
   const resSeen = new Set();
@@ -814,22 +1066,17 @@ function renderGraph(s) {
   if (w) {
     const hp = (w.groups.HP || []).filter(r => ['queued', 'active', 'paused', 'parked', 'asks', 'other'].includes(r.kind));
     const next = (w.groups.HP || []).find(r => r.kind === 'queued');
-    const qx = worker ? pos.get(worker.id).x - 330 : 120;
-    const qy = worker ? pos.get(worker.id).y : res.y;
     resSeen.add('_queue');
-    boxes.push(drawResClear('_queue', { x: qx, y: qy }, boxes, ROLECOL.worker, 'i-queue', `HP queue · ${hp.length} open`,
+    boxes.push(placeRes('_queue', { x: LEAD_X - 165, y: res.y }, ROLECOL.worker, 'i-queue', `HP queue · ${hp.length} open`,
       next ? clip(`next ${next.n} · ${next.title}`, 36) : 'nothing queued',
       `MP ${(w.groups.MP || []).filter(r => r.kind !== 'done').length} · LP ${(w.groups.LP || []).filter(r => r.kind !== 'done').length} open`));
     const win = w.window || {};
-    const holderPos = win.held && win.holder && seen.has(win.holder) ? pos.get(win.holder) : null;
     const waiters = (win.waiters || []).map(id => byId.get(id)?.label).filter(Boolean);
     resSeen.add('_window');
-    const card = ['_window', win.held ? 'red' : 'green', win.held ? 'i-lock' : 'i-unlock',
+    // the shelf: queue and window side by side at the bottom, always in the same place
+    boxes.push(placeRes('_window', { x: LEAD_X + 165, y: res.y }, win.held ? 'red' : 'green', win.held ? 'i-lock' : 'i-unlock',
       `Window · ${w.lock_name || 'lock'}`, win.held ? clip(`${shortWho(win.who)} · ${dur(now - (win.since || now))}`, 38) : 'free',
-      waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''];
-    // held: right beside its holder, so the lock line is a short link, not a stroke across the diagram
-    const near = holderPos && drawResNear(holderPos, boxes, card[0], win.holder, ...card.slice(1));
-    boxes.push(near || drawResClear(card[0], { x: holderPos ? holderPos.x : pos.get('lead').x, y: res.y }, boxes, ...card.slice(1)));
+      waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''));
   }
   for (const [id, r] of S.res) if (!resSeen.has(id)) {
     const d = S.disp.get(id);
@@ -856,16 +1103,24 @@ function renderGraph(s) {
 
   // edges: their ends are looked up every frame, so they follow the nodes as they move
   const eSeen = new Set();
+  const bornOf = new Map(nodes.map(n => [n.id, n.born || 0]));
+  const dimAll = S.sel !== 'lead' && seen.has(S.sel);
   for (const e of s.edges || []) {
     if (!seen.has(e.from) || !seen.has(e.to)) continue;
-    drawEdge(e.key, e.from, e.to, `edge ${e.kind}${e.hot ? ' hot' : ''}`, e.kind === 'task' && byId.get(e.to)?.task ? `task ${byId.get(e.to).task}` : '', eSeen);
+    const v = edgeShow(e, S.model.now, bornOf, dimAll ? S.sel : null, settings.allEdges);   // the layout ignores the setting
+    if (!v.show) continue;
+    drawEdge(e.key, e.from, e.to, `edge ${v.kind}${e.hot ? ' hot' : ''}${v.faint ? ' faint' : ''}${v.dim ? ' dim' : ''}`,
+      e.kind === 'task' && byId.get(e.to)?.task ? `task ${byId.get(e.to).task}` : '', eSeen);
+    S.edges.get(e.key).flow = flowOf(e, v.kind, S.model.now);
   }
-  if (w && w.window && w.window.held && seen.has(w.window.holder) && S.res.has('_window')) drawEdge('lock', w.window.holder, '_window', 'edge lock', '', eSeen);
-  if (w && worker && S.res.has('_queue')) drawEdge('queue', '_queue', worker.id, 'edge', '', eSeen);
+  flowKick();
+  const dimRes = id => dimAll && S.sel !== id ? ' dim' : '';
+  if (w && w.window && w.window.held && seen.has(w.window.holder) && S.res.has('_window')) drawEdge('lock', w.window.holder, '_window', 'edge lock' + dimRes(w.window.holder), '', eSeen);
+  if (w && worker && S.res.has('_queue')) drawEdge('queue', worker.id, '_queue', 'edge queue' + dimRes(worker.id), '', eSeen);
   for (const [k, e] of S.edges) if (!eSeen.has(k) && !e.leaving) leave(e, 150, () => { e.g.remove(); S.edges.delete(k); });
 
-  placeCards(nodes, pos, boxes, now);
-  fit(boxes);
+  const cards = placeCards(nodes, pos, boxes, now);
+  fit(boxes, cards);
   S.prevCollapsed = folded;
   drawFrame(performance.now());
   S.snapNext = false;
@@ -880,7 +1135,6 @@ function makeNode(id) {
   p.flash = el('polygon', { class: 'flash' }, g);
   p.arc = el('circle', { class: 'arc' }, g);
   p.hex = el('polygon', { class: 'hex' }, g);
-  p.selring = el('polygon', { class: 'selring' }, g);
   p.mark = el('use', {}, g); p.mark.setAttribute('class', 'mark');
   p.lbl = el('text', { class: 'lbl' }, g);
   p.sub = el('text', { class: 'sub' }, g);
@@ -888,6 +1142,8 @@ function makeNode(id) {
   p.barbg = el('rect', { class: 'barbg', height: 4, rx: 2 }, g); p.bar = el('rect', { class: 'bar', height: 4, rx: 2 }, g);
   p.meta = el('text', { class: 'meta' }, g);
   p.badge = el('g', { class: 'badge' }, g); el('circle', { r: 8 }, p.badge); p.badgeT = el('text', { y: 4 }, p.badge);
+  p.lockm = el('g', { class: 'lockm' }, g); el('circle', { r: 9 }, p.lockm); el('use', { href: '#i-lock', x: -5.5, y: -6, width: 11, height: 11 }, p.lockm);
+  el('title', {}, p.lockm).textContent = 'Holds the window';
   p.hide = el('g', { class: 'hide' }, g); el('circle', { r: 8 }, p.hide); el('path', { d: 'M-3,-3L3,3M3,-3L-3,3' }, p.hide);
   el('title', {}, p.hide).textContent = 'Hide from the diagram (H)';
   p.hide.addEventListener('click', ev => { ev.stopPropagation(); hideAgents([id]); });
@@ -910,7 +1166,6 @@ function updateNode(p, n, pos, now, nAlerts) {
   setA(p.g, { tabindex: 0, 'aria-label': `${n.label}, ${st.label}${n.task ? ', task ' + n.task : ''}` });
   setA(p.halo, { r: r * 1.75 });
   setA(p.hex, { points: hexPts(r) });
-  setA(p.selring, { points: hexPts(r + 9) });
   setA(p.flash, { points: hexPts(r + 3) });
   setA(p.arc, { r: r + 10, 'stroke-dasharray': `${(r * .9).toFixed(0)} ${(r * 7).toFixed(0)}` });
   p.arc.style.display = active ? '' : 'none';
@@ -944,6 +1199,8 @@ function updateNode(p, n, pos, now, nAlerts) {
   p.badge.style.display = nAlerts ? '' : 'none';
   setA(p.badge, { transform: `translate(${(r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` }); setT(p.badgeT, '!');
   p.hide.style.display = canHide(n) ? '' : 'none';
+  p.lockm.style.display = n.holds ? '' : 'none';   // holds the window (its card is on the shelf, joined by a red line)
+  setA(p.lockm, { transform: `translate(${(r * .8).toFixed(1)},${(r * .72).toFixed(1)})` });
   setA(p.hide, { transform: `translate(${(-r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` });
   // a one-shot ring when the state changes
   const prev = S.prevState.get(n.id);
@@ -978,39 +1235,12 @@ function drawRes(id, col, ico, h, s1, s2) {
   return { w: wdt, h: hgt };
 }
 
-// a resource card keeps clear of whatever is already placed: its own spot first, then the nearest free one sideways
-function drawResClear(id, p, boxes, ...rest) {
+// a resource card at a fixed place (the shelf): it never moves, so you always know where to look
+function placeRes(id, p, ...rest) {
   const { w, h } = drawRes(id, ...rest);
-  const box = x => ({ x: x - w / 2 - 8, y: p.y - h / 2 - 8, w: w + 16, h: h + 16 });
-  let x = p.x;
-  for (let k = 0; k <= 24; k++) {
-    const xx = p.x + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * 60;
-    if (!boxes.some(o => hit(box(xx), o))) { x = xx; break; }
-  }
-  const d = target(id, x, p.y, 'res');
+  const d = target(id, p.x, p.y, 'res');
   d.w = w; d.h = h; d.rr = Math.min(w, h) / 2 + 2;
-  return box(x);
-}
-
-// a resource card next to a node: hanging under its labels first, then beside it, the lower corners, above; the
-// first spot that hits nothing (null when none is free)
-function drawResNear(p, boxes, id, nodeId, ...rest) {
-  const { w, h } = drawRes(id, ...rest);
-  const box = (x, y) => ({ x: x - w / 2 - 8, y: y - h / 2 - 8, w: w + 16, h: h + 16 });
-  // beside the node means beside its widest part (a long status label sticks out past the hex)
-  const own = boxes.filter(b => b.node === nodeId);
-  const half = Math.max(p.r, ...own.map(b => Math.max(p.x - b.x, b.x + b.w - p.x)));
-  const below = p.y + (p.bottom || p.r) + 28 + h / 2, above = p.y - (p.top || p.r) - 24 - h / 2, side = half + 30 + w / 2;
-  const cands = [[p.x, below], [p.x - side, p.y], [p.x + side, p.y], [p.x - w / 2 - 34, below], [p.x + w / 2 + 34, below],
-    [p.x, above], [p.x - side, above], [p.x + side, above], [p.x, below + 96]];
-  for (const [x, y] of cands) {
-    const b = box(x, y);
-    if (boxes.some(o => hit(b, o))) continue;
-    const d = target(id, x, y, 'res');
-    d.w = w; d.h = h; d.rr = Math.min(w, h) / 2 + 2;
-    return b;
-  }
-  return null;
+  return { x: p.x - w / 2 - 8, y: p.y - h / 2 - 8, w: w + 16, h: h + 16 };
 }
 
 function drawChip(p, text) {
@@ -1057,6 +1287,34 @@ function drawEdge(key, a, b, cls, label, seen) {
   e.cls = cls;
   setT(e.lbl, label);
 }
+// ---- line flow: dashes travel along a line that is in use. The speed eases in and out (a message line slows to a stop
+// over minutes, not at once), and the offset is kept here, so there is no loop seam and no restart ----
+const FLOW = 23;          // px/s at full speed (the old CSS loop: 28 px per 1.2 s)
+const FLOW_FULL = 60, FLOW_GONE = 300;   // a message line: full speed for a minute after a message, still by 5 minutes
+function flowOf(e, kind, now) {
+  if (settings.motion !== 'full') return 0;
+  if (kind === 'task') return e.hot ? FLOW : 0;
+  if (kind !== 'msg' || !e.last) return 0;
+  const age = now - e.last;
+  return age <= FLOW_FULL ? FLOW : age >= FLOW_GONE ? 0 : FLOW * (1 - (age - FLOW_FULL) / (FLOW_GONE - FLOW_FULL));
+}
+let flowRaf = 0, flowAt = 0;
+function flowKick() { if (!flowRaf && !document.hidden) { flowAt = performance.now(); flowRaf = requestAnimationFrame(flowStep); } }
+function flowStep(t) {
+  const dt = Math.min(.1, (t - flowAt) / 1000), k = 1 - Math.exp(-dt / .7);   // ~2 s to reach a new speed
+  flowAt = t;
+  let live = false;
+  for (const e of S.edges.values()) {
+    const want = e.flow || 0;
+    if (!want && !e.fv) continue;
+    e.fv = Math.abs(want - e.fv) < .05 ? want : (e.fv || 0) + (want - (e.fv || 0)) * k;
+    e.off = ((e.off || 0) - e.fv * dt) % 5040;   // a multiple of every dash period: the wrap is invisible
+    e.path.setAttribute('stroke-dashoffset', e.off.toFixed(2));
+    live = live || e.fv > 0 || want > 0;
+  }
+  flowRaf = live && !document.hidden ? requestAnimationFrame(flowStep) : 0;
+}
+document.addEventListener('visibilitychange', flowKick);
 function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
 
 // ---- speech bubbles and tool cards, placed where they hit nothing (ui.md §3) ----
@@ -1081,6 +1339,7 @@ function placeCards(nodes, pos, boxes, now) {
   }
   const placed = [];
   const seen = new Set();
+  const view = S.fitVb && visible(S.fitVb), inView = r => !view || (r.x > view.x0 + 8 && r.x + r.w < view.x1 - 8 && r.y > view.y0 + 8 && r.y + r.h < view.y1 - 8);
   for (const c of want) {
     const p = pos.get(c.node.id);
     const w = Math.max(...c.lines.map(l => textW(l, 11.5)), c.head ? textW(c.head, 9.5) : 0) + 22;
@@ -1091,11 +1350,15 @@ function placeCards(nodes, pos, boxes, now) {
       [p.x - r - 40 - w, p.y - h / 2], [p.x - r - 22 - w, p.y + r + 8], [p.x - r - 22 - w, p.y - r - 26 - h],
       [p.x + r + 40, p.y + r + 70], [p.x - r - 40 - w, p.y + r + 70],
     ];
+    // a free spot on screen first, so a new card does not make the view move; else any free spot
     let spot = null;
-    for (const [x, y] of cands) {
-      const rect = { x, y, w, h };
-      if (boxes.some(b => hit(rect, b)) || placed.some(b => hit(rect, b))) continue;
-      spot = rect; break;
+    for (const pass of [inView, () => true]) {
+      for (const [x, y] of cands) {
+        const rect = { x, y, w, h };
+        if (!pass(rect) || boxes.some(b => hit(rect, b)) || placed.some(b => hit(rect, b))) continue;
+        spot = rect; break;
+      }
+      if (spot) break;
     }
     if (!spot) continue;
     placed.push({ x: spot.x - 6, y: spot.y - 6, w: spot.w + 12, h: spot.h + 12 });
@@ -1106,7 +1369,7 @@ function placeCards(nodes, pos, boxes, now) {
     if (S.tipAnchor === c.g) hideTip();
     leave(c, 150, () => { c.g.remove(); c.t.remove(); S.cards.delete(k); });
   }
-  boxes.push(...placed);
+  return placed;   // the cards' boxes: kept out of the graph's own fit (see fit)
 }
 function wrap(text, n, max) {
   const words = String(text).split(/\s+/), lines = [];
@@ -1153,20 +1416,45 @@ function drawCard(c, spot, p) {
 }
 
 // ---- viewport: fit to content, wheel zoom, drag to pan ----
-function fit(boxes, force) {
-  if (!boxes.length) return;
+function bounds(boxes) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const b of boxes) { x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h); }
-  const pad = 30;
-  // never zoom in past 1:1 (a lone lead would fill the stage): a small graph sits centred at its natural size
-  const MAX_ZOOM = 1, svg = $('graph');
-  const cw = x1 - x0 + 2 * pad, ch = y1 - y0 + 2 * pad + 40;
+  return { x0, y0, x1, y1 };
+}
+// the view that centres these bounds; never zoomed in past 1:1 (a lone lead would fill the stage), so a small graph
+// sits centred at its natural size
+function fitFor(b) {
+  const pad = 30, MAX_ZOOM = 1, svg = $('graph');
+  const cw = b.x1 - b.x0 + 2 * pad, ch = b.y1 - b.y0 + 2 * pad + 40;
   const w = Math.max(600, cw, (svg.clientWidth || 0) / MAX_ZOOM), h = Math.max(400, ch, (svg.clientHeight || 0) / MAX_ZOOM);
-  const vb = { x: x0 - pad + cw / 2 - w / 2, y: y0 - pad - 40 + ch / 2 - h / 2, w, h };
-  const key = [vb.x, vb.y, vb.w, vb.h].map(v => Math.round(v / 10)).join(',');
-  const changed = S.fitKey !== key;
-  S.fitKey = key; S.fitVb = vb;
-  if (S.userPanned && !force) { $('fitBtn').hidden = !changed && $('fitBtn').hidden; if (changed) $('fitBtn').hidden = false; return; }
+  return { x: b.x0 - pad + cw / 2 - w / 2, y: b.y0 - pad - 40 + ch / 2 - h / 2, w, h };
+}
+// what the screen shows of a view box: the svg keeps its aspect, so one side shows more than the box
+function visible(vb) {
+  const svg = $('graph'), A = (svg.clientWidth || vb.w) / (svg.clientHeight || vb.h);
+  const w = Math.max(vb.w, vb.h * A), h = Math.max(vb.h, vb.w / A), cx = vb.x + vb.w / 2, cy = vb.y + vb.h / 2;
+  return { x0: cx - w / 2, x1: cx + w / 2, y0: cy - h / 2, y1: cy + h / 2, w, h };
+}
+// a view still serves when everything is on screen and the empty space is not piled up on one side
+const LOPSIDED = .4;   // the margins on the two sides may differ by up to this share of the view
+function serves(vb, b) {
+  const v = visible(vb), m = 8;
+  if (b.x0 < v.x0 + m || b.x1 > v.x1 - m || b.y0 < v.y0 + m || b.y1 > v.y1 - m) return false;
+  return Math.abs((b.x0 - v.x0) - (v.x1 - b.x1)) <= LOPSIDED * v.w && Math.abs((b.y0 - v.y0) - (v.y1 - b.y1)) <= LOPSIDED * v.h;
+}
+// fit the graph (agents, chip, shelf) and keep its speech and tool cards on screen. The view moves only when it has
+// to: a card that appears or goes, or a label that grows, moves nothing while the current view still serves (all on
+// screen, not lopsided) at the right zoom. Otherwise it goes to the graph's own centred fit, or to the fit around the
+// cards too when they would stick out of that one.
+function fit(core, cards = []) {
+  if (!core.length) return;
+  const all = bounds(core.concat(cards)), own = fitFor(bounds(core));
+  const ideal = serves(own, all) ? own : fitFor(all);
+  const prev = S.fitVb;
+  const keep = prev && Math.abs(prev.w - ideal.w) <= .06 * ideal.w && Math.abs(prev.h - ideal.h) <= .06 * ideal.h && serves(prev, all);
+  const vb = keep ? prev : ideal;
+  S.fitVb = vb;
+  if (S.userPanned) { if (vb !== prev) $('fitBtn').hidden = false; return; }
   vbTarget(vb);
   $('fitBtn').hidden = true;
 }
@@ -1222,6 +1510,7 @@ $('graph').addEventListener('pointerup', ev => {
 $('graph').addEventListener('dblclick', ev => { if (!ev.target.closest('.node')) doFit(); });
 $('fitBtn').addEventListener('click', doFit);
 $('clearBtn').addEventListener('click', () => hideAgents(S.clearable || []));
+$('tidyBtn').addEventListener('click', () => { S.tidyNow = true; hideTip(); render(); });
 $('hiddenBtn').addEventListener('click', () => { const s = cur(); if (s && unhideAgents((s.agents || []).map(a => a.id))) render(); });
 function doFit() { S.userPanned = false; if (S.fitVb) vbTarget(S.fitVb); $('fitBtn').hidden = true; }
 
@@ -1277,7 +1566,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---- selection and the side panel ----
-function select(id) { unhideAgents([id]); S.sel = id; if (S.tab !== 'agent' && S.tab !== 'wts') S.tab = 'agent'; render(); }
+function select(id) { unhideAgents([id]); S.sel = id; if (!['agent', 'wts', 'tokens'].includes(S.tab)) S.tab = 'agent'; render(); }
 function nodeById(s, id) { return id === 'lead' ? Object.assign({ id: 'lead', role: 'lead', label: s.project }, s.lead) : (s.agents || []).find(a => a.id === id); }
 function nodeTip(id) {
   const s = cur(); if (!s) return '';
@@ -1288,9 +1577,14 @@ function nodeTip(id) {
 }
 
 document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) { S.tab = b.dataset.tab; renderPanel(); } });
-$('alertBtn').addEventListener('click', () => { S.tab = 'alerts'; renderPanel(); });
+$('alertBtn').addEventListener('click', () => {
+  const live = S.model ? liveAlerts(S.model) : [];
+  if (!sessAlerts(S.model, cur()).length) { const a = live.find(x => x.sev === 'red') || live[0]; if (a) selectSession(a.session); }
+  S.tab = 'alerts'; renderPanel();
+});
 
 function renderPanel() {
+  tabsFor(cur());
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
   const s = cur();
   let h;
@@ -1298,6 +1592,7 @@ function renderPanel() {
   else if (S.tab === 'alerts') h = alertsPanel();
   else if (!s) h = '<div class="empty-note">No session selected.</div>';
   else if (S.tab === 'wts') h = wtsPanel(s);
+  else if (S.tab === 'tokens') h = tokensPanel(s);
   else h = agentPanel(s, S.sel);
   if (h === S.panelHtml) return;
   const pane = $('panel'), top = pane.scrollTop;
@@ -1328,6 +1623,8 @@ function agentPanel(s, id) {
   if (st.detail) h += `<div class="sec">Now</div><div class="said">${esc(st.detail)}</div>`;
   if (row) h += `<div class="sec">Task</div><div class="taskcell"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}<div class="pmeta">${esc(row.status)}</div></div>`;
   h += `<div class="sec">Context</div>${pbar(pct, lvl)}<div class="pmeta">${n.ctx ? kfmt(n.ctx) + ' / ' + kfmt(n.ctx_max) + ' tokens · ' + Math.round(pct * 100) + '%' : 'not known yet'}${(n.compactions || []).length ? ' · compacted ' + n.compactions.length + '× in view' : ''}</div>`;
+  const tk = isLead ? s.lead.tokens : n.tokens;
+  if (tk && tk.n) h += `<button class="linkbtn tkline" data-tktab="1" data-tip="${esc(tokTip(isLead ? 'lead' : n.label, tk) + '\nclick: the Tokens tab')}"><b>${tfmt(tk.v[3])} out</b> · ${tfmt(tk.v[0] + tk.v[1])} in · ${tfmt(tk.v[2])} read · ${tfmt(tk.n)} replies</button>`;
   h += `<div class="kv"><span>Last active</span><span>${hhmm(n.last_ts, 1)} · ${ago(n.last_ts, now)}</span>`;
   if (isLead) {
     h += `<span>Session</span><span>${esc(s.status)} since ${hhmm(s.status_since)}</span>`;
@@ -1356,6 +1653,115 @@ function toName(s, to) {
   return a ? a.label : to;
 }
 
+// ---- tokens: output is the headline (what the model wrote); fresh input and cache reads each on their own scale ----
+const TOKKINDS = [['out', 'Output'], ['fresh', 'Fresh in'], ['read', 'Cache read']];
+const tokOf = (v, k) => k === 'out' ? v[3] : k === 'fresh' ? v[0] + v[1] : v[2];
+const ROLEORDER = ['lead', 'worker', 'mp', 'lp', 'helper'];
+const ROLENAME = { lead: 'lead', worker: 'HP', mp: 'MP', lp: 'LP', helper: 'helpers' };
+const roleCol = r => r === 'lead' ? 'cyan' : ROLECOL[r] || 'violet';
+const spanName = s => s < 3600 ? `${s / 60}m` : `${s / 3600}h`;
+function tokTip(name, t) {
+  const v = t.v;
+  return `${name}${t.model ? ' · ' + modelName(t.model) : ''}\nOutput ${exact(v[3])} (thinking included)\nFresh in ${exact(v[0] + v[1])} (input ${exact(v[0])} + cache write ${exact(v[1])})\nCache read ${exact(v[2])}${t.n ? `\n${exact(t.n)} replies` : ''}${t.cx ? ' · ' + t.cx + ' compactions' : ''}`;
+}
+// a list sorted by size, except while the pointer is on it: then rows keep their places (new ones go last)
+function holdOrder(key, items, id, val) {
+  let out = items.slice().sort((a, b) => val(b) - val(a) || String(id(a)).localeCompare(String(id(b))));
+  if (S.tokHold && S.tokOrder[key].length) {
+    const prev = S.tokOrder[key], at = x => { const i = prev.indexOf(id(x)); return i < 0 ? 1e9 : i; };
+    out = items.slice().sort((a, b) => at(a) - at(b));
+  }
+  S.tokOrder[key] = out.map(id);
+  return out;
+}
+const tkBar = (frac, col) => `<svg class="tkbar"><rect class="bg" width="100%" height="6" rx="3"/><rect class="fg c-${col}" width="${(frac > 0 ? Math.max(1, frac * 100) : 0).toFixed(1)}%" height="6" rx="3"/></svg>`;
+function tokensPanel(s) {
+  const T = s.tokens, k = S.tokKind, kname = (TOKKINDS.find(x => x[0] === k) || TOKKINDS[0])[1];
+  if (!T || !T.n) return '<div class="empty-note">No replies counted yet.</div>';
+  const v = T.v;
+  let h = '<div class="sec">Tokens · this session</div><div class="tktiles">';
+  for (const [id, name] of TOKKINDS) {
+    const tip = `${name}: ${exact(tokOf(v, id))}` + (id === 'fresh' ? `\ninput ${exact(v[0])} + cache write ${exact(v[1])}` : id === 'out' ? '\nthinking included' : '\nthe context, read again from the cache on every reply');
+    h += `<button class="tktile${id === k ? ' on' : ''}" data-tk="${id}" aria-pressed="${id === k}" data-tip="${esc(tip)}"><span>${name}</span><b>${tfmt(tokOf(v, id))}</b></button>`;
+  }
+  const hit = v[2] / Math.max(1, v[0] + v[1] + v[2]);
+  h += `</div><div class="pmeta">${exact(T.n)} replies · cache hit ${(hit * 100).toFixed(1)}%${T.cx ? ' · ' + T.cx + ' compactions' : ''}${T.ready ? '' : ' · counting…'}</div>`;
+
+  // the split by role
+  const byRole = {};
+  for (const a of T.agents) byRole[a.role] = (byRole[a.role] || 0) + tokOf(a.v, k);
+  const sum = Object.values(byRole).reduce((x, y) => x + y, 0) || 1;
+  h += '<svg class="tkroles" viewBox="0 0 1000 8" preserveAspectRatio="none">';
+  let x = 0;
+  for (const r of ROLEORDER) if (byRole[r]) { const w = byRole[r] / sum * 1000; h += `<rect class="c-${roleCol(r)}" x="${x.toFixed(1)}" width="${Math.max(1, w - 3).toFixed(1)}" height="8"/>`; x += w; }
+  h += '</svg><div class="tklegend">';
+  for (const r of ROLEORDER) if (byRole[r]) h += `<span class="c-${roleCol(r)}" data-tip="${esc(ROLENAME[r] + ': ' + exact(byRole[r]) + ' · ' + (byRole[r] / sum * 100).toFixed(1) + '%')}"><i></i>${ROLENAME[r]} ${tfmt(byRole[r])}</span>`;
+  h += '</div>';
+
+  // per minute, stacked by role, over the timeline's span
+  const span = settings.span, binS = span <= 7200 ? 60 : 180, bins = Math.round(span / binS), now = S.model.now;
+  const end = Math.floor(now / 60) * 60 + 60, start = end - bins * binS;
+  const cells = Array.from({ length: bins }, () => [0, 0, 0, 0, 0]);
+  const ki = k === 'out' ? 4 : k === 'fresh' ? 2 : 3;
+  for (const row of T.series.rows) {
+    const b = Math.floor((T.series.t0 + row[0] * 60 - start) / binS), ri = ROLEORDER.indexOf(T.series.roles[row[1]]);
+    if (b >= 0 && b < bins && ri >= 0) cells[b][ri] += row[ki];
+  }
+  const per = binS / 60, tot = cells.map(c => c.reduce((p, q) => p + q, 0) / per), peak = Math.max(...tot);
+  h += `<div class="sec tkhead"><span>${kname} per minute · last ${spanName(span)}</span><span>${peak ? 'peak ' + tfmt(peak) + '/min' : 'none yet'}</span></div>`;
+  h += `<svg class="tkchart" viewBox="0 0 ${bins * 10} 72" preserveAspectRatio="none"><line class="peak" x1="0" x2="${bins * 10}" y1="1.5" y2="1.5"/>`;
+  cells.forEach((c, b) => {
+    const last = b === bins - 1;
+    let y = 72;
+    if (peak) for (let ri = 0; ri < 5; ri++) {
+      const hh = c[ri] / per / peak * 70;
+      if (hh <= 0) continue;
+      y -= hh;
+      h += `<rect class="c-${roleCol(ROLEORDER[ri])}${last ? ' now' : ''}" x="${b * 10 + 1}" y="${y.toFixed(2)}" width="8" height="${hh.toFixed(2)}"/>`;
+    }
+    const parts = ROLEORDER.map((r, ri) => c[ri] ? `${ROLENAME[r]} ${tfmt(c[ri] / per)}` : '').filter(Boolean).join(' · ');
+    h += `<rect class="hit" x="${b * 10}" y="0" width="10" height="72" data-tip="${esc(`${hhmm(start + b * binS)} · ${tfmt(tot[b])} ${kname.toLowerCase()}/min${last ? ' (this minute so far)' : ''}${parts ? '\n' + parts : ''}`)}"/>`;
+  });
+  h += `</svg><div class="tkaxis"><span>${hhmm(start)}</span><span>now</span></div>`;
+
+  // by agent: the lead and every agent the session had, finished ones too (they really spent it)
+  const agents = holdOrder('agents', T.agents, a => a.id, a => tokOf(a.v, k));
+  const top = Math.max(1, ...agents.map(a => tokOf(a.v, k)));
+  h += `<div class="sec">By agent · ${kname}</div><div class="tklist">`;
+  for (const a of agents.slice(0, S.tokAll ? agents.length : 12)) {
+    const col = roleCol(a.role), name = `${a.finished ? icon('i-done') : ''}<span>${esc(a.label)}</span>`;
+    h += `<div class="tkrow${a.id === S.sel ? ' sel' : ''}${a.finished ? ' fin' : ''}" data-tip="${esc(tokTip(a.label, a) + (a.finished ? '\nfinished' : ''))}">`
+      + (a.shown ? `<button class="nm c-${col}" data-select="${esc(a.id)}">${name}</button>` : `<span class="nm c-${col}">${name}</span>`)
+      + `${tkBar(tokOf(a.v, k) / top, col)}<span class="val">${tfmt(tokOf(a.v, k))}</span></div>`;
+  }
+  h += '</div>';
+  if (agents.length > 12) h += `<button class="linkbtn more" data-tkall="1">${S.tokAll ? 'show the top 12' : `+ ${agents.length - 12} more · show all`}</button>`;
+
+  // by WTS task: its own agents and the helpers they spawned
+  const rows = rowIndex(s), tasks = Object.entries(T.tasks || {}).map(([n, t]) => ({ n: +n, ...t, row: rows.get(+n) }));
+  if (tasks.length) {
+    const tl = holdOrder('tasks', tasks, t => t.n, t => tokOf(t.v, k)), ttop = Math.max(1, ...tl.map(t => tokOf(t.v, k)));
+    h += `<div class="sec">By task · ${kname}</div><div class="tklist">`;
+    for (const t of tl.slice(0, S.tokAll ? tl.length : 8)) {
+      const col = GROUPCOL[t.row?.group] || 'slate', ag = t.row?.agent;
+      const tip = `${t.n} · ${t.row?.title || ''}\n${t.agents} agent${t.agents === 1 ? '' : 's'}${tokTip('', { v: t.v })}`;
+      const inner = `<b class="c-${col}">${t.n}</b><span>${esc(t.row?.title || '')}</span>`;
+      h += `<div class="tkrow task" data-tip="${esc(tip)}">`
+        + (ag ? `<button class="nm" data-select="${esc(ag)}">${inner}</button>` : `<span class="nm">${inner}</span>`)
+        + `${tkBar(tokOf(t.v, k) / ttop, col)}<span class="val">${tfmt(tokOf(t.v, k))}</span></div>`;
+    }
+    h += '</div>';
+    if (tasks.length > 8 && !S.tokAll) h += `<button class="linkbtn more" data-tkall="1">+ ${tasks.length - 8} more · show all</button>`;
+  }
+  return h;
+}
+document.addEventListener('mouseover', e => { S.tokHold = !!e.target.closest('.tklist'); });   // rows hold still under the pointer
+
+const LIVEKIND = ['active', 'paused', 'parked', 'asks'];
+const GROUPCOL = { HP: ROLECOL.worker, MP: ROLECOL.mp, LP: ROLECOL.lp };   // the same colours as the agents on the graph
+// a group's mode (HP: the worker's state line; MP/LP: running, desk-only or paused) as an icon and a colour
+const modeLook = t => /running/i.test(t) ? ['i-run', 'green'] : /paus/i.test(t) ? ['i-park', 'amber'] : /desk/i.test(t) ? ['i-park', 'cyan']
+  : /stop/i.test(t) ? ['i-dead', 'red'] : ['i-wait', 'slate'];
 function wtsPanel(s) {
   const w = s.wts;
   if (!w) return `<div class="empty-note">${esc(s.project)} has no worker queue (.autopilot/worker/queue.md).</div>`;
@@ -1366,21 +1772,23 @@ function wtsPanel(s) {
   let h = `<div class="winrow ${win.held ? 'c-red' : 'c-green'}">${icon(win.held ? 'i-lock' : 'i-unlock')}<span class="w">${win.held
     ? `Window held by <b>${esc(shortWho(win.who))}</b> since ${hhmm(win.since, 1)} (${dur(now - (win.since || now))})${win.holder ? ' · ' + esc(nm(win.holder)) : ''}`
     : 'Window free'}${(win.waiters || []).length ? ' · waiting: ' + win.waiters.map(id => esc(nm(id))).join(', ') : ''}</span></div>`;
-  const counts = ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}">${g} ${(w.groups[g] || []).length}</a>`).join('');
+  const counts = ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${(w.groups[g] || []).length}</a>`).join('');
   h += `<div class="jump">${counts}</div>`;
   const cur = +((w.state_file || '').match(/running\s+(\d+)/) || [])[1];
   for (const g of ['HP', 'MP', 'LP']) {
     const rows = w.groups[g] || [];
     const runs = [...new Set(rows.map(r => r.runs_on))];
     const head = g === 'HP' ? (w.hp_line || '').replace(/^[^\w]+/, '') : ((w.modes || {})[g] === 'desk' ? 'desk-only' : (w.modes || {})[g] || 'running');
-    h += `<div class="gh" id="g-${g}">${g}<span class="gm">${esc(head)}${runs.length === 1 ? ' · ' + esc(runs[0]) : ''}</span></div>`;
+    const [mi, mc] = modeLook(head);
+    h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}">${icon(mi)}${esc(head || '—')}</span>${runs.length === 1 ? `<span class="gm">${esc(runs[0])}</span>` : ''}</div>`;
     if (!rows.length) h += '<div class="empty-note">empty</div>';
     for (const r of rows) {
       const [ri, rc] = ROWKIND[r.kind] || ROWKIND.other;
       const a = r.agent ? agents.get(r.agent) : null;
       const statusText = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '');
-      h += `<div class="wrow ${r.n === cur ? 'cur' : ''}${a ? ' bound' : ''}" ${a ? `data-select="${esc(a.id)}"` : ''} data-tip="${esc(r.task)}">
-        <span class="n">${r.n}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}">${icon(ri)}${esc(statusText)}</span>`;
+      const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
+      h += `<div class="wrow ${r.n === cur ? 'cur' : ''}${a ? ' bound' : ''}${live ? ` live c-${rc}` : ''}" ${a ? `data-select="${esc(a.id)}"` : ''} data-tip="${esc(r.task)}">
+        <span class="n">${r.n}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : ''}">${icon(ri)}${esc(statusText)}</span>`;
       if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
       if (a) {
         const [ai, ac] = STATUS[a.state.key] || STATUS.unknown;
@@ -1401,9 +1809,17 @@ function liveAlerts(m) {
   const now = Date.now() / 1000;
   return (m?.alerts || []).filter(a => !(dismissed[a.key + '|' + a.title] > now));
 }
+const sessAlerts = (m, s) => s ? liveAlerts(m).filter(a => a.session === s.id) : [];
+// a tab with nothing for this session (no queue, no alerts) is not shown; one that is gone falls back to Agent
+function tabsFor(s) {
+  const has = { agent: true, wts: !!s?.wts, alerts: !!S.model && sessAlerts(S.model, s).length > 0, tokens: !!s?.tokens?.n };
+  document.querySelectorAll('.tabs button').forEach(b => { b.hidden = !has[b.dataset.tab]; });
+  if (!has[S.tab]) S.tab = 'agent';
+  return has;
+}
 function alertsPanel() {
-  const m = S.model, list = liveAlerts(m);
-  const nDismissed = (m.alerts || []).length - list.length;
+  const m = S.model, list = sessAlerts(m, cur());
+  const nDismissed = (m.alerts || []).filter(a => a.session === S.sid).length - list.length;
   if (!list.length) return `<div class="empty-note">Nothing needs a look.${nDismissed ? ` (${nDismissed} dismissed)` : ''}</div>`;
   const ss = new Map((m.sessions || []).map(s => [s.id, s]));
   return list.map(a => {
@@ -1417,6 +1833,13 @@ function alertsPanel() {
 }
 
 $('panel').addEventListener('click', e => {
+  const k = e.target.closest('[data-tk],[data-tkall],[data-tktab]');
+  if (k) {
+    if (k.dataset.tk) { S.tokKind = k.dataset.tk; store.set('ccprobe.tokKind', S.tokKind); }
+    if (k.dataset.tkall) S.tokAll = !S.tokAll;
+    if (k.dataset.tktab) S.tab = 'tokens';
+    return renderPanel();
+  }
   const t = e.target.closest('[data-select],[data-dismiss],[data-snooze],[data-jump],[data-hide]');
   if (!t) return;
   if (t.dataset.hide) return hideAgents([t.dataset.hide]);
@@ -1425,6 +1848,7 @@ $('panel').addEventListener('click', e => {
   if (t.dataset.snooze) { dismissed[t.dataset.snooze] = Date.now() / 1000 + 3600; store.set('ccprobe.dismissed', dismissed); return render(); }
   if (t.dataset.sid && t.dataset.sid !== S.sid) selectSession(t.dataset.sid);
   unhideAgents([t.dataset.select]);   // asked to see it: put it back on the diagram
+  if ((cur()?.agents || []).find(a => a.id === t.dataset.select)?.finished) S.expandFinished = true;   // out of the chip
   S.sel = t.dataset.select;
   if (S.tab === 'alerts') S.tab = 'agent';
   render();
@@ -1507,7 +1931,7 @@ function showTip(anchor, text) {
 function hideTip() { clearTimeout(tipTimer); $('tip').hidden = true; S.tipAnchor = null; }
 document.addEventListener('mouseover', e => {
   const t = e.target.closest('[data-tip]');
-  if (t && !t.closest('#graph')) showTip(t, t.dataset.tip);
+  if (t && !t.closest('#graph') && !(t.id === 'tokChip' && !$('tokPop').hidden)) showTip(t, t.dataset.tip);   // no tip over its own popover
 });
 document.addEventListener('mouseout', e => { if (e.target.closest('[data-tip]')) hideTip(); });
 
@@ -1541,6 +1965,11 @@ document.addEventListener('click', e => {
     if (S.model) { if (k === 'motion') clearGraph(); render(); }
     return;
   }
+  const tp = $('tokPop');
+  if (e.target.closest('#tokChip')) { tp.hidden = !tp.hidden; hideTip(); renderTokPop(S.model); return; }
+  const ts = e.target.closest('[data-tksid]');
+  if (ts) { tp.hidden = true; selectSession(ts.dataset.tksid); S.tab = 'tokens'; renderPanel(); return; }
+  if (!tp.hidden && !e.target.closest('#tokPop')) tp.hidden = true;
   const pop = $('settings');
   if (e.target.closest('#gearBtn')) { pop.hidden = !pop.hidden; $('gearBtn').setAttribute('aria-expanded', String(!pop.hidden)); syncSettingsUi(); return; }
   if (!pop.hidden && !e.target.closest('#settings')) { pop.hidden = true; $('gearBtn').setAttribute('aria-expanded', 'false'); }
@@ -1569,13 +1998,13 @@ $('resetBtn').addEventListener('click', () => {
 // ---- keyboard ----
 document.addEventListener('keydown', e => {
   if (e.target.closest('input, textarea, select')) return;
-  if (e.key === 'Escape') { if (!$('settings').hidden) $('settings').hidden = true; else select('lead'); }
+  if (e.key === 'Escape') { if (!$('settings').hidden) $('settings').hidden = true; else if (!$('tokPop').hidden) $('tokPop').hidden = true; else select('lead'); }
   else if (e.key === 'f' || e.key === 'F') doFit();
   else if (e.key === 'h' || e.key === 'H' || e.key === 'Delete' || e.key === 'Backspace') {
     const s = cur(), n = s && S.sel !== 'lead' ? nodeById(s, S.sel) : null;
     if (canHide(n)) { e.preventDefault(); hideAgents([n.id]); }
   }
-  else if (e.key === '1' || e.key === '2' || e.key === '3') { S.tab = ['agent', 'wts', 'alerts'][+e.key - 1]; renderPanel(); }
+  else if (e.key.length === 1 && '1234'.includes(e.key)) { const t = ['agent', 'wts', 'alerts', 'tokens'][+e.key - 1]; if (tabsFor(cur())[t]) { S.tab = t; renderPanel(); } }
   else if (e.key === '[' || e.key === ']') {
     const ss = [...$('railList').children].map(b => b.dataset.sid); const i = ss.indexOf(S.sid);   // as shown
     if (ss.length) selectSession(ss[(i + (e.key === ']' ? 1 : -1) + ss.length) % ss.length]);
@@ -1631,6 +2060,6 @@ RAIL.set(settings.railW || RAIL.def, false); SIDE.set(settings.sideW || SIDE.def
 
 applyTheme();
 syncSettingsUi();
-const hashTab = (location.hash.match(/tab=(agent|wts|alerts)/) || [])[1];
+const hashTab = (location.hash.match(/tab=(agent|wts|alerts|tokens)/) || [])[1];
 if (hashTab) S.tab = hashTab;
 if (/\bpoll\b/.test(location.hash)) startPolling(); else connect();   // #poll: plain polling (headless checks, odd proxies)

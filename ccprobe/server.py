@@ -170,4 +170,5 @@ def run_collector(collector, interval):
 
     th = threading.Thread(target=loop, name="collector", daemon=True)
     th.start()
+    collector.books.start()
     return th

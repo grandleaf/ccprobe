@@ -9,6 +9,7 @@ import time
 
 from . import alerts as alerts_mod
 from . import sessions as sessions_mod
+from . import tokens as tokens_mod
 from . import wts as wts_mod
 from .agents import Transcript, agent_state, lead_state, read_meta
 from .redact import clip, redact
@@ -43,6 +44,7 @@ class Collector:
         self.stopping = False
         self.changed = threading.Event()
         self.last_error = None
+        self.books = tokens_mod.Books(os.path.join(sessions_mod.CLAUDE, "projects"))   # token counts, on their own thread
 
     # --- the tick -------------------------------------------------------------------------------------------
     def tick(self):
@@ -82,7 +84,7 @@ class Collector:
             "v": 1, "now": now,
             "server": {"version": VERSION, "started": self.started, "tick_ms": 0, "window_s": self.window_s,
                        "history_s": HISTORY_S, "error": self.last_error, "parser": dict(stats, unknown_types=unknown)},
-            "sessions": out, "alerts": alerts,
+            "sessions": out, "alerts": alerts, "tokens_today": self.books.today(),
         }
         # the change hash leaves out the clock, so an idle system pushes nothing new (audit minor 7)
         body = json.dumps({"s": out, "a": alerts}, sort_keys=True, default=str)
@@ -348,6 +350,9 @@ class Collector:
         if holder == "lead" and lead["state"]["key"] in ("waiting_user", "idle", "running", "thinking"):
             lead["holds_window"] = True
 
+        tok = self.session_tokens(s, cands, by_id, rows, now)
+        lead["tokens"] = tok.pop("lead_own", None)
+
         events = {}
         t0 = now - self.window_s
         if main:
@@ -362,7 +367,103 @@ class Collector:
             "started": (s.get("startedAt") or 0) / 1000, "tmux": s["tmux"], "perm_mode": main.perm_mode if main else None,
             "has_transcript": main is not None, "history_from": now - HISTORY_S,
             "lead": lead, "agents": agents, "edges": list(edges.values()), "messages": msgs, "events": events, "wts": wpub,
+            "tokens": tok,
         }
+
+    # --- token statistics -----------------------------------------------------------------------------------
+    def session_tokens(self, s, cands, by_id, rows, now):
+        """The session's token counts: the lead and every agent it ever had (not only those in view), by agent, by
+        WTS task and per minute by role. Each agent in view also gets its own figures (`tokens`)."""
+        main_path = s["transcript"]
+        self.books.want([main_path] + [c["path"] for c in cands])
+        day = tokens_mod.day_of(now)
+        nodes = [("lead", main_path, {}, None)] + [(c["id"], c["path"], c["meta"], c) for c in cands]
+        own_task = {}
+        for aid, _, meta, c in nodes[1:]:
+            n = _task_of_meta(meta, rows)
+            if n is not None:
+                own_task[aid] = n
+        task = dict(own_task)
+        for aid, _, meta, c in nodes[1:]:   # a helper an agent spawned works on that agent's task
+            if aid not in task and meta.get("parentAgentId") in own_task:
+                task[aid] = own_task[meta["parentAgentId"]]
+        total, today, replies, compactions, ready = [0, 0, 0, 0], [0, 0, 0, 0], 0, 0, True
+        per, tasks, minutes = [], {}, {}
+        lead_own = None
+        with self.books.lock:
+            for aid, path, meta, c in nodes:
+                L = self.books.get(path)
+                if L is None or not L.done:
+                    ready = False
+                if L is None or not L.replies:
+                    continue
+                v = list(L.total)
+                tokens_mod.add(total, v)
+                tokens_mod.add(today, L.days.get(day, [0, 0, 0, 0]))
+                replies += L.replies
+                compactions += L.compactions
+                a = by_id.get(aid)
+                role = "lead" if aid == "lead" else a["role"] if a else _role_of_meta(meta, rows)
+                own = {"v": v, "n": L.replies, "cx": L.compactions, "model": L.model}
+                if aid == "lead":
+                    lead_own = own
+                elif a:
+                    a["tokens"] = own
+                n = task.get(aid)
+                if n is not None:
+                    t = tasks.setdefault(n, {"v": [0, 0, 0, 0], "agents": 0})
+                    tokens_mod.add(t["v"], v)
+                    t["agents"] += 1
+                per.append({"id": aid, "label": "lead" if aid == "lead" else a["label"] if a else _label_of_meta(meta, rows, aid),
+                            "role": role, "task": n, "shown": aid == "lead" or bool(a),
+                            "finished": bool(a and a["finished"]) or (aid != "lead" and not a), **own})
+                ri = ROLES.index(role) if role in ROLES else ROLES.index("helper")
+                for m, mv in L.minutes.items():
+                    tokens_mod.add(minutes.setdefault((m, ri), [0, 0, 0, 0]), mv)
+        t0 = int((now - tokens_mod.SERIES_S) // 60 * 60)
+        # per minute and role: [minute, role, fresh in (input + cache write), cache read, output]
+        series = [[(m - t0) // 60, ri, v[0] + v[1], v[2], v[3]] for (m, ri), v in sorted(minutes.items()) if m >= t0 and any(v)]
+        return {"v": total, "today": today, "n": replies, "cx": compactions, "ready": ready, "agents": per,
+                "tasks": {str(k): v for k, v in tasks.items()}, "series": {"t0": t0, "roles": ROLES, "rows": series},
+                "lead_own": lead_own}
+
+
+ROLES = ["lead", "worker", "mp", "lp", "helper"]
+RE_HELPER_TASK = re.compile(r"^[a-z]+-?(\d{2,4})$", re.I)     # a helper named for its task: "adv129"
+
+
+def _task_of_meta(meta, rows):
+    """The WTS task an agent worked on, from its name ("hp129", "mp112", "adv129") or description ("Task 74: …")."""
+    name = meta.get("name") or ""
+    for rx, src in ((RE_NAME_TASK, name), (RE_TASK, meta.get("description") or ""), (RE_HELPER_TASK, name)):
+        m = rx.match(src)
+        if m and int(m.group(1)) in rows:
+            return int(m.group(1))
+    return None
+
+
+def _role_of_meta(meta, rows):
+    name = meta.get("name") or ""
+    if _is_worker_name(name):
+        return "worker"
+    m = RE_NAME_TASK.match(name) or RE_TASK.match(meta.get("description") or "")
+    row = rows.get(int(m.group(1))) if m else None
+    if row and row["group"] in ("MP", "LP"):
+        return row["group"].lower()
+    return "helper"
+
+
+def _label_of_meta(meta, rows, aid):
+    """The name an agent that is no longer in view goes by, as the graph would have shown it."""
+    name = meta.get("name") or ""
+    hp = RE_HP_NAME.match(name)
+    if hp:
+        return f"HP {int(hp.group(1))}"
+    role = _role_of_meta(meta, rows)
+    m = RE_NAME_TASK.match(name) or RE_TASK.match(meta.get("description") or "")
+    if role in ("mp", "lp") and m:
+        return f"{role.upper()} {int(m.group(1))}"
+    return name or _short_desc(meta.get("description")) or aid[:7]
 
 
 def _dur(s):

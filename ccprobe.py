@@ -56,6 +56,8 @@ def main():
 
     col = model.Collector(window_s=a.window, ctx_max=a.ctx_max)
     if a.once:
+        col.tick()              # learns which transcripts to count
+        col.books.step()        # counts them (a running server does this on its own thread)
         print(json.dumps(col.tick(), indent=1, default=str))
         return
 
