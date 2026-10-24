@@ -20,12 +20,14 @@ const clip = (s, n) => { s = String(s ?? ''); if (s.length <= n) return s; let c
 
 // ---- status vocabulary: one mapping, icons from the sprite (no emoji in the UI chrome) ----
 const STATUS = {
-  running: ['i-run', 'green'], thinking: ['i-think', 'cyan'], polling: ['i-wait', 'slate'], waiting_window: ['i-park', 'amber'],
+  running: ['i-run', 'green'], thinking: ['i-think', 'cyan'], polling: ['i-wait', 'slate'], waiting_window: ['i-window', 'amber'],
   ended: ['i-done', 'slate'], ended_bg: ['i-wait', 'slate'], stuck: ['i-stuck', 'amber'], dead: ['i-dead', 'red'],
-  waiting_user: ['i-ask', 'rose'], idle: ['i-done', 'slate'], shell: ['i-wait', 'slate'], unknown: ['i-wait', 'slate'], parked: ['i-park', 'amber'],
+  waiting_user: ['i-ask', 'rose'], idle: ['i-done', 'slate'], shell: ['i-wait', 'slate'], unknown: ['i-wait', 'slate'], parked: ['i-park', 'slate'],
 };
+// paused by hand (slate ⏸: stays so until someone resumes it) is not waiting (amber: it goes on by itself)
+const stLook = st => st.key === 'parked' && st.sub === 'hold' ? ['i-wait', 'amber'] : STATUS[st.key] || STATUS.unknown;
 const ROWKIND = {
-  active: ['i-run', 'green'], queued: ['i-wait', 'slate'], paused: ['i-park', 'amber'], parked: ['i-park', 'amber'],
+  active: ['i-run', 'green'], queued: ['i-wait', 'slate'], paused: ['i-park', 'slate'], parked: ['i-wait', 'amber'],
   asks: ['i-ask', 'rose'], done: ['i-done', 'green'], closed: ['i-done', 'slate'], other: ['i-wait', 'slate'],
 };
 // the hotter the colour, the higher the priority: HP rose, MP amber, LP green
@@ -188,11 +190,11 @@ function renderHeader(m, s) {
       ? `<span class="chip win held c-red" data-tip="${esc('Window held by ' + win.who)}">${icon('i-lock')}<span>Window: ${esc(shortWho(win.who))} · ${dur(m.now - (win.since || m.now))}</span></span>`
       : `<span class="chip win c-green">${icon('i-unlock')}<span>Window free</span></span>`;
     const hp = w.hp_line || '';
-    const [hi, hc] = /running/.test(hp) ? ['i-run', 'green'] : /PAUSED/i.test(hp) ? ['i-park', 'amber'] : /stopped/.test(hp) ? ['i-dead', 'slate'] : ['i-wait', 'slate'];
+    const [hi, hc] = modeLook(hp);
     h += `<span class="chip c-${hc}">${icon(hi)}HP ${esc(hp.replace(/^[^\w]+/, ''))}</span>`;
     for (const g of ['MP', 'LP']) {
       const mode = (w.modes || {})[g] || 'running';
-      const [i, c] = mode === 'running' ? ['i-run', 'green'] : mode === 'desk' ? ['i-park', 'slate'] : ['i-park', 'amber'];
+      const [i, c] = modeLook(mode);
       h += `<span class="chip c-${c}">${icon(i)}${g} ${mode === 'desk' ? 'desk-only' : esc(mode)}</span>`;
     }
     h += `<span class="chip c-${w.caffeinate ? 'green' : 'amber'}" data-tip="caffeinate keeps the Mac awake">${icon('i-cup')}${w.caffeinate ? 'awake' : 'may sleep'}</span>`;
@@ -567,7 +569,10 @@ function rowIndex(s) {
   if (w && w.groups) for (const g in w.groups) for (const r of w.groups[g]) m.set(r.n, Object.assign({ group: g }, r));
   return m;
 }
-const isParked = n => n.state.key === 'waiting_window' || (n.rowKind === 'paused' || n.rowKind === 'parked') && !['running', 'thinking', 'polling'].includes(n.state.key);
+const isParked = n => n.state.key === 'waiting_window' || n.state.key === 'parked' || (n.rowKind === 'paused' || n.rowKind === 'parked') && !['running', 'thinking', 'polling'].includes(n.state.key);
+// why a blocked agent is not working, as [icon, colour]
+const holdOf = n => n.state.key === 'waiting_window' ? STATUS.waiting_window
+  : n.state.key === 'parked' ? stLook(n.state) : n.rowKind === 'paused' ? STATUS.parked : ['i-wait', 'amber'];
 const radius = n => {
   const c = settings.compact;
   return n.role === 'lead' ? (c ? 40 : 52) : n.role === 'worker' ? (c ? 32 : 42) : (n.finished ? 22 : c ? 22 : 30);
@@ -1157,7 +1162,7 @@ function makeNode(id) {
 function updateNode(p, n, pos, now, nAlerts) {
   const { x, y, r } = pos;
   const st = n.state || { key: 'unknown', label: '?' };
-  const [sIcon, sCol] = STATUS[st.key] || STATUS.unknown;
+  const [sIcon, sCol] = stLook(st);
   const active = ['running', 'thinking', 'polling'].includes(st.key) || (n.role === 'lead' && !['waiting_user', 'idle', 'dead', 'shell'].includes(st.key));
   const col = n.role === 'lead' ? 'cyan' : ROLECOL[n.role] || 'violet';
   // blocked (paused, parked, waiting for or looping on the window): a dashed hex, at full strength
@@ -1169,8 +1174,11 @@ function updateNode(p, n, pos, now, nAlerts) {
   setA(p.flash, { points: hexPts(r + 3) });
   setA(p.arc, { r: r + 10, 'stroke-dasharray': `${(r * .9).toFixed(0)} ${(r * 7).toFixed(0)}` });
   p.arc.style.display = active ? '' : 'none';
-  // inner mark: the lead's star, a pause glyph when parked, a status icon otherwise
-  const markId = n.role === 'lead' ? 'i-lead' : isParked(n) ? 'i-park' : (st.key === 'dead' ? 'i-dead' : st.key === 'ended' ? 'i-done' : 'i-think');
+  // inner mark: the lead's star; when blocked, why (a window: waiting for it, ⏸: paused by hand, an hourglass: on hold)
+  // in that state's colour; a status icon otherwise
+  const hold = !n.finished && n.role !== 'lead' && isParked(n) ? holdOf(n) : null;
+  const markId = n.role === 'lead' ? 'i-lead' : hold ? hold[0] : (st.key === 'dead' ? 'i-dead' : st.key === 'ended' ? 'i-done' : 'i-think');
+  p.mark.setAttribute('class', hold ? `mark c-${hold[1]}` : 'mark');
   const ms = n.role === 'lead' ? r * .62 : r * .5;
   setA(p.mark, { href: '#' + markId, x: -ms / 2, y: -ms / 2, width: ms, height: ms });
   // context: the bar under the label only (no "almost full" pill or alert: the user's call)
@@ -1609,7 +1617,7 @@ function agentPanel(s, id) {
   const n = nodeById(s, id) || nodeById(s, 'lead');
   const isLead = id === 'lead' || !n.id || n.id === 'lead';
   const st = n.state || { key: 'unknown', label: '?' };
-  const [si, sc] = STATUS[st.key] || STATUS.unknown;
+  const [si, sc] = stLook(st);
   const col = isLead ? 'cyan' : ROLECOL[n.role] || 'violet';
   const pct = n.ctx_max ? n.ctx / n.ctx_max : 0, lvl = pct >= .9 ? 'crit' : pct >= .8 ? 'warn' : '';
   const row = !isLead && n.task != null ? rowIndex(s).get(n.task) : null;
@@ -1760,7 +1768,7 @@ document.addEventListener('mouseover', e => { S.tokHold = !!e.target.closest('.t
 const LIVEKIND = ['active', 'paused', 'parked', 'asks'];
 const GROUPCOL = { HP: ROLECOL.worker, MP: ROLECOL.mp, LP: ROLECOL.lp };   // the same colours as the agents on the graph
 // a group's mode (HP: the worker's state line; MP/LP: running, desk-only or paused) as an icon and a colour
-const modeLook = t => /running/i.test(t) ? ['i-run', 'green'] : /paus/i.test(t) ? ['i-park', 'amber'] : /desk/i.test(t) ? ['i-park', 'cyan']
+const modeLook = t => /running/i.test(t) ? ['i-run', 'green'] : /paus/i.test(t) ? ['i-park', 'slate'] : /desk/i.test(t) ? ['i-park', 'cyan']
   : /stop/i.test(t) ? ['i-dead', 'red'] : ['i-wait', 'slate'];
 function wtsPanel(s) {
   const w = s.wts;
@@ -1783,7 +1791,7 @@ function wtsPanel(s) {
     h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}">${icon(mi)}${esc(head || '—')}</span>${runs.length === 1 ? `<span class="gm">${esc(runs[0])}</span>` : ''}</div>`;
     if (!rows.length) h += '<div class="empty-note">empty</div>';
     for (const r of rows) {
-      const [ri, rc] = ROWKIND[r.kind] || ROWKIND.other;
+      const [ri, rc] = r.kind === 'parked' && /waiting for the window/i.test(r.status) ? STATUS.waiting_window : ROWKIND[r.kind] || ROWKIND.other;
       const a = r.agent ? agents.get(r.agent) : null;
       const statusText = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '');
       const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
@@ -1791,7 +1799,7 @@ function wtsPanel(s) {
         <span class="n">${r.n}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : ''}">${icon(ri)}${esc(statusText)}</span>`;
       if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
       if (a) {
-        const [ai, ac] = STATUS[a.state.key] || STATUS.unknown;
+        const [ai, ac] = stLook(a.state);
         const mismatch = (r.kind === 'active' && ['dead', 'stuck'].includes(a.state.key)) ||
           (r.kind === 'active' && a.state.key === 'ended' && now - a.state.since > 600) ||
           (['paused', 'parked'].includes(r.kind) && a.state.key === 'running' && !/window/.test(a.state.label));

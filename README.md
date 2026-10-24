@@ -45,7 +45,8 @@ What you see:
   by A–Z. The order is saved per project directory in this browser. Live reorders in the other modes wait while
   the pointer is over the list, and happen at most every 4 s.
 - **States** come from the transcripts (DESIGN.md §5.5): running a tool (for how long), thinking, quiet, stuck?, polling,
-  waiting for the window, holds the window, turn ended (waiting / done), idle or waiting for you (the lead: waiting for you only
+  waiting for the window (amber window icon: it goes on by itself), paused by hand (grey ⏸: until someone
+  resumes it), on hold for something else (amber hourglass), holds the window, turn ended (waiting / done), idle or waiting for you (the lead: waiting for you only
   when it asked you a question or left a plan for you to approve), dead.
 - **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
   its agent is actually doing, and amber marks a mismatch.

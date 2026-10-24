@@ -543,3 +543,9 @@ Verified with scripted checks (scratchpad `layout_test.py`, `stress_test.py`, `c
 - **Selection.** The selected (or keyboard-focused) hex fills with a tint of its own border colour (18% dark theme, 10%
   light) and its border thickens to 3; the outer selection ring is gone, so the busy arc (r + 10) never meets it.
   Dashed still means blocked, glow active, faded finished.
+- **Blocked, and why.** The dashed hex says an agent is blocked; the mark inside it (in the state's colour, not the
+  role's) and every status pill say why: an amber window for waiting for the window (it goes on by itself), an amber
+  hourglass for on hold (a "waiting …"/"hold" row that is not about the window; the agent's label is the row's own
+  words), a slate ⏸ for paused by hand (until someone resumes it). Paused groups (HP PAUSED, MP/LP paused) are slate
+  too, in the WTS headers and the top chips.
+

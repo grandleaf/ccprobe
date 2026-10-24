@@ -271,9 +271,14 @@ class Collector:
             if stop_t and tr.last_ts <= stop_t + 5 and st["key"] != "dead":   # nothing since the stop: it was not woken again
                 by = "the lead" if stopper == "lead" else (names.get(stopper) or "another agent")
                 st = {"key": "ended", "label": f"stopped by {by}", "since": stop_t, "detail": "", "sub": "stopped"}
-            # a row paused or parked on purpose: an agent that is not at work there is paused, whatever its last turn said
+            # a row paused or parked on purpose: an agent that is not at work there is paused (by hand) or on hold
+            # (waiting for something else), whatever its last turn said
             if row and row["kind"] in ("paused", "parked") and st["key"] in ("ended", "stuck", "unknown") and st.get("sub") != "stopped":
-                st = {"key": "parked", "label": "paused", "since": st["since"], "detail": "its row says so"}
+                if row["kind"] == "paused":
+                    st = {"key": "parked", "label": "paused", "since": st["since"], "detail": "its row says so", "sub": "paused"}
+                else:
+                    head = re.sub(r"^[^\w]+", "", row["status"]).split(":")[0].strip() or "on hold"
+                    st = {"key": "parked", "label": clip(head, 40), "since": st["since"], "detail": "its row says so", "sub": "hold"}
             if holder == aid and st["key"] in ("running", "polling", "waiting_window"):
                 st = dict(st, key="running", label="holds the window · " + _dur(now - (win.get("since") or now)))
             role = "worker" if aid == worker_id else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
