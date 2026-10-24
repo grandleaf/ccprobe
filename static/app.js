@@ -50,7 +50,7 @@ let hidden = store.get('ccprobe.hidden', {});          // agent id -> server tim
 
 // ---- page state ----
 const S = {
-  model: null, sid: store.get('ccprobe.sid', null), sel: 'lead', tab: 'agent', lastMsgAt: 0, conn: 'connecting',
+  model: null, sid: store.get('ccprobe.sid', null), sel: 'lead', tab: null, lastMsgAt: 0, conn: 'connecting',
   seen: new Set(), first: true, prevState: new Map(), userPanned: false, vb: null, fitVb: null, away: 0,
   notified: new Set(), expandFinished: false, nodes: new Map(), edges: new Map(), cards: new Map(), res: new Map(),
   pos: new Map(), order: [], pulses: [], raf: 0, panelHtml: '', authFailed: false,
@@ -510,7 +510,7 @@ $('railList').addEventListener('keydown', e => {
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.railDrag) { e.stopImmediatePropagation(); railDragEnd(false); } }, true);
 function selectSession(sid) {
   if (sid === S.sid) return;
-  S.sid = sid; store.set('ccprobe.sid', sid); S.sel = 'lead'; S.userPanned = false; S.expandFinished = false;
+  S.sid = sid; store.set('ccprobe.sid', sid); S.sel = 'lead'; S.tab = null; S.userPanned = false; S.expandFinished = false;   // a session opens on its first tab
   clearGraph(); render();
 }
 
@@ -802,7 +802,7 @@ function clearGraph() {
   for (const g of ['gEdges', 'gNodes', 'gTethers', 'gCards', 'gPulse']) $(g).textContent = '';
   S.nodes.clear(); S.edges.clear(); S.cards.clear(); S.res.clear(); S.pulses = []; S.prevState.clear();
   S.disp.clear(); S.leaving.clear(); S.vbD = null; S.fitVb = null; S.snapNext = true; S.prevCollapsed = new Set(); S.fadeUntil = 0;
-  $('hiddenBtn').hidden = $('clearBtn').hidden = true;   // renderGraph shows them again when they apply
+  $('hiddenBtn').hidden = $('clearBtn').hidden = $('finBtn').hidden = true;   // renderGraph shows them again when they apply
 }
 
 // ---- motion: renderGraph sets targets once per tick; one spring loop moves nodes, resources, cards and the view,
@@ -833,7 +833,7 @@ function opNow(o, now) {
 }
 const opStr = v => v >= .999 ? '1' : Math.max(0, v).toFixed(3);
 function put(e, a, v) { if (e['_' + a] !== v) { e['_' + a] = v; e.setAttribute(a, v); } }   // per-frame writes, cached
-// a node's or resource's target; a new one grows out of `from()` (its parent, or the finished chip)
+// a node's or resource's target; a new one grows out of `from()` (its parent, or the finished button)
 function target(id, x, y, kind, from) {
   let d = S.disp.get(id);
   if (!d) {
@@ -1009,10 +1009,16 @@ function reversePath(d) {
   for (const s of out.reverse()) r += ` ${s.t}${[...s.ctrl.slice().reverse(), s.from].map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}`;
   return r;
 }
-// a node that appears grows out of the finished chip (when it was folded there), else its parent, anchor or the lead
+// where the "N finished · show" button is, in graph units (null while it is hidden)
+function finAt() {
+  const b = $('finBtn'); if (b.hidden || !S.vb) return null;
+  const r = b.getBoundingClientRect();
+  return svgPoint({ clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 });
+}
+// a node that appears grows out of the finished button (when it was folded there), else its parent, anchor or the lead
 function enterFrom(n) {
   const at = id => { const d = S.disp.get(id); return d ? { x: d.x, y: d.y } : null; };
-  if (S.prevCollapsed.has(n.id)) return at('_fin');
+  if (S.prevCollapsed.has(n.id) && S.finFrom) return { x: S.finFrom.x, y: S.finFrom.y };
   return at(n.parent) || at(n.anchor) || at('lead');
 }
 
@@ -1022,7 +1028,9 @@ function renderGraph(s) {
   const { pos, res } = layout(nodes, s);
   S.pos = pos;   // the layout's targets; what is on screen is S.disp
   const nHidden = (s.agents || []).filter(a => a.id in hidden).length;
-  S.clearable = nodes.filter(n => !n.collapsed && canHide(n) && isDone(n)).map(n => n.id);   // what is drawn, not the chip's
+  S.clearable = nodes.filter(n => !n.collapsed && canHide(n) && isDone(n)).map(n => n.id);   // what is drawn, not the folded ones
+  S.finFrom = finAt();   // before it hides: unfolded agents grow out of it
+  $('finBtn').hidden = !res.collapsed.length; setT($('finN'), res.collapsed.length);
   $('hiddenBtn').hidden = !nHidden; setT($('hiddenN'), nHidden);
   $('clearBtn').hidden = !S.clearable.length; setT($('clearN'), S.clearable.length);
   $('tidyBtn').hidden = !S.canTidy;
@@ -1060,13 +1068,9 @@ function renderGraph(s) {
   bands.forEach((b, i) => { if (i + 1 < bands.length) S.chan.set(b, (ext.get(b).hi + ext.get(bands[i + 1]).lo) / 2); else S.chan.set(b, ext.get(b).hi + 40); });
   S.bands = bands;
 
-  // resources: the collapsed-finished chip, the HP queue and the window
+  // resources: the HP queue and the window (the folded finished agents are a button in the stage bar)
   const resSeen = new Set();
   const w = s.wts && !s.wts.error ? s.wts : null;
-  if (res.collapsed.length) {
-    resSeen.add('_fin');
-    boxes.push(drawChip({ x: pos.get('lead').x - 260, y: 110 }, `✓ ${res.collapsed.length} finished · show`));
-  }
   const worker = nodes.find(n => n.role === 'worker' && seen.has(n.id));
   if (w) {
     const hp = (w.groups.HP || []).filter(r => ['queued', 'active', 'paused', 'parked', 'asks', 'other'].includes(r.kind));
@@ -1089,8 +1093,8 @@ function renderGraph(s) {
     else if (!d.leaving) leave(d, 150, () => { r.g.remove(); S.res.delete(id); S.disp.delete(id); });
   }
 
-  // nodes on the way out: into the finished chip, or faded where they stand (quickly when you hid them)
-  const folded = new Set(res.collapsed.map(n => n.id));
+  // nodes on the way out: into the finished button, or faded where they stand (quickly when you hid them)
+  const folded = new Set(res.collapsed.map(n => n.id)), finPt = finAt();
   for (const [id, parts] of S.nodes) if (!seen.has(id)) {
     const d = S.disp.get(id);
     const drop = () => { parts.outer.remove(); S.nodes.delete(id); S.disp.delete(id); };
@@ -1100,8 +1104,8 @@ function renderGraph(s) {
     if (parts.g.contains(document.activeElement)) S.nodes.get('lead')?.g.focus({ preventScroll: true });
     if (S.tipAnchor && parts.outer.contains(S.tipAnchor)) hideTip();
     parts.outer.classList.add('leaving'); parts.outer.setAttribute('aria-hidden', 'true'); parts.g.setAttribute('tabindex', -1);
-    const chip = folded.has(id) && S.disp.get('_fin');
-    if (chip) { d.tx = chip.tx; d.ty = chip.ty; d.ts = .3; } else if (id in hidden) d.ts = .85;
+    const chip = folded.has(id) && finPt;
+    if (chip) { d.tx = chip.x; d.ty = chip.y; d.ts = .3; } else if (id in hidden) d.ts = .85;
     if (chip) leave(d, 400, drop, 150);   // seen flying in: it fades only on the last part of the way
     else leave(d, id in hidden ? 180 : 250, drop);
   }
@@ -1249,22 +1253,6 @@ function placeRes(id, p, ...rest) {
   const d = target(id, p.x, p.y, 'res');
   d.w = w; d.h = h; d.rr = Math.min(w, h) / 2 + 2;
   return { x: p.x - w / 2 - 8, y: p.y - h / 2 - 8, w: w + 16, h: h + 16 };
-}
-
-function drawChip(p, text) {
-  let r = S.res.get('_fin');
-  if (!r) {
-    const g = el('g', { class: 'chipnode', tabindex: 0, role: 'button' }, $('gNodes'));
-    r = { g, box: el('rect', { rx: 12 }, g), t: el('text', {}, g) };
-    g.addEventListener('click', () => { S.expandFinished = !S.expandFinished; render(); });
-    S.res.set('_fin', r);
-  }
-  const w = textW(text, 11.5) + 24;
-  setA(r.box, { x: -w / 2, y: -13, width: w, height: 26 });
-  setA(r.t, { x: -w / 2 + 12, y: 4 }); setT(r.t, text);
-  const d = target('_fin', p.x, p.y, 'res');
-  d.rr = 14; d.w = 0;
-  return { x: p.x - w / 2 - 6, y: p.y - 19, w: w + 12, h: 38 };
 }
 
 function edgePath(a, b, bend) {
@@ -1493,7 +1481,7 @@ $('graph').addEventListener('wheel', ev => {
 }, { passive: false });
 let drag = null;
 $('graph').addEventListener('pointerdown', ev => {
-  if (ev.target.closest('.node, .card, .chipnode') || !S.vb) return;
+  if (ev.target.closest('.node, .card') || !S.vb) return;
   drag = { x: ev.clientX, y: ev.clientY, vb: { ...S.vb }, moved: false };
   $('graph').setPointerCapture(ev.pointerId);
 });
@@ -1519,6 +1507,7 @@ $('graph').addEventListener('dblclick', ev => { if (!ev.target.closest('.node'))
 $('fitBtn').addEventListener('click', doFit);
 $('clearBtn').addEventListener('click', () => hideAgents(S.clearable || []));
 $('tidyBtn').addEventListener('click', () => { S.tidyNow = true; hideTip(); render(); });
+$('finBtn').addEventListener('click', () => { S.expandFinished = true; render(); });
 $('hiddenBtn').addEventListener('click', () => { const s = cur(); if (s && unhideAgents((s.agents || []).map(a => a.id))) render(); });
 function doFit() { S.userPanned = false; if (S.fitVb) vbTarget(S.fitVb); $('fitBtn').hidden = true; }
 
@@ -1531,23 +1520,26 @@ function queuePulse(m) {
   if (settings.motion === 'reduced') { e.path.classList.add('flashy'); setTimeout(() => { e.path.classList.remove('flashy'); e.path.setAttribute('class', e.cls); }, 400); return; }
   if (S.pulses.length >= 3) { S.pulses[S.pulses.length - 1].extra++; return; }
   const forward = m.from < m.to;   // the edge path runs from its first endpoint in the model; check by geometry below
-  const halo = el('circle', { r: 9, class: 'pulse-halo' }, $('gPulse'));
-  const dot = el('path', { d: 'M-6,-5L6,0L-6,5L-2.5,0Z', class: 'pulse' }, $('gPulse'));   // a chevron: direction reads even in a still frame
+  const halo = el('circle', { r: 0, class: 'pulse-halo' }, $('gPulse'));   // the glow: a radial gradient, no blur filter
+  const dot = el('circle', { r: 0, class: 'pulse' }, $('gPulse'));
   const fromPos = S.disp.get(m.from);   // as drawn now
   const L = e.path.getTotalLength(), p0 = e.path.getPointAtLength(0);
   const rev = fromPos ? Math.hypot(p0.x - fromPos.x, p0.y - fromPos.y) > Math.hypot(e.path.getPointAtLength(L).x - fromPos.x, e.path.getPointAtLength(L).y - fromPos.y) : !forward;
-  S.pulses.push({ e, dot, halo, t0: performance.now(), rev, extra: 0, ang: 0 });
+  S.pulses.push({ e, dot, halo, t0: performance.now(), rev, extra: 0 });
   kick();
 }
+// a glowing spot: it swells in at the sender (8%), travels (to 82%), then flares and fades at the receiver
+const PULSE_MS = 2400, PULSE_GO = .08, PULSE_AT = .82;
 function stepPulses(now) {
   S.pulses = S.pulses.filter(p => {
-    const k = Math.min((now - p.t0) / 1300, 1), ease = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    const k = Math.min((now - p.t0) / PULSE_MS, 1);
     if (!p.e.path.isConnected || k >= 1) { p.dot.remove(); p.halo.remove(); return false; }
-    const L = p.e.path.getTotalLength(), at = (p.rev ? 1 - ease : ease) * L, pt = p.e.path.getPointAtLength(at);
-    const ahead = p.e.path.getPointAtLength(Math.max(0, Math.min(L, at + (p.rev ? -2 : 2))));
-    if (Math.hypot(ahead.x - pt.x, ahead.y - pt.y) > .01) p.ang = Math.atan2(ahead.y - pt.y, ahead.x - pt.x) * 180 / Math.PI;
-    p.dot.setAttribute('transform', `translate(${pt.x.toFixed(1)},${pt.y.toFixed(1)}) rotate(${p.ang.toFixed(1)})`);
-    p.halo.setAttribute('cx', pt.x); p.halo.setAttribute('cy', pt.y);
+    const j = Math.min(1, Math.max(0, (k - PULSE_GO) / (PULSE_AT - PULSE_GO))), ease = j < .5 ? 2 * j * j : 1 - Math.pow(-2 * j + 2, 2) / 2;
+    const L = p.e.path.getTotalLength(), pt = p.e.path.getPointAtLength((p.rev ? 1 - ease : ease) * L);
+    const grow = Math.min(1, k / PULSE_GO), end = Math.max(0, (k - PULSE_AT) / (1 - PULSE_AT));
+    const breathe = 1 + .12 * Math.sin((now - p.t0) / 140);
+    setA(p.dot, { cx: pt.x.toFixed(1), cy: pt.y.toFixed(1), r: (5.5 * grow * (1 - end)).toFixed(2) });
+    setA(p.halo, { cx: pt.x.toFixed(1), cy: pt.y.toFixed(1), r: (20 * grow * breathe * (1 + end * .9)).toFixed(2), opacity: (1 - end).toFixed(3) });
     return true;
   });
 }
@@ -1818,11 +1810,12 @@ function liveAlerts(m) {
   return (m?.alerts || []).filter(a => !(dismissed[a.key + '|' + a.title] > now));
 }
 const sessAlerts = (m, s) => s ? liveAlerts(m).filter(a => a.session === s.id) : [];
-// a tab with nothing for this session (no queue, no alerts) is not shown; one that is gone falls back to Agent
+// a tab with nothing for this session (no queue, no alerts) is not shown; none chosen, or one that is gone, falls back to
+// the first one shown (WTS when there is a queue)
 function tabsFor(s) {
   const has = { agent: true, wts: !!s?.wts, alerts: !!S.model && sessAlerts(S.model, s).length > 0, tokens: !!s?.tokens?.n };
   document.querySelectorAll('.tabs button').forEach(b => { b.hidden = !has[b.dataset.tab]; });
-  if (!has[S.tab]) S.tab = 'agent';
+  if (!has[S.tab]) S.tab = has.wts ? 'wts' : 'agent';
   return has;
 }
 function alertsPanel() {
@@ -1856,9 +1849,9 @@ $('panel').addEventListener('click', e => {
   if (t.dataset.snooze) { dismissed[t.dataset.snooze] = Date.now() / 1000 + 3600; store.set('ccprobe.dismissed', dismissed); return render(); }
   if (t.dataset.sid && t.dataset.sid !== S.sid) selectSession(t.dataset.sid);
   unhideAgents([t.dataset.select]);   // asked to see it: put it back on the diagram
-  if ((cur()?.agents || []).find(a => a.id === t.dataset.select)?.finished) S.expandFinished = true;   // out of the chip
+  if ((cur()?.agents || []).find(a => a.id === t.dataset.select)?.finished) S.expandFinished = true;   // unfold them
   S.sel = t.dataset.select;
-  if (S.tab === 'alerts') S.tab = 'agent';
+  if (!S.tab || S.tab === 'alerts') S.tab = 'agent';
   render();
   const n = S.nodes.get(S.sel);
   if (n && settings.motion !== 'off') { n.flash.classList.remove('go'); void n.flash.getBBox(); n.flash.classList.add('go'); }
@@ -2012,7 +2005,9 @@ document.addEventListener('keydown', e => {
     const s = cur(), n = s && S.sel !== 'lead' ? nodeById(s, S.sel) : null;
     if (canHide(n)) { e.preventDefault(); hideAgents([n.id]); }
   }
-  else if (e.key.length === 1 && '1234'.includes(e.key)) { const t = ['agent', 'wts', 'alerts', 'tokens'][+e.key - 1]; if (tabsFor(cur())[t]) { S.tab = t; renderPanel(); } }
+  else if (e.key.length === 1 && '1234'.includes(e.key)) {   // the shown tabs, in order
+    tabsFor(cur()); const t = [...document.querySelectorAll('.tabs button:not([hidden])')][+e.key - 1]?.dataset.tab; if (t) { S.tab = t; renderPanel(); }
+  }
   else if (e.key === '[' || e.key === ']') {
     const ss = [...$('railList').children].map(b => b.dataset.sid); const i = ss.indexOf(S.sid);   // as shown
     if (ss.length) selectSession(ss[(i + (e.key === ']' ? 1 : -1) + ss.length) % ss.length]);

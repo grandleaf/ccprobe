@@ -18,7 +18,7 @@
   --text: #1b2440; --text-strong: #0b1020; --muted: #55607f; --dim: #8a93ab;
   --cyan: #0b74b0; --amber: #9a5f00; --violet: #6a3fc8; --green: #0f7a46; --rose: #c8325a; --slate: #5f6b88; --red: #c02626;
   --lift-shadow: 0 8px 24px rgb(20 30 60 / .18), 0 0 0 1px var(--cyan);
-  --node-fill: #ffffff; --sel-tint: 10%; --halo-op: .06; --pulse: var(--violet); --star: #b9c3da; --star-op: .7;
+  --node-fill: #ffffff; --sel-tint: 10%; --halo-op: .06; --pulse: #ffffff; --star: #b9c3da; --star-op: .7;
   --glow: none; --card-shadow: 0 1px 2px rgb(20 30 60 / .08), 0 4px 12px rgb(20 30 60 / .06);
   --crit-bg: #fdecee; --warn-bg: #fdf4e2; --info-bg: #eaf4fb;
 }
@@ -141,7 +141,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .lg { display: inline-block; width: 26px; height: 0; border-top: 2px dashed var(--amber); }
 .lg-msg { border-top-color: var(--violet); } .lg-spawn { border-top: 2px dashed var(--slate); } .lg-lock { border-top: 2.5px solid var(--red); }
 .lg-blocked { width: 14px; height: 14px; border: 2px dashed var(--muted); border-radius: 3px; }
-.lg-pulse { width: 11px; height: 10px; border: 0; background: var(--violet); clip-path: polygon(0 0, 100% 50%, 0 100%, 28% 50%); }
+.lg-pulse { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--violet); background: var(--pulse); box-shadow: 0 0 6px 2px color-mix(in srgb, var(--violet) 55%, transparent); }
 
 /* graph nodes */
 .node { cursor: pointer; outline: none; }
@@ -159,7 +159,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .node .flash { fill: none; stroke: var(--c); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center; }
 .node .flash.go { animation: flash .6s ease-out; }
 .node .lbl { fill: var(--text-strong); font-size: 14.5px; text-anchor: middle; font-family: var(--mono); }
-.node text, .res text, .chipnode text { paint-order: stroke; stroke: var(--bg); stroke-width: 3.5px; stroke-linejoin: round; }
+.node text, .res text { paint-order: stroke; stroke: var(--bg); stroke-width: 3.5px; stroke-linejoin: round; }
 .node .sub { fill: var(--muted); font-size: 11px; text-anchor: middle; font-family: var(--mono); }
 .node .stat { font-size: 11.5px; font-family: var(--mono); }
 .node .stat.k-running, .node .stat.k-thinking { fill: var(--green); }
@@ -186,8 +186,6 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .res text.h { fill: var(--c); font-size: 12.5px; }
 .res text.s { fill: var(--muted); font-size: 11px; }
 .res .ico { color: var(--c); }
-.chipnode rect { fill: var(--card); stroke: var(--line2); }
-.chipnode text { fill: var(--muted); font-size: 11.5px; font-family: var(--mono); }
 
 /* edges */
 .edge { fill: none; stroke: var(--slate); stroke-width: 1.2; stroke-dasharray: 2 7; opacity: .5; }
@@ -204,9 +202,12 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .node .lockm circle { fill: var(--card); stroke: var(--red); stroke-width: 1.4; }
 .node .lockm use { color: var(--red); }
 .elbl { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
-.pulse { fill: var(--pulse); stroke: var(--violet); stroke-width: 1.3; stroke-linejoin: round; }
+.pulse { fill: var(--pulse); stroke: var(--violet); stroke-width: 1.2; }
 .ah-task { fill: var(--amber); }
-.pulse-halo { fill: var(--violet); opacity: .3; }
+.pulse-halo { fill: url(#glow); }
+.glow0 { stop-color: var(--violet); stop-opacity: .75; }
+.glow1 { stop-color: var(--violet); stop-opacity: .3; }
+.glow2 { stop-color: var(--violet); stop-opacity: 0; }
 
 /* speech bubbles and tool cards */
 .card rect { fill: var(--card); stroke: var(--c); stroke-opacity: .6; stroke-width: 1.2; }

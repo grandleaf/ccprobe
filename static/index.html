@@ -82,6 +82,7 @@
         <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5"/></filter>
         <!-- task edges point at the agent doing the work -->
         <marker id="arrTask" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="ah-task" d="M0,0L10,5L0,10L3,5z"/></marker>
+        <radialGradient id="glow"><stop offset="0" class="glow0"/><stop offset=".45" class="glow1"/><stop offset="1" class="glow2"/></radialGradient>
       </defs>
       <g id="vp"><g id="gEdges"></g><g id="gNodes"></g><g id="gTethers"></g><g id="gCards"></g><g id="gPulse"></g></g>
     </svg>
@@ -91,6 +92,7 @@
       <button class="fitbtn" id="fitBtn" hidden><svg><use href="#i-fit"/></svg>Fit</button>
       <button class="fitbtn" id="tidyBtn" hidden data-tip="Close the gaps left by agents that went, and reorder to cut line crossings"><svg><use href="#i-tidy"/></svg>Tidy</button>
       <button class="fitbtn" id="clearBtn" hidden data-tip="Hide the finished and dead agents on the graph. Idle and paused agents stay; hide an idle one with its × or H."><svg><use href="#i-sweep"/></svg><span>Clear <span class="n" id="clearN"></span> done</span></button>
+      <button class="fitbtn" id="finBtn" hidden data-tip="Agents that finished more than 4 minutes ago are folded away; put them back on the diagram"><svg><use href="#i-done"/></svg><span><span class="n" id="finN"></span> finished · show</span></button>
       <button class="fitbtn" id="hiddenBtn" hidden data-tip="Put every agent you hid in this session back on the diagram"><svg><use href="#i-eye"/></svg><span><span class="n" id="hiddenN"></span> hidden · show</span></button>
     </div>
     <div class="empty" id="empty"><div class="skel"></div><div id="emptyText">Connecting to the ccprobe server…</div></div>
@@ -100,7 +102,7 @@
       <div><i class="lg lg-msg"></i>messages (hot when recent)</div>
       <div><i class="lg lg-spawn"></i>spawned by (a new agent's first 2 min, or the selected one)</div>
       <div><i class="lg lg-lock"></i>holds the window (its card is on the bottom shelf)</div>
-      <div><i class="lg lg-pulse"></i>message in transit (points its way)</div>
+      <div><i class="lg lg-pulse"></i>message in transit (a glowing spot)</div>
       <div><i class="lg lg-blocked"></i>dashed hex: blocked. Inside it, an amber window: waiting for the window (goes on by itself) · an amber hourglass: on hold · a grey ⏸: paused by hand (until resumed)</div>
     </details>
   </section>
@@ -108,8 +110,8 @@
        tabindex="0" data-tip="Drag to resize · double-click to reset"></div>
   <aside class="side">
     <nav class="tabs" role="tablist">
-      <button data-tab="agent" role="tab">Agent</button>
       <button data-tab="wts" role="tab">WTS</button>
+      <button data-tab="agent" role="tab">Agent</button>
       <button data-tab="alerts" role="tab">Alerts<span class="tcount" id="tabCount" hidden></span></button>
       <button data-tab="tokens" role="tab">Tokens</button>
     </nav>

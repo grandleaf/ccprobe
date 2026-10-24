@@ -310,7 +310,7 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
 
 ### 9.6 Motion (ui.md §5)
 - **Events animate:**
-  - a message pulse (1.3 s, at most 3 at a time, with a burst collapsed into `×N`);
+  - a message pulse (a glowing spot, 2.4 s: it swells in, travels, then flares at the receiver; at most 3 at a time, with a burst collapsed into `×N`);
   - a tool-card pop (150 ms) that fades out 8 s after the last call;
   - a state-change ring flash (600 ms);
   - node enter (300 ms).
@@ -528,7 +528,7 @@ Verified with scripted checks (scratchpad `layout_test.py`, `stress_test.py`, `c
 
 ## 18. A still view, smooth flow (2026-10-23)
 
-- **View hysteresis.** `fit(core, cards)` fits the graph's own boxes (agents and their labels, the finished chip, the
+- **View hysteresis.** `fit(core, cards)` fits the graph's own boxes (agents and their labels, the
   shelf); speech and tool cards are checked against it. The current view is kept while it still *serves*: every box
   is at least 8 px inside what the screen shows, the empty margins left/right (and top/bottom) differ by no more than
   40% of the view, and the zoom a fresh fit would pick is within 6%. Otherwise the view goes to the graph's own
