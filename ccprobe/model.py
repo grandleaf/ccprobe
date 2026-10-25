@@ -18,10 +18,11 @@ VERSION = "1.0.0"
 MAIN_BACKFILL, MAIN_MAX = 8 << 20, 64 << 20
 AGENT_BACKFILL, AGENT_MAX = 2 << 20, 32 << 20
 HISTORY_S = 2 * 3600            # how far back a transcript is read on first sight (time-based, capped in bytes)
-RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})\s*:")      # "Task 74: Part 5 rebuild" (anchored: audit minor 4)
+# "Task 74: Part 5 rebuild", "MP 141b: widgets", "HP 135 redo: …" (anchored at the start: audit minor 4)
+RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})[a-z]?\b[^:\n]{0,24}:")
 RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|task)(\d{1,4})$", re.I)    # meta.name "mp111"
 RE_HP_NAME = re.compile(r"^hp(\d{1,4})$", re.I)                      # the HP worker, one fresh agent per task: "hp154"
-RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})\s*:")                      # or, started without a name: "HP 163: smooth storm front"
+RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})[a-z]?\b[^:\n]{0,24}:")    # or, started without a name: "HP 163: …", "HP 135 redo: …"
 RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|task)\s*(\d{1,4})\b", re.I)
 HOT_S = 60
 DEAD_KEEP_S = 600
@@ -194,19 +195,20 @@ class Collector:
         for c in cands:
             if c["meta"].get("name"):
                 latest_by_name[c["meta"]["name"]] = c["id"]
-        # the HP worker: the agent named for the running HP task (or, started without a name, described as it), else the
-        # newest hp<N> (or a "worker" from before the skill named them by task); every other HP agent is retired
+        # the HP worker: the newest agent for the running HP task, named for it ("hp135") or, started without a name,
+        # described as it ("HP 135 redo: …"), so a redo replaces the first round's agent; else the newest hp<N> (or a
+        # "worker" from before the skill named them by task); every other HP agent is retired
         hp_running = None
         if wok:
             m = re.match(r"running\s+(\d+)", w.get("state_file") or "")
             hp_running = int(m.group(1)) if m else None
         worker_id = None
         if wok:
-            worker_id = latest_by_name.get(f"hp{hp_running}") if hp_running is not None else None
-            if not worker_id and hp_running is not None:
-                described = [c for c in cands if not c["meta"].get("name") and (c["meta"].get("spawnDepth") or 1) == 1
-                             and (mm := RE_HP_DESC.match(c["meta"].get("description") or "")) and int(mm.group(1)) == hp_running]
-                worker_id = described[-1]["id"] if described else None
+            if hp_running is not None:          # cands are oldest first: the last match is the newest
+                mine = [c for c in cands if c["meta"].get("name") == f"hp{hp_running}"
+                        or (not c["meta"].get("name") and (c["meta"].get("spawnDepth") or 1) == 1
+                            and (mm := RE_HP_DESC.match(c["meta"].get("description") or "")) and int(mm.group(1)) == hp_running)]
+                worker_id = mine[-1]["id"] if mine else None
             if not worker_id:
                 hp_named = [c for c in cands if _is_worker_name(c["meta"].get("name"))]
                 worker_id = hp_named[-1]["id"] if hp_named else None

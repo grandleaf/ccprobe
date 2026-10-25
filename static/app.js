@@ -1610,7 +1610,8 @@ function renderPanel() {
   else h = agentPanel(s, S.sel);
   if (h === S.panelHtml) return;
   // keep the reader's place: the section header at the top of the view stays where it was, and focus stays put
-  const pane = $('panel'), top = pane.scrollTop, py = pane.getBoundingClientRect().top, fk = document.activeElement?.dataset?.k;
+  const pane = $('panel'), top = pane.scrollTop, py = pane.getBoundingClientRect().top, fk = S.panelFocus || document.activeElement?.dataset?.k;
+  S.panelFocus = null;
   let anchor = null;
   if (top > 0) for (const el of pane.querySelectorAll('[data-k]')) { const y = el.getBoundingClientRect().top - py; if (y <= 1) anchor = { k: el.dataset.k, y }; else break; }
   pane.innerHTML = h; S.panelHtml = h; pane.scrollTop = top;
@@ -2000,9 +2001,11 @@ function alertsPanel() {
   const undo = S.alUndo?.sid === S.sid ? S.alUndo : null;
   // the header: counts by severity, then Clear (amber and info; red ones are dismissed one at a time) or, after it, Undo
   let h = '<div class="alhead">' + [['red', 'needs you'], ['amber', 'warn'], ['info', 'info']].filter(([v]) => n(v)).map(([v, w]) => `<span class="alsev ${v}">${n(v)} ${w}</span>`).join('');
-  if (undo) h += `<span class="alundo">${undo.n} cleared · <button data-alundo data-k="al-act">Undo</button></span>`;
-  else if (list.length) h += clearable ? `<button class="alclear" data-alclear data-k="al-act" data-tip="Hide the amber and info alerts until they change · red ones stay">Clear ${clearable}</button>`
-    : `<button class="alclear" data-alclear data-k="al-act" aria-disabled="true" data-tip="Red alerts are dismissed one at a time">Clear</button>`;
+  // Dismiss all (red ones too) shows only when there is a red one: without, Clear already takes everything
+  if (undo) h += `<span class="alundo">${undo.n} ${undo.verb} · <button data-alundo data-k="al-act">Undo</button></span>`;
+  else if (list.length) h += '<span class="alact">'
+    + (clearable ? `<button class="alclear" data-alclear data-k="al-act" data-tip="Hide the amber and info alerts until they change · red ones stay">Clear ${clearable}</button>` : '')
+    + (n('red') ? `<button class="alclear" data-alall data-k="al-all" data-tip="Dismiss every alert here, red ones too, until they change">Dismiss all</button>` : '') + '</span>';
   h += '</div>';
   if (!list.length) h += '<div class="empty-note">Nothing needs a look here.</div>';
   const foot = (nHidden ? `<div class="alfoot">${nHidden} hidden here · <button data-alshow>Show</button></div>` : '')
@@ -2019,14 +2022,14 @@ function alertsPanel() {
 }
 
 $('panel').addEventListener('click', e => {
-  const al = e.target.closest('[data-alclear],[data-alundo],[data-alshow],[data-alelse]');
+  const al = e.target.closest('[data-alclear],[data-alall],[data-alundo],[data-alshow],[data-alelse]');
   if (al) {
     if (al.hasAttribute('data-alelse')) return jumpWorstAlert();
-    if (al.hasAttribute('data-alclear')) {
-      if (al.getAttribute('aria-disabled') === 'true') return;
-      const these = sessAlerts(S.model, cur()).filter(a => a.sev !== 'red');
-      S.alUndo = { sid: S.sid, n: these.length, prev: these.map(a => [akey(a), dismissed[akey(a)]]) };
-      for (const a of these) dismissed[akey(a)] = CLEARED;
+    if (al.hasAttribute('data-alclear') || al.hasAttribute('data-alall')) {
+      const all = al.hasAttribute('data-alall'), these = sessAlerts(S.model, cur()).filter(a => all || a.sev !== 'red');
+      S.alUndo = { sid: S.sid, n: these.length, verb: all ? 'dismissed' : 'cleared', prev: these.map(a => [akey(a), dismissed[akey(a)]]) };
+      for (const a of these) dismissed[akey(a)] = all ? 1e12 : CLEARED;
+      S.panelFocus = 'al-act';   // Undo takes the place of whichever was pressed
     } else if (al.hasAttribute('data-alundo') && S.alUndo) {
       for (const [k, v] of S.alUndo.prev) { if (v === undefined) delete dismissed[k]; else dismissed[k] = v; }
       S.alUndo = null;

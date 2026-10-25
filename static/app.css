@@ -282,14 +282,13 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .wrow .ro { grid-column: 2 / 4; color: var(--dim); font-size: 11px; }
 
 /* alerts */
-.alhead { display: flex; align-items: center; gap: 10px; min-height: 24px; margin-bottom: 10px; font-size: 11.5px; color: var(--muted); }
+.alhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 24px; margin-bottom: 10px; font-size: 11.5px; color: var(--muted); }
 .alsev { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .alsev::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); }
 .alsev.red::before { background: var(--red); } .alsev.amber::before { background: var(--amber); }
-.alclear, .alundo { margin-left: auto; white-space: nowrap; }
+.alact, .alundo { margin-left: auto; white-space: nowrap; display: inline-flex; gap: 6px; align-items: center; }
 .alclear { padding: 2px 9px; border: 1px solid var(--line2); border-radius: 5px; color: var(--text); font-variant-numeric: tabular-nums; }
-.alclear:hover { border-color: var(--cyan); } .alclear[aria-disabled="true"] { opacity: .45; cursor: default; }
-.alclear[aria-disabled="true"]:hover { border-color: var(--line2); }
+.alclear:hover { border-color: var(--cyan); }
 .alundo button, .alfoot button { color: var(--cyan); }
 .alfoot { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
 .alert { border: 1px solid var(--line2); border-radius: 7px; padding: 9px 11px; margin-bottom: 8px; background: var(--info-bg); }

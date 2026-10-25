@@ -62,7 +62,8 @@ What you see:
 - **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
   severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,
-  are dismissed one at a time); **Undo** stays in its place until you leave the tab. "N hidden here · Show" brings
+  are dismissed one at a time, or all together with **Dismiss all**, which shows when there is a red one); **Undo**
+  stays in its place until you leave the tab. "N hidden here · Show" brings
   them back, and "N in other sessions →" goes to the worst one elsewhere. A hidden alert shows again once its problem
   has been gone for 2 minutes and comes back (stuck again, another question); a running time in its title ("silent
   12m") does not count as a change. Desktop notifications are opt-in (⚙).
