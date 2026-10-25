@@ -26,6 +26,10 @@ class Memory:
         return now - self.cond_since.setdefault(key, now)
 
 
+# a running time in a title ("stuck? silent 12m", "Bash past its timeout · 1h 5m"): left out of the alert's signature
+RE_DUR = re.compile(r"(?:\s*·)?\s*\b\d+(?:h \d+m|[hms])\b")
+
+
 def compute(sessions, now, mem):
     out, keys = [], set()
 
@@ -33,8 +37,9 @@ def compute(sessions, now, mem):
         if key in keys:              # two sessions in one project report its WTS once
             return
         keys.add(key)
-        out.append({"key": key, "sev": sev, "title": title, "detail": detail, "session": s["id"], "agent": agent,
-                    "project": s.get("project")})
+        # sig: the title without its running time, so hiding an alert lasts until it really changes
+        out.append({"key": key, "sev": sev, "title": title, "sig": RE_DUR.sub("", title).strip(), "detail": detail,
+                    "session": s["id"], "agent": agent, "project": s.get("project")})
 
     for s in sessions:
         lead = s.get("lead") or {}

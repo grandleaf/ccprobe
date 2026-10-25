@@ -480,8 +480,10 @@ methods, kept small:
 - **Incremental, mental-map preserving (DynaDAG; yFiles incremental hints; ELK semi-interactive):** each agent keeps its
   slot (remembered per session, by line of succession: the HP worker, or the agent name). A newcomer takes the free
   slot with the least cost: distance to its neighbours, plus 5 per row away, plus 2 per crossing it adds. A freed
-  slot stays reserved for 5 minutes. Gaps close, and swaps that remove 2+ crossings happen, only after 2 quiet
-  minutes, or on Tidy.
+  slot stays reserved for 2 minutes (5 for a slot with an heir: the HP worker's, a reused name's). Only after 2 quiet
+  minutes (no agent came or went), or on Tidy: gaps close (stepping around reserved slots), a helper away from the
+  agent it serves goes back under it if a slot there is free (tried at most once a minute), and swaps that remove 2+
+  crossings happen (at most every 5 minutes).
 - **Routing:** lines go from under the upper agent's labels to the top of the lower one (S-curves), dip into the
   channel for agents in the same row, and run down column gaps past rows in between. Parallel runs get lanes.
 
@@ -568,3 +570,18 @@ it out. What it is doing, what it was asked, what it reported, what it changed, 
   finished one leads with its Report, then files, trouble, task + Brief, a folded "Last tools", messages; the lead keeps
   its session, pane and permissions lines. Folds keep their state per agent (`S.open`), and the last choice per part
   is the default (`ccprobe.folds`). Rebuilds keep the header at the top of the view in place, and keep focus.
+
+## 20. Clearing alerts (2026-10-24)
+
+Laid out with a UI advisor.
+- **Signature.** Each alert carries `sig`: its title without running times (`alerts.RE_DUR`), so "stuck? silent 12m"
+  stays hidden as it ticks to 13m. Hidden alerts are stored as `ccprobe.dismissed[key|sig]` (1e12 dismissed, 2e12
+  cleared, or a snooze's end).
+- **Clear N** (the Alerts tab's header, with counts by severity): this session only, amber and info only; red alerts
+  need a decision each, so Clear is disabled when only red ones are left. One click, no confirm: **Undo** takes the
+  button's place, with no timer, until you leave the tab or session (the tab stays shown meanwhile).
+- **Until it changes.** `pruneDismissed` drops an entry once its alert has been absent for 120 s (and expired
+  snoozes), so a new occurrence (stuck again, a second question on the same row) shows again; per-card Dismiss
+  follows the same rule.
+- "N hidden here · Show" un-hides this session's alerts (the ⚙ reset still resets everything); "N in other sessions →"
+  does what the bell does.

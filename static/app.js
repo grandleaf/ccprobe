@@ -45,7 +45,9 @@ const reducedOS = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, compact: false, notify: false, railSort: 'attn', hideUnseen: false, allEdges: false },
   store.get('ccprobe.settings', {}));
 const saveSettings = () => store.set('ccprobe.settings', settings);
-let dismissed = store.get('ccprobe.dismissed', {});    // alert key+title -> until (epoch s; 1e12 = for good)
+let dismissed = store.get('ccprobe.dismissed', {});    // alert key|sig -> until (epoch s; 1e12 dismissed, 2e12 cleared)
+const CLEARED = 2e12;
+const akey = a => a.key + '|' + (a.sig ?? a.title);
 let hidden = store.get('ccprobe.hidden', {});          // agent id -> server time the user hid it from the diagram
 
 // ---- page state ----
@@ -53,7 +55,7 @@ const S = {
   model: null, sid: store.get('ccprobe.sid', null), sel: 'lead', tab: null, lastMsgAt: 0, conn: 'connecting',
   seen: new Set(), first: true, prevState: new Map(), userPanned: false, vb: null, fitVb: null, away: 0,
   notified: new Set(), expandFinished: false, nodes: new Map(), edges: new Map(), cards: new Map(), res: new Map(),
-  pos: new Map(), order: [], pulses: [], raf: 0, panelHtml: '', authFailed: false, det: null, open: {}, foldPref: store.get('ccprobe.folds', {}),
+  pos: new Map(), order: [], pulses: [], raf: 0, panelHtml: '', authFailed: false, det: null, open: {}, foldPref: store.get('ccprobe.folds', {}), gone: new Map(), alUndo: null,
   tokKind: store.get('ccprobe.tokKind', 'out'), tokAll: false, tokHold: false, tokOrder: { agents: [], tasks: [] },
 };
 
@@ -138,6 +140,7 @@ setInterval(updateConnPill, 1000);
 // ---- a new model ----
 function onModel(m) {
   S.model = m;
+  pruneDismissed(m);
   const ss = m.sessions || [];
   if (!ss.find(s => s.id === S.sid)) {
     const pick = ss.find(s => s.wts && s.status === 'busy') || ss.find(s => s.status === 'busy') || ss[0];
@@ -584,7 +587,11 @@ const radius = n => {
 // made incremental the way DynaDAG and yFiles' incremental mode are: what is on screen keeps its place, newcomers go
 // into the gap that suits them best, and a freed place stays free for a while. Tidying (closing gaps, swapping
 // neighbours to remove crossings) happens only at a quiet moment, or when you press Tidy.
-const LEAD_X = 550, COLW = 240, MAXC = 2, Y_AGENTS = 420, ROW_GAP = 270, GHOST_MS = 300000, QUIET_MS = 120000, REORDER_MS = 300000;
+const LEAD_X = 550, COLW = 240, MAXC = 2, Y_AGENTS = 420, ROW_GAP = 270, QUIET_MS = 120000, REORDER_MS = 300000;
+// how long a place stays free after its agent went: 2 minutes, or 5 for a place with an heir (the HP worker's, a reused
+// name's), so the next worker still lands where the last one was
+const GHOST_MS = 120000, HEIR_MS = 300000;
+const heirKey = k => k === 'worker' || k.startsWith('name:');
 // rows: the lead 0; then one grid of rows 1, 1.1, 1.2 … (five slots each, columns −2…2) at fixed heights, shared by
 // agents and helpers (a helper's place is under its anchor, one row down); finished 3; the shelf 4. Because every row
 // has a fixed height, a new row never pushes anything.
@@ -644,7 +651,7 @@ function crossings(E, at) {
 }
 // the grid: remembered slots first; then each newcomer takes the free slot that costs least (distance from the slot it
 // wants, 5 per row away from the row it wants, plus 2 per crossing it adds); the slots of agents that left stay
-// reserved for GHOST_MS
+// reserved for GHOST_MS (HEIR_MS when a successor may come)
 function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `slots` (id -> {sub, col}), which `at` reads
   const keyOf = new Map();
   for (const n of members.slice().sort((a, b) => (b.born || 0) - (a.born || 0))) {   // the newest of a line inherits
@@ -652,7 +659,7 @@ function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `
     keyOf.set(n.id, [...keyOf.values()].includes(k) ? n.id : k);
   }
   const present = new Set(keyOf.values());
-  for (const [k, e] of rm) if (!present.has(k) && now - e.seen > GHOST_MS) rm.delete(k);
+  for (const [k, e] of rm) if (!present.has(k) && now - e.seen > (heirKey(k) ? HEIR_MS : GHOST_MS)) rm.delete(k);
   const used = new Set();
   for (const n of members) {
     const e = rm.get(keyOf.get(n.id));
@@ -744,9 +751,9 @@ function layout(nodes, s) {
   };
   const g = placeRow(mem.agents, live, want, E, at, now, slot, isHelper);
 
-  // quiet-time upkeep: once nothing has come or gone for QUIET_MS, close the gaps within rows (after the reserved slots
-  // have lapsed) and, rarely, swap neighbours that remove 2+ crossings. Tidy does it all now, and puts helpers back
-  // under their anchors.
+  // quiet-time upkeep: once nothing has come or gone for QUIET_MS, close the gaps within rows (stepping around places
+  // still held for an agent that went), put a helper left away from the agent it serves back under it, and, rarely,
+  // swap neighbours that remove 2+ crossings. Tidy does it all now, held places included.
   const sig = live.map(n => n.id).sort().join();
   if (sig !== mem.sig) { mem.sig = sig; mem.since = now; }
   const quiet = now - mem.since > QUIET_MS, tidy = S.tidyNow;
@@ -758,6 +765,8 @@ function layout(nodes, s) {
   const underAgent = n => isHelper(n) && !isHelper(byId.get(n.anchor));
   const agentKeys = live.filter(n => !isHelper(n)).map(n => g.keyOf.get(n.id));
   const helperSlots = () => live.filter(isHelper).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean);
+  const isAstray = n => underAgent(n) && slot.has(n.anchor) && slot.has(n.id)
+    && (slot.get(n.id).sub !== slot.get(n.anchor).sub + 1 || Math.abs(slot.get(n.id).col - slot.get(n.anchor).col) > 1);
   if (tidy) {
     for (const k of reserved()) mem.agents.delete(k);
     // the agents close up first; then the helpers that serve one go back under it
@@ -765,7 +774,20 @@ function layout(nodes, s) {
     for (const n of hs) { mem.agents.delete(g.keyOf.get(n.id)); slot.delete(n.id); }
     compactRow(mem.agents, agentKeys, helperSlots()); sync();
     placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
-  } else if (quiet && !reserved().length) { compactRow(mem.agents, agentKeys, helperSlots()); sync(); }
+  } else if (quiet) {
+    compactRow(mem.agents, agentKeys, [...helperSlots(), ...reserved().map(k => mem.agents.get(k))]); sync();
+    // a stray helper goes back under its agent, one at a time, and only when a place there is free (else it stays put);
+    // tried at most once a minute, so a helper that cannot get there is not shuffled about
+    if (mem.lastHelpers === undefined || now - mem.lastHelpers > 60000) {
+      mem.lastHelpers = now;
+      for (const n of live.filter(isAstray)) {
+        const k = g.keyOf.get(n.id), old = mem.agents.get(k);
+        mem.agents.delete(k); slot.delete(n.id);
+        placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
+        if (isAstray(n)) { mem.agents.set(k, old); slot.set(n.id, { sub: old.sub, col: old.col }); }
+      }
+    }
+  }
   if (tidy || (quiet && now - mem.lastReorder > REORDER_MS)) {
     const saved = [...mem.agents.values()].map(e => [e, e.col]);
     const gain = untangleRow(mem.agents, g.keyOf, live, E, id => (sync(), at(id)));
@@ -778,7 +800,7 @@ function layout(nodes, s) {
   const rowsOf = new Map();
   for (const n of live) { if (isHelper(n)) continue; const v = slot.get(n.id); if (!rowsOf.has(v.sub)) rowsOf.set(v.sub, []); rowsOf.get(v.sub).push(v.col); }
   const gap = [...rowsOf.values()].some(c => Math.max(...c) - Math.min(...c) + 1 > c.length);
-  const astray = live.some(n => underAgent(n) && slot.has(n.anchor) && (slot.get(n.id).sub !== slot.get(n.anchor).sub + 1 || Math.abs(slot.get(n.id).col - slot.get(n.anchor).col) > 1));
+  const astray = live.some(isAstray);
   S.canTidy = gap || reserved().length > 0 || astray;
   const key = JSON.stringify([...mem.agents].map(([k, e]) => [k, e.sub, e.col]));
   if (key !== mem.savedKey) { mem.savedKey = key; saveMem(s.id, mem); }
@@ -1572,13 +1594,10 @@ function nodeTip(id) {
 }
 
 document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) { S.tab = b.dataset.tab; renderPanel(); } });
-$('alertBtn').addEventListener('click', () => {
-  const live = S.model ? liveAlerts(S.model) : [];
-  if (!sessAlerts(S.model, cur()).length) { const a = live.find(x => x.sev === 'red') || live[0]; if (a) selectSession(a.session); }
-  S.tab = 'alerts'; renderPanel();
-});
+$('alertBtn').addEventListener('click', jumpWorstAlert);
 
 function renderPanel() {
+  if (S.alUndo && (S.tab !== 'alerts' || S.alUndo.sid !== S.sid)) S.alUndo = null;   // Undo lasts while you stay on the tab
   tabsFor(cur());
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
   const s = cur();
@@ -1943,33 +1962,80 @@ function wtsPanel(s) {
 
 function liveAlerts(m) {
   const now = Date.now() / 1000;
-  return (m?.alerts || []).filter(a => !(dismissed[a.key + '|' + a.title] > now));
+  return (m?.alerts || []).filter(a => !(dismissed[akey(a)] > now));
+}
+// a hidden alert stays hidden while its condition holds; once it has been gone for 2 minutes the entry is dropped, so
+// the next time (stuck again, another question) it shows. Expired snoozes go too.
+function pruneDismissed(m) {
+  const now = Date.now() / 1000, live = new Set((m.alerts || []).map(a => a.key));
+  for (const k of live) S.gone.delete(k);
+  let changed = false;
+  for (const [k, until] of Object.entries(dismissed)) {
+    const key = k.slice(0, k.indexOf('|'));
+    if (!live.has(key) && !S.gone.has(key)) S.gone.set(key, now);
+    if (until <= now || (!live.has(key) && now - S.gone.get(key) >= 120)) { delete dismissed[k]; changed = true; }
+  }
+  if (changed) store.set('ccprobe.dismissed', dismissed);
+}
+// the bell, and "N in other sessions": the session with the worst alert, on its Alerts tab
+function jumpWorstAlert() {
+  const live = S.model ? liveAlerts(S.model) : [];
+  if (!sessAlerts(S.model, cur()).length) { const a = live.find(x => x.sev === 'red') || live[0]; if (a) selectSession(a.session); }
+  S.tab = 'alerts'; renderPanel();
 }
 const sessAlerts = (m, s) => s ? liveAlerts(m).filter(a => a.session === s.id) : [];
 // a tab with nothing for this session (no queue, no alerts) is not shown; none chosen, or one that is gone, falls back to
 // the first one shown (WTS when there is a queue)
 function tabsFor(s) {
-  const has = { agent: true, wts: !!s?.wts, alerts: !!S.model && sessAlerts(S.model, s).length > 0, tokens: !!s?.tokens?.n };
+  const has = { agent: true, wts: !!s?.wts, alerts: !!S.model && (sessAlerts(S.model, s).length > 0 || (S.alUndo?.sid === s?.id && S.tab === 'alerts')), tokens: !!s?.tokens?.n };
   document.querySelectorAll('.tabs button').forEach(b => { b.hidden = !has[b.dataset.tab]; });
   if (!has[S.tab]) S.tab = has.wts ? 'wts' : 'agent';
   return has;
 }
 function alertsPanel() {
   const m = S.model, list = sessAlerts(m, cur());
-  const nDismissed = (m.alerts || []).filter(a => a.session === S.sid).length - list.length;
-  if (!list.length) return `<div class="empty-note">Nothing needs a look.${nDismissed ? ` (${nDismissed} dismissed)` : ''}</div>`;
+  const nHidden = (m.alerts || []).filter(a => a.session === S.sid).length - list.length;
+  const elsewhere = liveAlerts(m).filter(a => a.session !== S.sid).length;
+  const n = sev => list.filter(a => a.sev === sev).length, clearable = list.length - n('red');
+  const undo = S.alUndo?.sid === S.sid ? S.alUndo : null;
+  // the header: counts by severity, then Clear (amber and info; red ones are dismissed one at a time) or, after it, Undo
+  let h = '<div class="alhead">' + [['red', 'needs you'], ['amber', 'warn'], ['info', 'info']].filter(([v]) => n(v)).map(([v, w]) => `<span class="alsev ${v}">${n(v)} ${w}</span>`).join('');
+  if (undo) h += `<span class="alundo">${undo.n} cleared · <button data-alundo data-k="al-act">Undo</button></span>`;
+  else if (list.length) h += clearable ? `<button class="alclear" data-alclear data-k="al-act" data-tip="Hide the amber and info alerts until they change · red ones stay">Clear ${clearable}</button>`
+    : `<button class="alclear" data-alclear data-k="al-act" aria-disabled="true" data-tip="Red alerts are dismissed one at a time">Clear</button>`;
+  h += '</div>';
+  if (!list.length) h += '<div class="empty-note">Nothing needs a look here.</div>';
+  const foot = (nHidden ? `<div class="alfoot">${nHidden} hidden here · <button data-alshow>Show</button></div>` : '')
+    + (elsewhere ? `<div class="alfoot"><button data-alelse>${elsewhere} in other session${elsewhere === 1 ? '' : 's'} →</button></div>` : '');
   const ss = new Map((m.sessions || []).map(s => [s.id, s]));
-  return list.map(a => {
+  return h + list.map(a => {
     const s = ss.get(a.session);
     const agentName = a.agent && s ? (a.agent === 'lead' ? 'lead' : (s.agents || []).find(x => x.id === a.agent)?.label) : null;
     return `<div class="alert ${a.sev}"><div class="at">${esc(a.title)}<span class="tm">since ${hhmm(a.since)}</span></div>
       <div class="ad">${esc(a.detail)}</div>
       <div class="aa"><span class="proj">${esc(a.project || '')}</span>${agentName ? `<button data-select="${esc(a.agent)}" data-sid="${esc(a.session)}">show ${esc(agentName)}</button>` : ''}
-      <button data-dismiss="${esc(a.key + '|' + a.title)}">Dismiss</button><button data-snooze="${esc(a.key + '|' + a.title)}">Snooze 1h</button></div></div>`;
-  }).join('') + (nDismissed ? `<div class="empty-note">${nDismissed} dismissed · reset in ⚙</div>` : '');
+      <button data-dismiss="${esc(akey(a))}">Dismiss</button><button data-snooze="${esc(akey(a))}">Snooze 1h</button></div></div>`;
+  }).join('') + foot;
 }
 
 $('panel').addEventListener('click', e => {
+  const al = e.target.closest('[data-alclear],[data-alundo],[data-alshow],[data-alelse]');
+  if (al) {
+    if (al.hasAttribute('data-alelse')) return jumpWorstAlert();
+    if (al.hasAttribute('data-alclear')) {
+      if (al.getAttribute('aria-disabled') === 'true') return;
+      const these = sessAlerts(S.model, cur()).filter(a => a.sev !== 'red');
+      S.alUndo = { sid: S.sid, n: these.length, prev: these.map(a => [akey(a), dismissed[akey(a)]]) };
+      for (const a of these) dismissed[akey(a)] = CLEARED;
+    } else if (al.hasAttribute('data-alundo') && S.alUndo) {
+      for (const [k, v] of S.alUndo.prev) { if (v === undefined) delete dismissed[k]; else dismissed[k] = v; }
+      S.alUndo = null;
+    } else if (al.hasAttribute('data-alshow')) {
+      for (const a of (S.model.alerts || []).filter(x => x.session === S.sid)) { delete dismissed[akey(a)]; delete dismissed[a.key + '|' + a.title]; }
+    }
+    store.set('ccprobe.dismissed', dismissed);
+    return render();
+  }
   const f = e.target.closest('[data-fold]');
   if (f) {
     const id = S.sel === 'lead' || !S.sel ? 'lead' : S.sel, part = f.dataset.fold, v = !isOpen(id, part, false);
@@ -2083,7 +2149,7 @@ function notify(m) {
     const red = a.sev === 'red' || a.key.startsWith('asks:');
     if (!red || S.notified.has(a.key)) continue;
     S.notified.add(a.key);
-    if (S.first || !settings.notify || !document.hidden || dismissed[a.key + '|' + a.title] > Date.now() / 1000) continue;
+    if (S.first || !settings.notify || !document.hidden || dismissed[akey(a)] > Date.now() / 1000) continue;
     try { if (Notification.permission === 'granted') new Notification(`ccprobe · ${a.project || ''}`, { body: a.title, tag: a.key }); } catch (e) { /* no notifications here */ }
   }
   const live = new Set((m.alerts || []).map(a => a.key));

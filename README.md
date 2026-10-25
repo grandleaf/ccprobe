@@ -15,8 +15,10 @@ What you see:
   its place. A new agent goes to the free place nearest the agents it works with (a helper under the agent it serves),
   chosen so it adds the fewest crossing lines. A blocked agent stays where it is with a dashed outline. A fresh HP
   worker takes the previous worker's place, and a reused name takes its predecessor's. When an agent leaves, its place
-  stays free for 5 minutes. After that, once nothing has changed for 2 minutes, the row closes up; neighbours that
-  would remove 2+ crossings are swapped at most every 5 minutes. **Tidy** (top right, shown when there is something to
+  stays free for 2 minutes (5 for the HP worker's or a reused name's place, so the successor lands there). Once no
+  agent has come or gone for 2 minutes, the rows close up around places still held, a helper left away from the agent
+  it serves goes back under it (when a place there is free), and neighbours that would remove 2+ crossings are swapped
+  at most every 5 minutes. **Tidy** (top right, shown when there is something to
   tidy) does it all at once. Places survive a reload. The view itself stays put while everything is on screen: a speech
   or tool card that appears (it takes a free spot inside the view when there is one) moves the view only if it would
   stick out, or if the empty space would pile up on one side (the margins differ by more than 40% of the view).
@@ -58,8 +60,12 @@ What you see:
 - **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
   its agent is actually doing, and amber marks a mismatch.
 - **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
-  stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. Desktop
-  notifications are opt-in (⚙).
+  stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
+  severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,
+  are dismissed one at a time); **Undo** stays in its place until you leave the tab. "N hidden here · Show" brings
+  them back, and "N in other sessions →" goes to the worst one elsewhere. A hidden alert shows again once its problem
+  has been gone for 2 minutes and comes back (stuck again, another question); a running time in its title ("silent
+  12m") does not count as a change. Desktop notifications are opt-in (⚙).
 - **Tokens tab** (key `4`). Every API reply of the session counted once, over its whole life: the lead and every agent it
   ever had, not only those on the graph. Three tiles: **Output** (what the models wrote, thinking included), **Fresh in**
   (input + cache writes) and **Cache read** (the context read again on every reply, usually 95%+ of all tokens). Click
