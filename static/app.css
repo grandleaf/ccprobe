@@ -362,6 +362,45 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .tkbar { display: block; width: 100%; height: 6px; }
 .tkbar .bg { fill: var(--line); } .tkbar .fg { fill: var(--c); }
 :root[data-theme="light"] .tkrow.fin .tkbar { opacity: .7; }
+/* the agent panel: Now, folds (Brief, Report), files changed, trouble chips */
+.pmeta.tight { margin-bottom: 2px; }
+.sech { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.sech .fm, .fm { text-transform: none; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.fold { width: 100%; text-align: left; align-items: center; min-height: 22px; }
+.fold:hover { color: var(--text); }
+.fold > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
+.fold .chev { width: 10px; height: 10px; flex: none; }
+.fold[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.now { border-left: 2px solid var(--c); padding: 2px 0 2px 10px; }
+.nowh { color: var(--text-strong); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.nowh.c-amber { color: var(--amber); } .nowh svg { width: 12px; height: 12px; vertical-align: -1px; }
+.nowsub { color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.cmd { margin-top: 5px; padding: 3px 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; font-size: 11.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.clamp3, .clamp8 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.clamp3 { -webkit-line-clamp: 3; } .clamp8 { -webkit-line-clamp: 8; }
+.pv, .boiler { color: var(--dim); }
+.job { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 6px; align-items: center; color: var(--muted); margin-top: 4px; }
+.job svg { width: 11px; height: 11px; } .job span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trouble { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+.tchip { border: 1px solid var(--line2); border-radius: 4px; padding: 0 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tchip b { color: var(--text-strong); font-weight: 500; }
+.tchip.warn { border-color: color-mix(in srgb, var(--amber) 45%, var(--line2)); } .tchip.warn b { color: var(--amber); }
+.terr { color: var(--dim); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
+.prose { border-left: 2px solid var(--line2); padding: 2px 0 2px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prose .h { color: var(--text-strong); font-weight: 600; } .prose code { color: var(--text-strong); }
+.more { display: block; margin: 3px 0 0 12px; font-size: 11.5px; }
+.ctxl { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.ctxl .tkline, .pmeta .tkline { display: inline; margin: 0; }
+.taskcell.one { padding: 5px 10px; } .taskcell .pmeta { margin-bottom: 0; }
+.flist { font-variant-numeric: tabular-nums; }
+.fl { display: grid; grid-template-columns: minmax(0, 1fr) 3ch 5ch 5ch 5ch; gap: 0 8px; padding: 3px 0; border-bottom: 1px dashed var(--line); text-align: right; }
+.fl .p { display: flex; min-width: 0; text-align: left; white-space: nowrap; }   /* the folder gives way first: the name stays readable */
+.fl .p .d { color: var(--dim); overflow: hidden; text-overflow: ellipsis; flex: 0 1000 auto; min-width: 1ch; }
+.fl .p b { font-weight: 400; color: var(--text); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 3ch; }
+.add { color: var(--green); } .rm { color: color-mix(in srgb, var(--red) 70%, var(--muted)); } .fl .z { color: var(--dim); }
+.fl.seen, .fl.seen * { color: var(--dim); }
+.ev .a.desc { color: var(--text); }
+.ev.fail .a svg { width: 10px; height: 10px; color: var(--amber); vertical-align: -1px; margin-right: 4px; }
 .tkline { display: block; margin: -6px 0 12px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: left; }
 .tkline b { color: var(--text-strong); font-weight: 600; }
 .tkline:hover { color: var(--text); }

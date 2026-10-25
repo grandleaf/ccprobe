@@ -15,6 +15,7 @@ from .redact import clip, redact
 from .tail import Tailer
 
 RE_NOTIFY_ID = re.compile(r"<tool-use-id>(toolu_[A-Za-z0-9_]+)</tool-use-id>")
+RE_TASK_ID = re.compile(r"<task-id>([A-Za-z0-9_-]+)</task-id>")
 RE_QSTATE = re.compile(r"queue\.py\b[^|;&\n]*?\bstate\s+(\d+)\s+--text\s+[\"']([^\"'`]{0,80})")
 RE_POLL = re.compile(r"\b(until|while)\b")
 # `echo "art-advisor round0 captures $(date)" > .autopilot/app.lock/who`: the literal part names the lock holder
@@ -44,9 +45,29 @@ def first_line(text, n=200):
     return ""
 
 
+RE_CD = re.compile(r"^\s*cd\s+(?:\"[^\"]*\"|'[^']*'|\S+)\s*(?:&&|;)\s*")
+RE_TMP = re.compile(r"/private/tmp/claude-\d+/[^/\s\"']+/[0-9a-f-]{36}/")
+
+
+def clean_cmd(cmd, n=600):
+    """A command as a person reads it: no leading `cd <project>;`, no per-session temp prefix, home as ~."""
+    c = str(cmd)
+    while True:
+        c2 = RE_CD.sub("", c, count=1)
+        if c2 == c:
+            break
+        c = c2
+    c = RE_TMP.sub("…/", c).replace(HOME, "~")
+    return clip(redact(c.strip()), n)
+
+
 def tool_arg(name, inp):
     if not isinstance(inp, dict):
         return ""
+    if name == "Bash" and str(inp.get("description") or "").strip():
+        return clip(RE_TMP.sub("…/", redact(" ".join(str(inp["description"]).split()))).replace(HOME, "~"), 110)   # its own words beat the raw command
+    if name == "Bash":
+        return clip(" ".join(clean_cmd(inp.get("command") or "", 400).split()), 110)
     if name == "SendMessage":
         a = inp.get("summary") or inp.get("message") or ""
     elif name == "Agent":
@@ -54,7 +75,23 @@ def tool_arg(name, inp):
     else:
         a = (inp.get("command") or inp.get("file_path") or inp.get("description") or inp.get("pattern")
              or inp.get("url") or inp.get("query") or inp.get("prompt") or "")
-    return clip(redact(" ".join(str(a).split())).replace(HOME, "~"), 110)
+    return clip(RE_TMP.sub("…/", redact(" ".join(str(a).split()))).replace(HOME, "~"), 110)
+
+
+def _err_line(content, ids):
+    """The first telling line of a failed tool result ("Exit code 1" alone says little: take the line after it too)."""
+    texts = [_text_of(c.get("content")) for c in content if isinstance(c, dict) and c.get("tool_use_id") in ids] if isinstance(content, list) else []
+    lines = [ln.strip() for ln in re.sub(r"</?[a-z_]+>", "", "\n".join(texts)).splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    head = re.sub(r"^Error:\s*", "", lines[0])
+    tb = next((i for i, ln in enumerate(lines) if ln.startswith("Traceback")), None)
+    if tb is not None and len(lines) > tb + 1:      # a Python failure: its last line says what went wrong
+        lines = [lines[0], lines[-1]] if tb else [lines[-1]]
+        head = re.sub(r"^Error:\s*", "", lines[0])
+    if re.fullmatch(r"Exit code \d+", head) and len(lines) > 1:
+        head += " · " + lines[1]
+    return clip(redact(head).replace(HOME, "~"), 200)
 
 
 def _text_of(content):
@@ -91,6 +128,21 @@ class Transcript:
         self.title = None
         self.perm_mode = None
         self.unknown = collections.Counter()
+        # the agent panel's detail (served on demand, not in the model): see detail()
+        self.path = path
+        self.cwd = self.branch = self.effort = None
+        self.report = None                     # {t, text}: its latest hand-back
+        self.rounds = 0                        # hand-backs in view
+        self.files = {}                        # path -> {n, add, del, t, own}
+        self.more_files = 0                    # changed files a diff only counted (moreFiles)
+        self.errors = self.denials = 0
+        self.last_error = None                 # {t, text}
+        self.cmds = collections.Counter()      # normalised Bash command -> times run
+        self.repeat = None                     # {n, what}: the most repeated command
+        self.bg_desc = {}                      # background tool_use_id -> what it is
+        self.bg_task = {}                      # background task id -> tool_use_id
+        self.history = collections.deque(maxlen=14)   # recent tools with their full command, for the panel
+        self._brief = False                    # not read yet (the head of the file, once)
 
     def update(self):
         entries = self.tail.read()
@@ -113,6 +165,11 @@ class Transcript:
     def apply(self, d):
         typ = d.get("type")
         t = ts_of(d) or self.last_ts or time.time()
+        if typ in ("user", "assistant"):
+            self.cwd = d.get("cwd") or self.cwd
+            self.branch = d.get("gitBranch") or self.branch
+            if typ == "assistant" and d.get("effort"):
+                self.effort = d["effort"]
         if typ == "api-request":
             self.last_activity = max(self.last_activity, t)
         elif typ == "assistant":
@@ -172,8 +229,11 @@ class Transcript:
     def _tool_use(self, c, t):
         name, inp, tid = c.get("name") or "?", c.get("input") or {}, c.get("id")
         arg = tool_arg(name, inp)
+        said = bool(name == "Bash" and str(inp.get("description") or "").strip())   # arg is its own words, not the command
         self.events.append((t, name))
         if name == "SubagentHandback":
+            self.rounds += 1
+            self.report = {"t": t, "text": clip(redact(str(inp.get("message") or "")).replace(HOME, "~"), 2400)}
             if tid:
                 self.handbacks.add(tid)
             self.messages.append({"t": t, "kind": "handback", "to": None, "to_id": None,
@@ -183,10 +243,21 @@ class Transcript:
         cmd = str(inp.get("command") or "") if name == "Bash" else ""
         bg = name == "Bash" and inp.get("run_in_background") in (True, "true")
         if tid and not bg:
-            self.pending[tid] = {"name": name, "arg": arg, "cmd": cmd[:4000], "t": t,
+            self.pending[tid] = {"name": name, "arg": arg, "cmd": cmd[:4000], "t": t, "file": str(inp.get("file_path") or ""), "d": said,
                                  "timeout": _num(inp.get("timeout"), 120000) / 1000 if name == "Bash" else None}
         if bg and tid:
             self.bg_pending[tid] = t
+            self.bg_desc[tid] = arg
+        if cmd:
+            key = " ".join(cmd.split())[:2000]
+            if len(self.cmds) > 400:
+                self.cmds.clear()
+                self.repeat = None
+            self.cmds[key] += 1
+            if self.cmds[key] >= 3 and (not self.repeat or self.cmds[key] >= self.repeat["n"]):
+                self.repeat = {"n": self.cmds[key], "what": arg}
+        if name not in ("SendMessage", "SubagentHandback"):
+            self.history.append({"t": t, "tool": name, "arg": arg, "d": said, "cmd": clean_cmd(cmd, 500) if cmd else "", "id": tid})
         if name == "TaskStop" and inp.get("task_id"):
             self.stops[str(inp["task_id"])] = t
             if tid in self.pending:
@@ -213,12 +284,15 @@ class Transcript:
             return
         ids = d.get("_result_ids")
         errs = set()
+        failed = set()                         # is_error only: the "Error" text sniff below is for queue rows, not the panel
         if ids is None:
             ids = []
             if isinstance(content, list):
                 for c in content:
                     if isinstance(c, dict) and c.get("type") == "tool_result":
                         ids.append(c.get("tool_use_id"))
+                        if c.get("is_error"):
+                            failed.add(c.get("tool_use_id"))
                         if c.get("is_error") or "Error" in _text_of(c.get("content"))[:200]:
                             errs.add(c.get("tool_use_id"))
             elif isinstance(content, str) and content.strip() and not d.get("isMeta"):
@@ -231,6 +305,19 @@ class Transcript:
                 self.last_kind = "user"          # a prompt typed into this session
         known = [i for i in ids if i in self.pending]
         res = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
+        if failed:
+            if (d.get("permissionDecision") or {}).get("decision") == "reject":
+                self.denials += len(failed)
+            else:
+                self.errors += len(failed)
+                self.last_error = {"t": t, "text": _err_line(content, failed)}
+            for h in self.history:
+                if h["id"] in failed:
+                    h["err"] = True
+        if res:
+            self._changes(res, self.pending.get(ids[0]) if len(ids) == 1 else None, t)
+            if res.get("backgroundTaskId") and len(ids) == 1:
+                self.bg_task[str(res["backgroundTaskId"])] = ids[0]
         for i in known:
             p = self.pending.pop(i)
             if p.get("stop") and i in errs:
@@ -252,11 +339,98 @@ class Transcript:
 
     def _received(self, origin, text, t):
         kind = origin.get("kind")
-        for tid in RE_NOTIFY_ID.findall(text):
+        for tid in RE_NOTIFY_ID.findall(text) + [self.bg_task.pop(k) for k in RE_TASK_ID.findall(text) if k in self.bg_task]:
             self.bg_pending.pop(tid, None)
+            self.bg_desc.pop(tid, None)
         self.received.append({"t": t, "kind": kind, "from": origin.get("from"), "sender": origin.get("senderTaskId"),
                               "handback": bool(origin.get("handback"))})
         self.last_kind = "received"
+
+    def _changes(self, res, p, t):
+        """Files this call changed: an Edit/Write result, or the diff Claude Code records for a Bash command."""
+        def add(path, plus, minus, own):
+            if not path:
+                return
+            f = self.files.get(path)
+            if f is None:
+                if len(self.files) >= 200:
+                    return
+                f = self.files[path] = {"n": 0, "add": 0, "del": 0, "t": t, "own": False}
+            f["n"] += 1; f["add"] += plus; f["del"] += minus; f["t"] = t
+            f["own"] = f["own"] or own
+
+        def count(hunks):
+            plus = minus = 0
+            for h in hunks or []:
+                for line in (h.get("lines") or []) if isinstance(h, dict) else []:
+                    if line[:1] == "+":
+                        plus += 1
+                    elif line[:1] == "-":
+                        minus += 1
+            return plus, minus
+
+        name = (p or {}).get("name")
+        if name in ("Edit", "MultiEdit", "Write", "NotebookEdit") and res.get("filePath"):
+            plus, minus = count(res.get("structuredPatch"))
+            if res.get("type") == "create" and not plus:
+                plus = len(str(res.get("content") or "").splitlines())
+            add(res["filePath"], plus, minus, True)
+        b = res.get("bashEditDiff")
+        if isinstance(b, dict):
+            cmd = (p or {}).get("cmd") or ""
+            for f in b.get("files") or []:
+                if isinstance(f, dict) and f.get("filePath"):
+                    path = str(f["filePath"])
+                    # a shared tree's diff carries other agents' edits too: it is this one's only if its command names the file
+                    base = re.escape(os.path.basename(path))
+                    own = not b.get("shared") or bool(re.search(rf"(?<![\w.-]){base}(?![\w.-])", cmd))
+                    add(path, *count(f.get("hunks")), own)
+            # each diff counts the whole tree's unlisted changes again: keep the largest, not the sum
+            self.more_files = max(self.more_files, int(b.get("moreFiles") or 0))
+
+    def brief(self):
+        """{t, text}: the prompt the agent was started with (the file's first user entry), read once from the head."""
+        if self._brief is not False:
+            return self._brief
+        self._brief = None
+        try:
+            with open(self.path, "rb") as f:
+                head = f.read(1 << 16)
+                if b"\n" not in head:
+                    head += f.read(1 << 19)
+        except OSError:
+            self._brief = False                # try again next time: the file may be back
+            return None
+        for raw in head.split(b"\n")[:5]:
+            try:
+                d = json.loads(raw)
+            except ValueError:
+                continue
+            if d.get("type") == "user":
+                text = _text_of((d.get("message") or {}).get("content"))
+                if text.strip():
+                    self._brief = {"t": ts_of(d), "text": clip(redact(text.strip()).replace(HOME, "~"), 4000)}
+                break
+        return self._brief
+
+    def detail(self, now, rel=None):
+        """What the agent panel shows beyond the model: served by /api/agent for the one agent on screen."""
+        root = rel or self.cwd or ""
+        relp = lambda p: os.path.relpath(p, root) if root and p.startswith(root.rstrip("/") + "/") else p.replace(HOME, "~")
+        p = self.oldest_pending()
+        files = sorted(self.files.items(), key=lambda kv: -kv[1]["t"])
+        own = [dict(v, path=relp(k)) for k, v in files if v["own"]]
+        seen = [dict(v, path=relp(k)) for k, v in files if not v["own"]]
+        return {
+            "now": {"tool": p["name"], "desc": p["arg"], "d": p.get("d", False), "cmd": clean_cmd(p["cmd"], 600) if p["cmd"] else "",
+                    "file": relp(p["file"]) if p.get("file") else "", "t": p["t"]} if p else None,
+            "brief": None, "report": self.report, "rounds": self.rounds,
+            "files": own[:12], "files_n": len(own), "seen": seen[:6], "seen_n": len(seen) + self.more_files,
+            "trouble": {"errors": self.errors, "denials": self.denials, "last_error": self.last_error, "repeat": self.repeat},
+            "bg": [{"desc": self.bg_desc.get(tid, ""), "t": t0} for tid, t0 in self.bg_pending.items()],
+            "history": [{k: v for k, v in h.items() if k != "id"} for h in list(self.history)[::-1]],
+            "effort": self.effort, "branch": self.branch, "cwd": (self.cwd or "").replace(HOME, "~"),
+        }
 
     # --- reading the reduced state ----------------------------------------------------------------------------
     def oldest_pending(self):

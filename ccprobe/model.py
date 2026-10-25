@@ -21,6 +21,7 @@ HISTORY_S = 2 * 3600            # how far back a transcript is read on first sig
 RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})\s*:")      # "Task 74: Part 5 rebuild" (anchored: audit minor 4)
 RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|task)(\d{1,4})$", re.I)    # meta.name "mp111"
 RE_HP_NAME = re.compile(r"^hp(\d{1,4})$", re.I)                      # the HP worker, one fresh agent per task: "hp154"
+RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})\s*:")                      # or, started without a name: "HP 163: smooth storm front"
 RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|task)\s*(\d{1,4})\b", re.I)
 HOT_S = 60
 DEAD_KEEP_S = 600
@@ -37,6 +38,8 @@ class Collector:
         self.dead_since = {}     # session id -> first time seen dead
         self.mem = alerts_mod.Memory()
         self.lock = threading.Lock()
+        self.tr_lock = threading.Lock()   # held while a reducer changes; /api/agent reads one between updates
+        self.where = {}          # (session id, agent id or "lead") -> (transcript path, project dir)
         self.model = None
         self.digest = None
         self._json, self._json_for = None, None
@@ -51,6 +54,11 @@ class Collector:
         t0 = time.time()
         now = t0
         out = []
+        self._sessions(out, now)
+        self._finish(out, t0, now)
+        return self.model
+
+    def _sessions(self, out, now):
         for s in sessions_mod.discover(self.tmux):
             sid = s.get("sessionId") or str(s["pid"])
             if not s["alive"]:
@@ -71,6 +79,8 @@ class Collector:
                             "cwd": s["cwd"], "error": f"{type(e).__name__}: {e}", "agents": [], "edges": [],
                             "messages": [], "events": {}, "lead": None, "wts": None, "status": s.get("status"),
                             "tmux": s.get("tmux"), "version": s.get("version"), "status_since": 0})
+
+    def _finish(self, out, t0, now):
         rank = lambda x: -sum(1 for a in [x.get("lead") or {}] + (x.get("agents") or []) if (a.get("state") or {}).get("key") in LIVE)
         out.sort(key=lambda x: (not x.get("alive"), rank(x), x.get("project") or ""))
         alerts = alerts_mod.compute(out, now, self.mem)
@@ -94,7 +104,20 @@ class Collector:
             self.model = model
             self.digest = digest
         self._gc()
-        return model
+
+    def agent_detail(self, sid, aid):
+        """The agent panel's detail for one agent (None when it is not in view)."""
+        with self.tr_lock:
+            hit = self.where.get((sid, aid))
+            tr = self.trs.get(hit[0]) if hit else None
+            if tr is None:
+                return None
+            d = tr.detail(time.time(), rel=hit[1])
+        if aid == "lead":
+            d["report"] = None                    # the lead's first prompt is just where the session began
+        else:
+            d["brief"] = tr.brief()               # a file read (once): outside the lock
+        return d
 
     def snapshot(self):
         with self.lock:
@@ -114,7 +137,8 @@ class Collector:
         tr = self.trs.get(path)
         if tr is None:
             tr = self.trs[path] = Transcript(path, backfill, since=time.time() - HISTORY_S, max_backfill=max_backfill)
-        tr.update()
+        with self.tr_lock:        # /api/agent reads a reducer between its updates
+            tr.update()
         tr.seen_at = time.time()
         return tr
 
@@ -132,13 +156,18 @@ class Collector:
 
     def _gc(self):
         cutoff = time.time() - 120
-        for p in [p for p, tr in self.trs.items() if getattr(tr, "seen_at", 0) < cutoff]:
-            del self.trs[p]
+        with self.tr_lock:
+            for p in [p for p, tr in self.trs.items() if getattr(tr, "seen_at", 0) < cutoff]:
+                del self.trs[p]
+            for k in [k for k, v in self.where.items() if v[0] not in self.trs]:
+                del self.where[k]
 
     # --- one session ----------------------------------------------------------------------------------------
     def session_model(self, s, now):
         sid = s.get("sessionId") or str(s["pid"])
         main = self.transcript(s["transcript"], MAIN_BACKFILL, MAIN_MAX) if os.path.exists(s["transcript"]) else None
+        if main:
+            self.where[(sid, "lead")] = (s["transcript"], s["cwd"])
         w = wts_mod.read(s["cwd"]) if wts_mod.is_project(s["cwd"]) else None
         wok = bool(w and not w.get("error"))
         rows = {}
@@ -165,8 +194,8 @@ class Collector:
         for c in cands:
             if c["meta"].get("name"):
                 latest_by_name[c["meta"]["name"]] = c["id"]
-        # the HP worker: the agent named for the running HP task, else the newest hp<N> (or a "worker" from before the
-        # skill named them by task); every other HP agent is retired
+        # the HP worker: the agent named for the running HP task (or, started without a name, described as it), else the
+        # newest hp<N> (or a "worker" from before the skill named them by task); every other HP agent is retired
         hp_running = None
         if wok:
             m = re.match(r"running\s+(\d+)", w.get("state_file") or "")
@@ -174,11 +203,17 @@ class Collector:
         worker_id = None
         if wok:
             worker_id = latest_by_name.get(f"hp{hp_running}") if hp_running is not None else None
+            if not worker_id and hp_running is not None:
+                described = [c for c in cands if not c["meta"].get("name") and (c["meta"].get("spawnDepth") or 1) == 1
+                             and (mm := RE_HP_DESC.match(c["meta"].get("description") or "")) and int(mm.group(1)) == hp_running]
+                worker_id = described[-1]["id"] if described else None
             if not worker_id:
                 hp_named = [c for c in cands if _is_worker_name(c["meta"].get("name"))]
                 worker_id = hp_named[-1]["id"] if hp_named else None
         in_view = [c for c in cands if now - c["mtime"] <= self.window_s or c["id"] == worker_id]
         trs = {c["id"]: self.transcript(c["path"], AGENT_BACKFILL, AGENT_MAX) for c in in_view}
+        for c in in_view:
+            self.where[(sid, c["id"])] = (c["path"], s["cwd"])
         ids = set(trs)
 
         # row binding: the HP worker by the state file; others by name ("mp111"), anchored description, own writes
@@ -245,11 +280,12 @@ class Collector:
                          "kind": "spawn", "summary": clip(redact(c["meta"].get("description") or ""), 80)})
         msgs = sorted((m for m in msgs if now - m["t"] <= self.window_s), key=lambda m: m["t"])[-200:]
 
-        talked = {}                 # agent -> last time it sent or got a message (spawns aside)
-        for m in msgs:
+        talked = {}                 # agent -> last time it sent or got a message (spawns aside, and its own hand-back:
+        for m in msgs:              # handing back is how a turn ends, not a conversation it waits on)
             if m["kind"] != "spawn":
                 for x in (m["from"], m["to"]):
-                    talked[x] = max(talked.get(x, 0), m["t"])
+                    if not (m["kind"] == "handback" and x == m["from"]):
+                        talked[x] = max(talked.get(x, 0), m["t"])
 
         names = {c["id"]: c["meta"].get("name") for c in in_view}
         stopped = {}                # agent id -> (when, by whom) it was stopped with TaskStop
@@ -283,7 +319,8 @@ class Collector:
                 st = dict(st, key="running", label="holds the window · " + _dur(now - (win.get("since") or now)))
             role = "worker" if aid == worker_id else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
             label = meta.get("name") or _short_desc(meta.get("description")) or aid[:7]
-            hp = RE_HP_NAME.match(meta.get("name") or "")
+            hp = RE_HP_NAME.match(meta.get("name") or "") or (None if meta.get("name") or (meta.get("spawnDepth") or 1) > 1
+                                                              else RE_HP_DESC.match(meta.get("description") or ""))
             if role in ("mp", "lp") and n is not None:
                 label = f"{role.upper()} {n}"
             elif hp:
@@ -291,10 +328,14 @@ class Collector:
             # a fresh agent per task: an older holder of a name, or an HP worker that is not the current one, is retired
             # once its turn has ended
             superseded = bool(meta.get("name")) and latest_by_name.get(meta["name"]) != aid
-            retired = superseded or (_is_worker_name(meta.get("name")) and wok and aid != worker_id)
+            retired = superseded or ((_is_worker_name(meta.get("name")) or bool(hp)) and wok and aid != worker_id)
             if superseded:
                 label = f"{meta['name']} (earlier)"
             finished = st["key"] == "dead" or (st["key"] == "ended" and (retired or st.get("sub") == "stopped" or (st.get("sub") == "done" and now - st["since"] > 120)))
+            # Claude Code's own word, in the agent's meta file: it finished (gone again when the agent is revived), or
+            # you stopped it
+            if st["key"] in ("ended", "unknown") and (meta.get("finished") or meta.get("stoppedByUser")):
+                finished = True
             agents.append({
                 "id": aid, "name": meta.get("name"), "label": label, "desc": clip(redact(meta.get("description") or ""), 120),
                 "role": role, "task": n, "task_title": row["title"] if row else None, "group": row["group"] if row else None,

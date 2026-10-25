@@ -53,7 +53,7 @@ const S = {
   model: null, sid: store.get('ccprobe.sid', null), sel: 'lead', tab: null, lastMsgAt: 0, conn: 'connecting',
   seen: new Set(), first: true, prevState: new Map(), userPanned: false, vb: null, fitVb: null, away: 0,
   notified: new Set(), expandFinished: false, nodes: new Map(), edges: new Map(), cards: new Map(), res: new Map(),
-  pos: new Map(), order: [], pulses: [], raf: 0, panelHtml: '', authFailed: false,
+  pos: new Map(), order: [], pulses: [], raf: 0, panelHtml: '', authFailed: false, det: null, open: {}, foldPref: store.get('ccprobe.folds', {}),
   tokKind: store.get('ccprobe.tokKind', 'out'), tokAll: false, tokHold: false, tokOrder: { agents: [], tasks: [] },
 };
 
@@ -1590,8 +1590,14 @@ function renderPanel() {
   else if (S.tab === 'tokens') h = tokensPanel(s);
   else h = agentPanel(s, S.sel);
   if (h === S.panelHtml) return;
-  const pane = $('panel'), top = pane.scrollTop;
+  // keep the reader's place: the section header at the top of the view stays where it was, and focus stays put
+  const pane = $('panel'), top = pane.scrollTop, py = pane.getBoundingClientRect().top, fk = document.activeElement?.dataset?.k;
+  let anchor = null;
+  if (top > 0) for (const el of pane.querySelectorAll('[data-k]')) { const y = el.getBoundingClientRect().top - py; if (y <= 1) anchor = { k: el.dataset.k, y }; else break; }
   pane.innerHTML = h; S.panelHtml = h; pane.scrollTop = top;
+  const a = anchor && pane.querySelector(`[data-k="${anchor.k}"]`);
+  if (a) pane.scrollTop += a.getBoundingClientRect().top - py - anchor.y;
+  if (fk) pane.querySelector(`[data-k="${fk}"]`)?.focus({ preventScroll: true });
   pane.querySelectorAll('svg.pbar').forEach(svg => {
     const f = +svg.dataset.frac; const r = svg.querySelector('.fg');
     if (r) r.setAttribute('width', (Math.max(0, Math.min(1, f)) * 100).toFixed(1) + '%');
@@ -1599,45 +1605,181 @@ function renderPanel() {
 }
 const pbar = (frac, lvl) => `<svg class="pbar" data-frac="${frac}"><rect class="bg" width="100%" height="6" rx="3"/><rect class="fg ${lvl}" width="0" height="6" rx="3"/></svg>`;
 
+// ---- the agent panel's detail (brief, report, files, trouble, the command in flight): fetched from /api/agent for the
+// one agent on screen, every couple of seconds while it is shown; the panel draws from the model until it arrives ----
+let detBusy = false;
+function wantDetail(s, id) {
+  const key = s.id + '/' + id;
+  if (detBusy || (S.det?.key === key && Date.now() - S.det.at < 2000)) return;
+  detBusy = true;
+  fetch(`/api/agent?s=${encodeURIComponent(s.id)}&a=${encodeURIComponent(id)}`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null).catch(() => null)
+    // re-render even when the reader moved on meanwhile: that render asks for the agent now on screen
+    .then(d => { detBusy = false; S.det = { key, d, at: Date.now() }; if (S.tab === 'agent' && cur()) renderPanel(); });
+}
+setInterval(() => { if (S.tab === 'agent' && !document.hidden && cur()) renderPanel(); }, 2500);   // the detail moves on even when the model does not
+
+// a fold remembers its state per agent; an agent you have not touched follows your last choice for that part
+const isOpen = (id, part, def) => S.open[id + '.' + part] ?? S.foldPref[part] ?? def;
+const foldBtn = (part, open, title, right = '') => `<button class="sec sech fold" data-fold="${part}" data-k="f-${part}" aria-expanded="${open}"><span>${icon('i-chev', 'chev')}${title}</span><span class="fm">${right}</span></button>`;
+const secH = (k, title, right = '') => `<div class="sec sech" data-k="s-${k}"><span>${title}</span><span class="fm">${right}</span></div>`;
+const kb = s => (new Blob([s]).size / 1024).toFixed(1) + ' KB';
+const coarse = s => s < 60 ? '<1m' : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h ${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}m`;
+// model text as plain text: escaped first, then headings, **bold** and `code` made quiet, blank runs folded
+function prose(text, preview) {
+  let t = esc(preview ? text.slice(0, 1200) : text);
+  t = t.split('\n').map(l => l.replace(/^#{1,4}\s+(.*)$/, '<span class="h">$1</span>')).join('\n');
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, '$1').replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  return preview ? t.replace(/\n\s*\n+/g, '\n') : t.replace(/\n\s*\n\s*\n+/g, '\n\n');
+}
+const dimPaths = t => t.replace(/…\/scratchpad\//g, '<span class="pv">…/scratchpad/</span>').replace(/(^|[\s'"=])~\//g, '$1<span class="pv">~/</span>');
+const midPath = (p, n = 48) => { if (p.length <= n) return p; const seg = p.split('/'); return '…/' + seg.slice(-2).join('/'); };
+const pathHtml = p => { const m = midPath(p), i = m.lastIndexOf('/'); return i < 0 ? `<b>${esc(m)}</b>` : `<span class="d">${esc(m.slice(0, i + 1))}</span><b>${esc(m.slice(i + 1))}</b>`; };
+const shortDesc = (desc, label) => String(desc || '').replace(/^(?:HP|MP|LP|Task|Advisor)\s*#?\d+[a-z]?\s*:\s*/i, '').replace(label + ': ', '');
+
+function nowBlock(s, n, st, d, now, sc) {
+  const p = d?.now, win = s.wts?.window;
+  let head, body = '';
+  if (st.key === 'waiting_window') {
+    const holder = win?.holder ? (win.holder === 'lead' ? 'lead' : (s.agents || []).find(a => a.id === win.holder)?.label) : null;
+    head = `<div class="nowh c-amber">${icon('i-window')} Waiting for the shared window</div>`;
+    body = `<div class="nowsub">${holder ? `held by <button class="linkbtn" data-select="${esc(win.holder)}">${esc(holder)}</button>` : 'held elsewhere'}${win?.since ? ' since ' + hhmm(win.since) : ''}</div>`;
+  } else if (p) {
+    const what = p.tool === 'Bash' ? (p.d ? p.desc : (p.cmd.split('\n')[0] || p.desc)) : `${p.tool}  ${p.file || p.desc}`;
+    head = `<div class="nowh">${esc(what)}</div>`;
+    if (p.tool === 'Bash' && p.cmd && (p.d || p.cmd.includes('\n') || p.cmd.length > 60)) {
+      const open = isOpen(n.id, 'cmd', false), long = p.cmd.length > 150 || p.cmd.split('\n').length > 3;
+      body = `<div class="cmd${open ? '' : ' clamp3'}">${dimPaths(esc(p.cmd))}</div>` + (long ? `<button class="linkbtn more" data-fold="cmd" data-k="m-cmd">${open ? 'less' : 'whole command'}</button>` : '');
+    }
+  } else {
+    head = `<div class="nowh">${esc(st.label)}</div>`;
+    if (st.detail) body = `<div class="nowsub">${esc(st.detail)}</div>`;
+  }
+  const jobs = (d?.bg || []).slice(0, 3).map(j => `<div class="job">${icon('i-wait')}<span>${esc(j.desc || 'background job')}</span><span class="fm">${coarse(now - j.t)}</span></div>`).join('')
+    + ((d?.bg || []).length > 3 ? `<div class="job"><span></span><span>+${d.bg.length - 3} more</span><span></span></div>` : '');
+  return secH('now', 'Now', p ? `<span data-tip="started ${hhmm(p.t, 1)}">${coarse(now - p.t)}</span>` : '')
+    + `<div class="now c-${sc}">${head}${body}${jobs}</div>` + troubleHtml(d?.trouble);
+}
+
+function troubleHtml(tr) {
+  if (!tr) return '';
+  const chips = [];
+  if (tr.errors) chips.push(`<span class="tchip"><b>${tr.errors}</b> failed</span>`);
+  if (tr.denials) chips.push(`<span class="tchip warn"><b>${tr.denials}</b> denied</span>`);
+  if (tr.repeat?.n >= 3) chips.push(`<span class="tchip${tr.repeat.n >= 5 ? ' warn' : ''}" data-tip="${esc(tr.repeat.what)}">same command <b>${tr.repeat.n}×</b></span>`);
+  if (!chips.length) return '';
+  const e = tr.last_error?.text ? `<div class="terr" data-tip="${esc(tr.last_error.text)}">${hhmm(tr.last_error.t)} · ${esc(tr.last_error.text)}</div>` : '';
+  return `<div class="trouble">${chips.join('')}</div>${e}`;
+}
+
+function textFold(id, part, title, item, fin, boiler) {
+  if (!item?.text) return '';
+  const open = isOpen(id, part, false), text = item.text;
+  let shown = text;
+  if (!open && boiler) { const paras = text.split(/\n\s*\n/); if (paras.length > 1 && /^You are /.test(paras[0])) shown = paras.slice(1).join('\n\n'); }
+  let body = prose(shown, !open);
+  if (open && boiler) { const i = text.search(/\n\s*\n/); if (i > 0 && /^You are /.test(text)) body = `<span class="boiler">${prose(text.slice(0, i))}</span>` + prose(text.slice(i)); }
+  return foldBtn(part, open, title, kb(text))
+    + `<div class="prose${open ? '' : fin ? ' clamp8' : ' clamp3'}">${body}</div>`
+    + (open || text.length > 240 || text.split('\n').length > (fin ? 8 : 3) ? `<button class="linkbtn more" data-fold="${part}" data-k="m-${part}">${open ? 'show less' : 'show all'}</button>` : '');
+}
+
+function filesHtml(id, d) {
+  if (!d || (!d.files_n && !d.seen_n)) return '';
+  let h = '';
+  if (d.files_n) {
+    const all = isOpen(id, 'files-all', false), rows = all ? d.files : d.files.slice(0, 8);
+    const add = d.files.reduce((a, f) => a + f.add, 0), del = d.files.reduce((a, f) => a + f.del, 0);
+    h += secH('files', `Files changed · ${d.files_n}`, `<span class="add">+${add}</span>  <span class="rm">−${del}</span>`) + '<div class="flist">';
+    h += rows.map(f => `<div class="fl" data-tip="${esc(f.path)}\nedited ${f.n}× · last ${hhmm(f.t, 1)}"><span class="p">${pathHtml(f.path)}</span><span class="z">${f.n}×</span>`
+      + `<span class="${f.add ? 'add' : 'z'}">${f.add ? '+' + f.add : '·'}</span><span class="${f.del ? 'rm' : 'z'}">${f.del ? '−' + f.del : '·'}</span><span class="z">${hhmm(f.t)}</span></div>`).join('');
+    h += '</div>';
+    const more = Math.min(d.files.length, 12) - rows.length;
+    if (more > 0 || (all && d.files.length > 8)) h += `<button class="linkbtn more" data-fold="files-all" data-k="m-files">${all ? 'show less' : `+${more} more`}</button>`;
+    if (d.files_n > d.files.length && all) h += `<div class="pmeta">${d.files_n - d.files.length} older not listed</div>`;
+  }
+  if (d.seen_n) {
+    const open = isOpen(id, 'seen', false);
+    h += foldBtn('seen', open, `${d.seen_n} seen in shared tree · not by this agent`);
+    if (open) h += '<div class="flist">' + d.seen.map(f => `<div class="fl seen" data-tip="${esc(f.path)}"><span class="p">${pathHtml(f.path)}</span><span></span><span></span><span></span><span>${hhmm(f.t)}</span></div>`).join('') + '</div>';
+  }
+  return h;
+}
+
+function toolsHtml(s, n, d, fin) {
+  const skip = ['SendMessage', 'SubagentHandback', 'Agent'];
+  const rows = (d?.history || (n.recent || []).slice().reverse()).filter(e => !skip.includes(e.tool)).slice(0, 6);
+  const row = e => {
+    const tip = [e.d ? e.arg : '', e.cmd ? '$ ' + e.cmd : e.arg].filter(Boolean).join('\n') + (e.err ? '\nfailed' : '');
+    return `<div class="ev${e.err ? ' fail' : ''}"><span class="tm">${hhmm(e.t, 1)}</span><span class="tl t-${toolCls(e.tool)}">${esc(e.tool)}</span><span class="a${e.d ? ' desc' : ''}" data-tip="${esc(tip)}">${e.err ? icon('i-x') : ''}${esc(e.arg)}</span></div>`;
+  };
+  if (fin) {
+    const open = isOpen(n.id, 'tools', false);
+    return foldBtn('tools', open, `Last tools · ${rows.length}`, rows.length ? hhmm(rows[0].t) : '') + (open ? rows.map(row).join('') : '');
+  }
+  return secH('tools', 'Recent tools') + (rows.map(row).join('') || '<div class="empty-note">none in view</div>');
+}
+
+function msgsHtml(s, n, isLead) {
+  const me = isLead ? 'lead' : n.id;
+  const all = (s.messages || []).filter(m => m.from === me || m.to === me).slice(-30).reverse();
+  const open = isOpen(n.id || 'lead', 'msgs-all', false), msgs = open ? all : all.slice(0, 5);
+  const nameOf = x => x === 'lead' ? 'lead' : ((s.agents || []).find(a => a.id === x)?.label || x.slice(0, 7));
+  let h = secH('msgs', 'Messages');
+  h += msgs.map(m => { const out = m.from === me; const other = out ? m.to : m.from;
+    const verb = m.kind === 'spawn' ? (out ? 'spawned' : 'spawned by') : m.kind === 'handback' ? (out ? 'handback →' : 'handback ←') : (out ? '→' : '←');
+    return `<div class="ev"><span class="tm">${hhmm(m.t, 1)}</span><span class="tl t-SendMessage">${verb}</span><span class="a" data-tip="${esc(m.summary)}"><button class="linkbtn" data-select="${esc(other)}">${esc(nameOf(other))}</button> · ${esc(m.summary)}</span></div>`; }).join('') || '<div class="empty-note">none in view</div>';
+  if (all.length > 5) h += `<button class="linkbtn more" data-fold="msgs-all" data-k="m-msgs">${open ? 'show less' : `+${all.length - 5} more`}</button>`;
+  return h;
+}
+
 function agentPanel(s, id) {
   const now = S.model.now;
   const n = nodeById(s, id) || nodeById(s, 'lead');
   const isLead = id === 'lead' || !n.id || n.id === 'lead';
+  const aid = isLead ? 'lead' : n.id;
+  wantDetail(s, aid);
+  const d = S.det?.key === s.id + '/' + aid ? S.det.d : null;
   const st = n.state || { key: 'unknown', label: '?' };
   const [si, sc] = stLook(st);
   const col = isLead ? 'cyan' : ROLECOL[n.role] || 'violet';
+  const fin = !isLead && (n.finished || st.key === 'dead');
   const pct = n.ctx_max ? n.ctx / n.ctx_max : 0, lvl = pct >= .9 ? 'crit' : pct >= .8 ? 'warn' : '';
   const row = !isLead && n.task != null ? rowIndex(s).get(n.task) : null;
   const label = isLead ? s.project : n.label;
-  const msgs = (s.messages || []).filter(m => m.from === (isLead ? 'lead' : n.id) || m.to === (isLead ? 'lead' : n.id)).slice(-8).reverse();
   const nameOf = x => x === 'lead' ? 'lead' : ((s.agents || []).find(a => a.id === x)?.label || x.slice(0, 7));
-  let h = `<div class="ptitle c-${col}"><svg class="hx" viewBox="-10 -10 20 20"><polygon points="${hexPts(8.5)}"/></svg>${esc(label)}
-    <span class="s c-${sc}">${icon(si)}${esc(st.label)}</span></div>`;
-  h += `<div class="pmeta">${isLead ? esc(s.title || '') + ' · ' : esc(n.desc || '') + ' · '}${esc(modelName(n.model) || 'model ?')}${isLead ? '' : ' · ' + esc(n.id.slice(0, 9)) + '…'}</div>`;
-  if (st.detail) h += `<div class="sec">Now</div><div class="said">${esc(st.detail)}</div>`;
-  if (row) h += `<div class="sec">Task</div><div class="taskcell"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}<div class="pmeta">${esc(row.status)}</div></div>`;
-  h += `<div class="sec">Context</div>${pbar(pct, lvl)}<div class="pmeta">${n.ctx ? kfmt(n.ctx) + ' / ' + kfmt(n.ctx_max) + ' tokens · ' + Math.round(pct * 100) + '%' : 'not known yet'}${(n.compactions || []).length ? ' · compacted ' + n.compactions.length + '× in view' : ''}</div>`;
   const tk = isLead ? s.lead.tokens : n.tokens;
-  if (tk && tk.n) h += `<button class="linkbtn tkline" data-tktab="1" data-tip="${esc(tokTip(isLead ? 'lead' : n.label, tk) + '\nclick: the Tokens tab')}"><b>${tfmt(tk.v[3])} out</b> · ${tfmt(tk.v[0] + tk.v[1])} in · ${tfmt(tk.v[2])} read · ${tfmt(tk.n)} replies</button>`;
-  h += `<div class="kv"><span>Last active</span><span>${hhmm(n.last_ts, 1)} · ${ago(n.last_ts, now)}</span>`;
-  if (isLead) {
-    h += `<span>Session</span><span>${esc(s.status)} since ${hhmm(s.status_since)}</span>`;
-    h += `<span>Pane</span><span>${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) : 'not in tmux'}</span>`;
-    if (s.perm_mode) h += `<span>Permissions</span><span>${esc(s.perm_mode)}</span>`;
-    h += `<span>Version</span><span>${esc(s.version)} · pid ${s.pid}</span>`;
+  const tipId = isLead ? `pid ${s.pid}` : `${n.role}${n.name ? ' · "' + n.name + '"' : ''} · ${n.id}`;
+  let h = `<div class="ptitle c-${col}"><svg class="hx" viewBox="-10 -10 20 20"><polygon points="${hexPts(8.5)}"/></svg><span data-tip="${esc(tipId)}">${esc(label)}</span>
+    <span class="s c-${sc}">${icon(si)}${esc(fin ? 'finished ' + hhmm(n.last_ts) : st.label)}</span></div>`;
+  h += `<div class="pmeta tight">${isLead ? esc(s.title || '') + ' · ' : (shortDesc(n.desc, n.label) ? esc(shortDesc(n.desc, n.label)) + ' · ' : '')}${esc(modelName(n.model) || 'model ?')}</div>`;
+  const out = tk && tk.n ? `<button class="linkbtn tkline" data-tktab="1" data-tip="${esc(tokTip(isLead ? 'lead' : n.label, tk) + '\nclick: the Tokens tab')}">${tfmt(tk.v[3])} out</button>` : '';
+  if (!isLead) {
+    const from = `from <button class="linkbtn" data-select="${esc(n.parent)}">${esc(nameOf(n.parent))}</button>${n.depth > 1 ? ` (depth ${n.depth})` : ''}`;
+    const t0 = d?.brief?.t || n.born;
+    h += fin ? `<div class="pmeta">${from} · ran ${hhmm(t0)}–${hhmm(n.last_ts)} · ${dur(n.last_ts - t0)}${out ? ' · ' + out : ''}</div>`
+             : `<div class="pmeta">${from}${t0 ? ' · started ' + hhmm(t0) : ''} · active ${ago(n.last_ts, now)}</div>`;
   } else {
-    h += `<span>Role</span><span>${esc(n.role)}${n.name ? ' · "' + esc(n.name) + '"' : ''} · depth ${n.depth}</span>`;
-    h += `<span>Parent</span><span><button class="linkbtn" data-select="${esc(n.parent)}">${esc(nameOf(n.parent))}</button></span>`;
+    h += `<div class="kv"><span>Session</span><span>${esc(s.status)} since ${hhmm(s.status_since)} · active ${ago(n.last_ts, now)}</span>`;
+    h += `<span>Pane</span><span>${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) : 'not in tmux'}</span>`;
+    h += `<span>Perms</span><span>${s.perm_mode ? esc(s.perm_mode) + ' · ' : ''}v${esc(s.version)} · pid ${s.pid}</span></div>`;
   }
-  h += '</div>';
-  for (const x of (isLead ? (s.lead.notices || []) : [])) h += `<div class="alert amber"><div class="ad">${hhmm(x.t)} · ${esc(x.text)}</div></div>`;
-  if (n.said) h += `<div class="sec">Last said</div><div class="said">${esc(n.said)}</div>`;
-  h += `<div class="sec">Recent tools</div>`;
-  h += (n.recent || []).slice().reverse().map(e => `<div class="ev"><span class="tm">${hhmm(e.t, 1)}</span><span class="tl t-${toolCls(e.tool)}">${esc(e.tool)}</span><span class="a" data-tip="${esc(e.arg)}">${e.to ? '→ ' + esc(toName(s, e.to)) + ' · ' : ''}${esc(e.arg)}</span></div>`).join('') || '<div class="empty-note">none in view</div>';
-  h += `<div class="sec">Messages</div>`;
-  h += msgs.map(m => { const out = m.from === (isLead ? 'lead' : n.id); const other = out ? m.to : m.from;
-    const verb = m.kind === 'spawn' ? (out ? 'spawned' : 'spawned by') : m.kind === 'handback' ? (out ? 'handback →' : 'handback ←') : (out ? '→' : '←');
-    return `<div class="ev"><span class="tm">${hhmm(m.t, 1)}</span><span class="tl t-SendMessage">${verb}</span><span class="a" data-tip="${esc(m.summary)}"><button class="linkbtn" data-select="${esc(other)}">${esc(nameOf(other))}</button> · ${esc(m.summary)}</span></div>`; }).join('') || '<div class="empty-note">none in view</div>';
+  const context = () => secH('ctx', 'Context') + pbar(pct, lvl)
+    + `<div class="ctxl"><span>${n.ctx ? kfmt(n.ctx) + ' / ' + kfmt(n.ctx_max) + ' · ' + Math.round(pct * 100) + '%' : 'not known yet'}${(n.compactions || []).length ? ' · compacted ' + n.compactions.length + '×' : ''}</span>${out}</div>`;
+  const task = () => row ? secH('task', 'Task') + `<div class="taskcell${fin ? ' one' : ''}"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}${fin ? '' : `<div class="pmeta">${esc(row.status)}</div>`}</div>` : '';
+  const brief = () => textFold(aid, 'brief', `Brief${d?.brief?.t ? ' · ' + hhmm(d.brief.t) : ''}`, d?.brief, false, true);
+  const report = () => textFold(aid, 'rep', `Report${d?.rounds > 1 ? ' · round ' + d.rounds : ''} · ${hhmm(d?.report?.t)}${fin ? ' · final' : ''}`, d?.report, fin, false);
+  const said = () => n.said ? secH('said', 'Last said') + `<div class="said">${esc(n.said)}</div>` : '';
+  if (isLead) {
+    h += nowBlock(s, n, st, d, now, sc);
+    for (const x of (s.lead.notices || [])) h += `<div class="alert amber"><div class="ad">${hhmm(x.t)} · ${esc(x.text)}</div></div>`;
+    h += said() + context() + filesHtml(aid, d) + toolsHtml(s, n, d, false) + msgsHtml(s, n, true);
+  } else if (fin) {
+    h += report() + filesHtml(aid, d) + troubleHtml(d?.trouble) + task() + brief() + toolsHtml(s, n, d, true) + msgsHtml(s, n, false);
+  } else {
+    h += nowBlock(s, n, st, d, now, sc) + (n.role === 'helper' ? said() : '') + task() + brief() + context() + report()
+      + filesHtml(aid, d) + toolsHtml(s, n, d, false) + msgsHtml(s, n, false);
+  }
   return h;
 }
 
@@ -1828,6 +1970,12 @@ function alertsPanel() {
 }
 
 $('panel').addEventListener('click', e => {
+  const f = e.target.closest('[data-fold]');
+  if (f) {
+    const id = S.sel === 'lead' || !S.sel ? 'lead' : S.sel, part = f.dataset.fold, v = !isOpen(id, part, false);
+    S.open[id + '.' + part] = v; S.foldPref[part] = v; store.set('ccprobe.folds', S.foldPref);
+    return renderPanel();
+  }
   const k = e.target.closest('[data-tk],[data-tkall],[data-tktab]');
   if (k) {
     if (k.dataset.tk) { S.tokKind = k.dataset.tk; store.set('ccprobe.tokKind', S.tokKind); }

@@ -93,6 +93,7 @@ def read(root):
             # table_rows gives the exact rows and order of `wts`: (n, title, runs_on, status, accepted)
             for n, title, runs_on, status, acc in m.table_rows(q, mine, False):
                 r = by_n.get(int(n))
+                status = status.replace(" · reviewed by me", "")   # every done row is reviewed: only the exceptions are worth showing
                 out.append({"n": int(n), "title": redact(title), "runs_on": runs_on, "status": redact(status), "acc": acc,
                             "kind": m.Queue.kind(r) if r else "other", "state": _clip(redact(r["state"]) if r else "", 300),
                             "task": _clip(redact(_plain(r["task"])) if r else "", 600)})

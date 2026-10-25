@@ -1,4 +1,4 @@
-"""HTTP: the page, /api/state (JSON) and /api/events (SSE). Loopback only, token-gated, no file-path endpoint."""
+"""HTTP: the page, /api/state (JSON), /api/agent (one agent's panel detail) and /api/events (SSE). Loopback only, token-gated, no file-path endpoint."""
 import hmac
 import http.server
 import json
@@ -104,6 +104,9 @@ def make_handler(collector, token, port, use_token=True, host=None):
             if path == "/api/state":
                 body = collector.snapshot_json()
                 return self._send(200, "application/json", body or json.dumps({"v": 1, "loading": True}))
+            if path == "/api/agent":                # one agent's panel detail (asked for only while it is on screen)
+                d = collector.agent_detail(q.get("s", [""])[0], q.get("a", [""])[0])
+                return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
             if path == "/api/health":
                 return self._send(200, "application/json", json.dumps({"ok": True, "ready": collector.snapshot()[0] is not None}))
             if path == "/api/events":

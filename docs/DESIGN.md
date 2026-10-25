@@ -328,16 +328,8 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   - **Off**.
 
 ### 9.7 Side panel, WTS, timeline
-- **Agent tab:**
-  - title, icon and status;
-  - description · model · short id;
-  - the task cell, when bound;
-  - the context bar and value;
-  - state detail (the current tool, how long it has run);
-  - last active;
-  - last said;
-  - recent tools;
-  - messages in and out, with the full summary in a tooltip.
+- **Agent tab** (revised 2026-10-24, §19): title and status; description · model; from <parent> · started · active;
+  Now; task cell with the Brief fold; context; Report; files changed; recent tools; messages.
 - **WTS tab:**
   - the window line as a neutral row (holder · since hh:mm:ss · waiters);
   - group headers `HP · ⏵ running 152 · Worker (Opus 5.5)`, `MP · desk-only`, `LP · desk-only`;
@@ -549,3 +541,30 @@ Verified with scripted checks (scratchpad `layout_test.py`, `stress_test.py`, `c
   words), a slate ⏸ for paused by hand (until someone resumes it). Paused groups (HP PAUSED, MP/LP paused) are slate
   too, in the WTS headers and the top chips.
 
+## 19. The agent panel's detail (2026-10-24)
+
+A Claude Code expert ranked what helps most when supervising an agent (checked against 40 real agents); a UI advisor laid
+it out. What it is doing, what it was asked, what it reported, what it changed, and whether it is in trouble:
+
+- **Served on demand.** `GET /api/agent?s=<session>&a=<agent|lead>` returns one agent's detail, read from its
+  `Transcript` under `Collector.tr_lock` (the tick holds it while the reducers change). The page asks only for the agent
+  on screen, at most every 2 s, so `/api/state` does not grow by kilobytes per agent.
+- **Now:** a Bash call's `input.description` (95% have one) is the headline; the command follows, without a leading
+  `cd <dir>;`, with `/private/tmp/claude-N/<project>/<session>/` shortened to `…/` and home as `~`. `tool_arg` reads a
+  Bash call as its description everywhere (state detail, ticker, recent tools).
+- **Brief:** the file's first `user` entry, read once from its head (64 KB, more only if that line is longer), so it
+  works when the 2 MB back-fill missed the start. Clipped to 4 KB, redacted. The "You are …" first paragraph is
+  skipped in the preview and shown dim when expanded.
+- **Report:** the latest `SubagentHandback` `input.message` (2.4 KB kept), and how many hand-backs are in view.
+- **Files changed:** Edit/Write results (`toolUseResult.filePath`, `structuredPatch`) and Bash diffs
+  (`toolUseResult.bashEditDiff`). A diff marked `shared` carries other agents' edits in the same tree: a file counts as
+  this agent's only when its command names the file; the rest are listed apart as "seen in shared tree", and
+  `moreFiles` only adds to that count.
+- **Trouble:** failed tool results (`is_error`), permission denials (`permissionDecision.decision == "reject"`, not
+  counted as failures), and the most repeated identical command (3× or more). Counts, never alarms: many "exit 1" are
+  an empty grep. The last error's line skips a bare "Exit code N" and a Python traceback's header.
+- **Background jobs:** `run_in_background` calls until their task notification (matched by tool-use id or task id).
+- **Layout** (UI advisor): a live agent shows Now, task + Brief, context, Report, files, recent tools, messages; a
+  finished one leads with its Report, then files, trouble, task + Brief, a folded "Last tools", messages; the lead keeps
+  its session, pane and permissions lines. Folds keep their state per agent (`S.open`), and the last choice per part
+  is the default (`ccprobe.folds`). Rebuilds keep the header at the top of the view in place, and keep focus.

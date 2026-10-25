@@ -47,6 +47,14 @@ What you see:
   waiting for the window (amber window icon: it goes on by itself), paused by hand (grey ⏸: until someone
   resumes it), on hold for something else (amber hourglass), holds the window, turn ended (waiting / done), idle or waiting for you (the lead: waiting for you only
   when it asked you a question or left a plan for you to approve), dead.
+- **Agent tab** (click an agent). **Now:** what it is doing in its own words (a Bash call's description), the command
+  under it (without the leading `cd <project>;`, temp paths shortened; "whole command" opens it), its background jobs,
+  and quiet trouble chips (N failed · N denied · same command N×, with the last error's line). **Brief:** the prompt it
+  was started with, and **Report:** its latest hand-back (round N; first for a finished agent), both folded to a few
+  lines with "show all". **Files changed:** the files it edited, with edits and +/− lines; files a shared working tree
+  shows changed by others sit apart, folded ("seen in shared tree"). Recent tools show descriptions, with failed calls
+  marked. Folds remember your choice per agent, and your last choice becomes the default. The detail comes from
+  `/api/agent` for the one agent on screen, so the page's data stays small.
 - **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
   its agent is actually doing, and amber marks a mismatch.
 - **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
