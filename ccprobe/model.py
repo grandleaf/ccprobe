@@ -18,11 +18,13 @@ VERSION = "1.0.0"
 MAIN_BACKFILL, MAIN_MAX = 8 << 20, 64 << 20
 AGENT_BACKFILL, AGENT_MAX = 2 << 20, 32 << 20
 HISTORY_S = 2 * 3600            # how far back a transcript is read on first sight (time-based, capped in bytes)
-# "Task 74: Part 5 rebuild", "MP 141b: widgets", "HP 135 redo: …" (anchored at the start: audit minor 4)
-RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})[a-z]?\b[^:\n]{0,24}:")
+# "Task 74: Part 5 rebuild", "MP 141b: widgets", "HP 135 redo: …" (anchored at the start: audit minor 4). Only a
+# letter suffix or a redo word may come before the colon: "MP 141 advisor:" is a helper's, "Task 2026-10-24 notes:" none
+RE_AGAIN = r"[a-z]?(?:\s+(?:redo|retry|rerun|again|round\s*\d+|take\s*\d+|part\s*\d+|v\d+))?\s*:"
+RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})" + RE_AGAIN, re.I)
 RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|task)(\d{1,4})$", re.I)    # meta.name "mp111"
 RE_HP_NAME = re.compile(r"^hp(\d{1,4})$", re.I)                      # the HP worker, one fresh agent per task: "hp154"
-RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})[a-z]?\b[^:\n]{0,24}:")    # or, started without a name: "HP 163: …", "HP 135 redo: …"
+RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})" + RE_AGAIN, re.I)        # or, started without a name: "HP 163: …", "HP 135 redo: …"
 RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|task)\s*(\d{1,4})\b", re.I)
 HOT_S = 60
 DEAD_KEEP_S = 600
@@ -208,7 +210,8 @@ class Collector:
                 mine = [c for c in cands if c["meta"].get("name") == f"hp{hp_running}"
                         or (not c["meta"].get("name") and (c["meta"].get("spawnDepth") or 1) == 1
                             and (mm := RE_HP_DESC.match(c["meta"].get("description") or "")) and int(mm.group(1)) == hp_running)]
-                worker_id = mine[-1]["id"] if mine else None
+                live = [c for c in mine if not c["meta"].get("finished")]   # Claude Code's own word: a finished round gives way
+                worker_id = (live or mine)[-1]["id"] if mine else None
             if not worker_id:
                 hp_named = [c for c in cands if _is_worker_name(c["meta"].get("name"))]
                 worker_id = hp_named[-1]["id"] if hp_named else None

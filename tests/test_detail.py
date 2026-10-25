@@ -77,5 +77,16 @@ class DetailTests(Base):
         self.assertEqual(tr.detail(self.now)["bg"], [])
 
 
+class TaskPatternTests(unittest.TestCase):
+    def test_what_binds_an_agent_to_a_row(self):
+        from ccprobe.model import RE_HP_DESC, RE_TASK
+        cases = {"Task 74: Part 5": (74, None), "MP 141b: widgets": (141, None), "HP 135 redo: realistic": (135, 135),
+                 "HP 135 round 2: again": (135, 135), "HP 135 review: check": (None, None), "MP 141 advisor: plan": (None, None),
+                 "Task 2026-10-24 notes: x": (None, None), "HP 12 vs HP 13: compare": (None, None), "Advisor 141: x": (None, None)}
+        for text, (task, hp) in cases.items():
+            m1, m2 = RE_TASK.match(text), RE_HP_DESC.match(text)
+            self.assertEqual((m1 and int(m1.group(1)), m2 and int(m2.group(1))), (task, hp), text)
+
+
 if __name__ == "__main__":
     unittest.main()

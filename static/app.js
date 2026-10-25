@@ -81,6 +81,16 @@ const hexPts = r => Array.from({ length: 6 }, (_, k) => { const a = Math.PI / 18
 const measureCtx = document.createElement('canvas').getContext('2d');
 const MONO = getComputedStyle(document.documentElement).getPropertyValue('--mono') || 'monospace';
 function textW(s, size = 11.5) { measureCtx.font = `${size}px ${MONO}`; return measureCtx.measureText(String(s)).width; }
+// clipped to a width, not a count: an agent's labels stay inside its column, leaving the gap between columns (where
+// lines run) clear
+const LABEL_W = 196;
+function fitW(s, size, w = LABEL_W) {
+  s = String(s ?? '');
+  if (textW(s, size) <= w) return s;
+  let lo = 0, hi = s.length;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (textW(s.slice(0, m).trimEnd() + '…', size) <= w) lo = m; else hi = m - 1; }
+  return s.slice(0, lo).trimEnd() + '…';
+}
 const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 // ---- connection: SSE, falling back to polling ----
@@ -889,10 +899,31 @@ function unleave(o) {
   fadeTo(o, 1, fadeAnim() ? 150 : 0);
 }
 // where an edge or tether meets a node or resource as drawn now
-function geom(id) {
+function geom(id, target = false) {   // target: where it is heading (for placing cards against the lines' final course)
   const d = S.disp.get(id); if (!d) return null;
-  if (d.kind === 'res') return { x: d.x, y: d.y, r: d.rr, rect: d.w ? { w: d.w, h: d.h } : null, top: (d.h || 2 * d.rr) / 2, bottom: (d.h || 2 * d.rr) / 2 };
-  return { x: d.x, y: d.y, r: d.r * d.s, top: (d.top || 0) * d.s, bottom: (d.bottom || 0) * d.s, half: (d.half || d.r) * d.s };
+  const x = target ? d.tx : d.x, y = target ? d.ty : d.y, k = target ? (d.ts ?? d.s) : d.s;
+  if (d.kind === 'res') return { x, y, r: d.rr, rect: d.w ? { w: d.w, h: d.h } : null, top: (d.h || 2 * d.rr) / 2, bottom: (d.h || 2 * d.rr) / 2 };
+  return { x, y, r: d.r * k, top: (d.top || 0) * k, bottom: (d.bottom || 0) * k, half: (d.half || d.r) * k };
+}
+// a path's segments (M, L, Q, C), each {t, p: [[x, y], …]}: the one parser for reversePath and pathPts
+const pathSegs = d => (d.match(/[MLQC][^MLQC]*/g) || []).map(s => ({ t: s[0], p: s.slice(1).trim().split(/\s+/).map(v => v.split(',').map(Number)) }));
+// points along a path, about every 10 units
+function pathPts(d) {
+  const pts = []; let cur = null;
+  for (const seg of pathSegs(d)) {
+    const p = seg.p.map(([x, y]) => ({ x, y }));
+    if (seg.t === 'M') { cur = p[0]; pts.push(cur); continue; }
+    const end = p[p.length - 1], n = Math.max(2, Math.ceil(Math.hypot(end.x - cur.x, end.y - cur.y) / 10));
+    for (let i = 1; i <= n; i++) {
+      const t = i / n, u = 1 - t;
+      if (seg.t === 'L') pts.push({ x: cur.x + (end.x - cur.x) * t, y: cur.y + (end.y - cur.y) * t });
+      else if (seg.t === 'Q') pts.push({ x: u * u * cur.x + 2 * u * t * p[0].x + t * t * end.x, y: u * u * cur.y + 2 * u * t * p[0].y + t * t * end.y });
+      else pts.push({ x: u * u * u * cur.x + 3 * u * u * t * p[0].x + 3 * u * t * t * p[1].x + t * t * t * end.x,
+                      y: u * u * u * cur.y + 3 * u * u * t * p[0].y + 3 * u * t * t * p[1].y + t * t * t * end.y });
+    }
+    cur = end;
+  }
+  return pts;
 }
 function moving() {
   const now = performance.now();
@@ -963,7 +994,8 @@ function drawFrame(now) {
     const dx = cx - n.x, dy = cy - n.y, L = Math.hypot(dx, dy) || 1;
     put(k.t, 'x1', (n.x + dx / L * (n.r + 6)).toFixed(1)); put(k.t, 'y1', (n.y + dy / L * (n.r + 6)).toFixed(1));
     put(k.t, 'x2', cx.toFixed(1)); put(k.t, 'y2', cy.toFixed(1));
-    const ts = opStr(o * .55); if (k.t._op !== ts) { k.t._op = ts; k.t.style.opacity = ts; }
+    const under = sx <= n.x && n.x <= sx + k.w && sy > n.y;   // right below its agent: plainly its own, and a tether would cut the labels
+    const ts = opStr(under ? 0 : o * .55); if (k.t._op !== ts) { k.t._op = ts; k.t.style.opacity = ts; }
   }
   const v = S.vbD;
   if (v) { S.vb = { x: v.x, y: v.y, w: v.w, h: v.h }; applyVb(); }
@@ -1007,15 +1039,25 @@ function routeEdge(key, A, B, ida, idb, bend) {
     if (!between.length) {
       // an S over the whole gap: the handles reach past the middle so both turns are wide, and only the arrowhead's
       // length at the end runs straight, so the arrowhead sits on a straight piece (it stays where it is)
+      // the lead's lines fan out without crossing: the farther the end, the higher the line turns (a hash-picked lane
+      // could send a near line's turn above a far one's, and they crossed); other lines keep their lane
       const st = { x: lo.x, y: lo.y - 12 }, h = (st.y - up.y) * .62;
-      out = curve(up, { x: up.x, y: up.y + h + lane }, { x: st.x, y: st.y - h + lane }, st);
+      const fan = (flip ? idb : ida) === 'lead' ? 12 - Math.min(4, Math.abs(lo.x - up.x) / COLW) * 6 : lane;
+      out = curve(up, { x: up.x, y: up.y + h + fan }, { x: st.x, y: st.y - h + fan }, st);
       out.d += ` L${P(lo)}`;
     } else {
-      const c1 = S.chan.get(bu) + lane, c2 = S.chan.get(between[between.length - 1]) + lane;
+      const c1 = S.chan.get(bu), c2 = S.chan.get(between[between.length - 1]) + lane;
       // the column gap next to the lower end, on the side the line comes from
       const k = (lo.x - LEAD_X) / COLW, side = up.x < lo.x ? -.5 : .5;
       const gx = LEAD_X + (Math.round(k) + side) * COLW + lane;
-      out = rounded([up, { x: up.x, y: c1 }, { x: gx, y: c1 }, { x: gx, y: c2 }, { x: lo.x, y: c2 }, lo], 28);
+      if ((flip ? idb : ida) === 'lead') {
+        // a line the lead sends further down: into the gap by an S-curve, like its lines to the next row and under the
+        // same fan rule (a square turn along the channel cut across those curves); then down the gap, across, and in
+        const Y = Math.min(2 * c1 - up.y, c2 - 40), h = (Y - up.y) * .62, fan = 12 - Math.min(4, Math.abs(gx - up.x) / COLW) * 6;
+        const head = curve(up, { x: up.x, y: up.y + h + fan }, { x: gx, y: Y - h + fan }, { x: gx, y: Y });
+        const tail = rounded([{ x: gx, y: Y }, { x: gx, y: c2 }, { x: lo.x, y: c2 }, lo], 28);
+        out = { d: head.d + tail.d.replace(/^M\S+/, ''), mid: tail.mid };
+      } else out = rounded([up, { x: up.x, y: c1 + lane }, { x: gx, y: c1 + lane }, { x: gx, y: c2 }, { x: lo.x, y: c2 }, lo], 28);   // the lock, the queue, agent to agent
     }
   }
   if (flip) out.d = reversePath(out.d);
@@ -1023,7 +1065,7 @@ function routeEdge(key, A, B, ida, idb, bend) {
 }
 // the same path drawn the other way (so arrowheads and pulses keep their direction)
 function reversePath(d) {
-  const segs = d.match(/[MLQC][^MLQC]*/g).map(s => ({ t: s[0], p: s.slice(1).trim().split(/\s+/).map(v => v.split(',').map(Number)) }));
+  const segs = pathSegs(d);
   const out = [];
   let cur = segs[0].p[0];
   for (const s of segs.slice(1)) { out.push({ t: s.t, from: cur, ctrl: s.p.slice(0, -1), to: s.p[s.p.length - 1] }); cur = s.p[s.p.length - 1]; }
@@ -1209,11 +1251,11 @@ function updateNode(p, n, pos, now, nAlerts) {
   const lvl = pct >= .9 ? 'crit' : pct >= .8 ? 'warn' : '';
   // label stack
   let yy = r + 21;
-  setA(p.lbl, { y: yy }); setT(p.lbl, clip(n.label, 20));
+  setA(p.lbl, { y: yy }); setT(p.lbl, fitW(clip(n.label, 20), 14.5));
   const compact = settings.compact || n.finished;
-  if (n.sub && !compact) { yy += 15; setA(p.sub, { y: yy }); setT(p.sub, n.sub); p.sub.style.display = ''; } else p.sub.style.display = 'none';
+  if (n.sub && !compact) { yy += 15; setA(p.sub, { y: yy }); setT(p.sub, fitW(n.sub, 11)); p.sub.style.display = ''; } else p.sub.style.display = 'none';
   yy += 17;
-  const label = clip(st.label, 34);
+  const label = fitW(clip(st.label, 34), 11.5, LABEL_W - 16);   // the icon takes 16
   const tw = textW(label, 11.5) + 16;
   p.stat.setAttribute('class', `stat k-${st.key} c-${sCol}`);
   setA(p.sico, { href: '#' + sIcon, x: -tw / 2, y: yy - 10 });
@@ -1225,7 +1267,7 @@ function updateNode(p, n, pos, now, nAlerts) {
   yy += 17;
   if (!compact) {
     const meta = `${n.ctx ? kfmt(n.ctx) + ' / ' + kfmt(n.ctx_max) : 'no context yet'} · ${ago(n.last_ts, now)}`;
-    setA(p.meta, { y: yy }); setT(p.meta, meta); p.meta.style.display = '';
+    setA(p.meta, { y: yy }); setT(p.meta, fitW(meta, 10.5)); p.meta.style.display = '';
   } else { p.meta.style.display = 'none'; yy -= 12; }
   p.badge.style.display = nAlerts ? '' : 'none';
   setA(p.badge, { transform: `translate(${(r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` }); setT(p.badgeT, '!');
@@ -1237,7 +1279,7 @@ function updateNode(p, n, pos, now, nAlerts) {
     p.flash.classList.remove('go'); void p.flash.getBBox(); p.flash.classList.add('go');
   }
   S.prevState.set(n.id, st.key);
-  const labelHalf = Math.max(textW(clip(n.label, 20), 14.5), tw, n.sub && !compact ? textW(n.sub, 11) : 0, textW(p.meta.textContent || '', 10.5)) / 2 + 6;
+  const labelHalf = Math.max(textW(p.lbl.textContent, 14.5), tw, n.sub && !compact ? textW(p.sub.textContent, 11) : 0, textW(p.meta.textContent || '', 10.5)) / 2 + 6;
   return [
     { x: x - r - 12, y: y - r - (pct >= .7 ? 38 : 14), w: 2 * r + 24, h: 2 * r + (pct >= .7 ? 38 : 14) + 6, node: n.id },
     { x: x - labelHalf, y: y + r + 6, w: 2 * labelHalf, h: yy - r, node: n.id },
@@ -1353,25 +1395,47 @@ function placeCards(nodes, pos, boxes, now) {
   const placed = [];
   const seen = new Set();
   const view = S.fitVb && visible(S.fitVb), inView = r => !view || (r.x > view.x0 + 8 && r.x + r.w < view.x1 - 8 && r.y > view.y0 + 8 && r.y + r.h < view.y1 - 8);
+  // the lines as they will run once everything has arrived: a card sits beside them, not on them
+  const lines = [];
+  for (const [key, e] of S.edges) {
+    if (e.leaving) continue;
+    const A = geom(e.a, true), B = geom(e.b, true);
+    if (!A || !B) continue;
+    const pts = pathPts(routeEdge(key, A, B, e.a, e.b, e.bend).d);
+    lines.push({ pts, box: bounds(pts.map(q => ({ x: q.x, y: q.y, w: 0, h: 0 }))) });
+  }
+  const onLines = r => {   // points of line within 8 of the card (touching counts too)
+    const x0 = r.x - 8, x1 = r.x + r.w + 8, y0 = r.y - 8, y1 = r.y + r.h + 8;
+    let k = 0;
+    for (const l of lines) if (l.box.x1 >= x0 && l.box.x0 <= x1 && l.box.y1 >= y0 && l.box.y0 <= y1) for (const q of l.pts) k += q.x > x0 && q.x < x1 && q.y > y0 && q.y < y1;
+    return k;
+  };
   for (const c of want) {
     const p = pos.get(c.node.id);
     const w = Math.max(...c.lines.map(l => textW(l, 11.5)), c.head ? textW(c.head, 9.5) : 0) + 22;
     const h = c.lines.length * 16 + (c.head ? 30 : 12);
     const r = p.r;
     const cands = [
-      [p.x + r + 40, p.y - h / 2], [p.x + r + 22, p.y + r + 8], [p.x + r + 22, p.y - r - 26 - h],
-      [p.x - r - 40 - w, p.y - h / 2], [p.x - r - 22 - w, p.y + r + 8], [p.x - r - 22 - w, p.y - r - 26 - h],
+      [p.x + r + 40, p.y - h / 2], [p.x + r + 22, p.y + r + 8], [p.x + r + 22, p.y - r - 60 - h],   // above: clear of the arrows into the row
+      [p.x - r - 40 - w, p.y - h / 2], [p.x - r - 22 - w, p.y + r + 8], [p.x - r - 22 - w, p.y - r - 60 - h],
       [p.x + r + 40, p.y + r + 70], [p.x - r - 40 - w, p.y + r + 70],
+      [p.x - w / 2, p.y + (S.disp.get(c.node.id)?.bottom || r + 80) + 14],   // under its own labels, where lines seldom run
     ];
-    // a free spot on screen first, so a new card does not make the view move; else any free spot
+    // a free spot on screen first, so a new card does not make the view move; else any free spot. Among the free
+    // ones, the one that covers least line (in the order above when equal); the card's current spot wins a tie
+    const was = S.cards.get(c.key);
+    if (was && !was.leaving && Math.abs(was.w - w) < 1 && Math.abs(was.h - h) < 1) cands.unshift([p.x + was.tox, p.y + was.toy]);   // same size only
     let spot = null;
     for (const pass of [inView, () => true]) {
+      let best = null;
       for (const [x, y] of cands) {
         const rect = { x, y, w, h };
         if (!pass(rect) || boxes.some(b => hit(rect, b)) || placed.some(b => hit(rect, b))) continue;
-        spot = rect; break;
+        const cost = onLines(rect);
+        if (!best || cost < best.cost) best = { rect, cost };
+        if (!cost) break;
       }
-      if (spot) break;
+      if (best) { spot = best.rect; break; }
     }
     if (!spot) continue;
     placed.push({ x: spot.x - 6, y: spot.y - 6, w: spot.w + 12, h: spot.h + 12 });
@@ -1597,6 +1661,7 @@ document.querySelector('.tabs').addEventListener('click', e => { const b = e.tar
 $('alertBtn').addEventListener('click', jumpWorstAlert);
 
 function renderPanel() {
+  const want = S.panelFocus; S.panelFocus = null;   // focus an action asked for (Undo after Clear): this rebuild only
   if (S.alUndo && (S.tab !== 'alerts' || S.alUndo.sid !== S.sid)) S.alUndo = null;   // Undo lasts while you stay on the tab
   tabsFor(cur());
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
@@ -1608,16 +1673,16 @@ function renderPanel() {
   else if (S.tab === 'wts') h = wtsPanel(s);
   else if (S.tab === 'tokens') h = tokensPanel(s);
   else h = agentPanel(s, S.sel);
-  if (h === S.panelHtml) return;
+  const focusOn = k => k && ($('panel').querySelector(`[data-k="${k}"]`) || (want && $('panel').querySelector('.alhead button')))?.focus({ preventScroll: true });
+  if (h === S.panelHtml) return void focusOn(want);
   // keep the reader's place: the section header at the top of the view stays where it was, and focus stays put
-  const pane = $('panel'), top = pane.scrollTop, py = pane.getBoundingClientRect().top, fk = S.panelFocus || document.activeElement?.dataset?.k;
-  S.panelFocus = null;
+  const pane = $('panel'), top = pane.scrollTop, py = pane.getBoundingClientRect().top, fk = want || document.activeElement?.dataset?.k;
   let anchor = null;
   if (top > 0) for (const el of pane.querySelectorAll('[data-k]')) { const y = el.getBoundingClientRect().top - py; if (y <= 1) anchor = { k: el.dataset.k, y }; else break; }
   pane.innerHTML = h; S.panelHtml = h; pane.scrollTop = top;
   const a = anchor && pane.querySelector(`[data-k="${anchor.k}"]`);
   if (a) pane.scrollTop += a.getBoundingClientRect().top - py - anchor.y;
-  if (fk) pane.querySelector(`[data-k="${fk}"]`)?.focus({ preventScroll: true });
+  focusOn(fk);
   pane.querySelectorAll('svg.pbar').forEach(svg => {
     const f = +svg.dataset.frac; const r = svg.querySelector('.fg');
     if (r) r.setAttribute('width', (Math.max(0, Math.min(1, f)) * 100).toFixed(1) + '%');
@@ -1969,19 +2034,23 @@ function liveAlerts(m) {
 // the next time (stuck again, another question) it shows. Expired snoozes go too.
 function pruneDismissed(m) {
   const now = Date.now() / 1000, live = new Set((m.alerts || []).map(a => a.key));
+  // a server that just started has not raised its alerts yet (some wait out a grace period of up to 15 minutes): an
+  // alert missing then has not ended, so only expired snoozes go
+  const warm = m.now - (m.server?.started || 0) >= 900;
+  if (!warm) S.gone.clear();
   for (const k of live) S.gone.delete(k);
   let changed = false;
   for (const [k, until] of Object.entries(dismissed)) {
     const key = k.slice(0, k.indexOf('|'));
-    if (!live.has(key) && !S.gone.has(key)) S.gone.set(key, now);
-    if (until <= now || (!live.has(key) && now - S.gone.get(key) >= 120)) { delete dismissed[k]; changed = true; }
+    if (warm && !live.has(key) && !S.gone.has(key)) S.gone.set(key, now);
+    if (until <= now || (warm && !live.has(key) && now - S.gone.get(key) >= 120)) { delete dismissed[k]; changed = true; }
   }
   if (changed) store.set('ccprobe.dismissed', dismissed);
 }
 // the bell, and "N in other sessions": the session with the worst alert, on its Alerts tab
-function jumpWorstAlert() {
-  const live = S.model ? liveAlerts(S.model) : [];
-  if (!sessAlerts(S.model, cur()).length) { const a = live.find(x => x.sev === 'red') || live[0]; if (a) selectSession(a.session); }
+function jumpWorstAlert(elsewhere) {   // elsewhere === true: "N in other sessions →" (the bell passes its click event)
+  const other = elsewhere === true, live = (S.model ? liveAlerts(S.model) : []).filter(a => !other || a.session !== S.sid);
+  if (other || !sessAlerts(S.model, cur()).length) { const a = live.find(x => x.sev === 'red') || live[0]; if (a) selectSession(a.session); }
   S.tab = 'alerts'; renderPanel();
 }
 const sessAlerts = (m, s) => s ? liveAlerts(m).filter(a => a.session === s.id) : [];
@@ -2024,7 +2093,7 @@ function alertsPanel() {
 $('panel').addEventListener('click', e => {
   const al = e.target.closest('[data-alclear],[data-alall],[data-alundo],[data-alshow],[data-alelse]');
   if (al) {
-    if (al.hasAttribute('data-alelse')) return jumpWorstAlert();
+    if (al.hasAttribute('data-alelse')) return jumpWorstAlert(true);
     if (al.hasAttribute('data-alclear') || al.hasAttribute('data-alall')) {
       const all = al.hasAttribute('data-alall'), these = sessAlerts(S.model, cur()).filter(a => all || a.sev !== 'red');
       S.alUndo = { sid: S.sid, n: these.length, verb: all ? 'dismissed' : 'cleared', prev: these.map(a => [akey(a), dismissed[akey(a)]]) };
@@ -2032,7 +2101,7 @@ $('panel').addEventListener('click', e => {
       S.panelFocus = 'al-act';   // Undo takes the place of whichever was pressed
     } else if (al.hasAttribute('data-alundo') && S.alUndo) {
       for (const [k, v] of S.alUndo.prev) { if (v === undefined) delete dismissed[k]; else dismissed[k] = v; }
-      S.alUndo = null;
+      S.alUndo = null; S.panelFocus = 'al-act';   // back on Clear (or the header's first button when only red ones are left)
     } else if (al.hasAttribute('data-alshow')) {
       for (const a of (S.model.alerts || []).filter(x => x.session === S.sid)) { delete dismissed[akey(a)]; delete dismissed[a.key + '|' + a.title]; }
     }
