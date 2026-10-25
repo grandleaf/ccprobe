@@ -127,10 +127,11 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .ticker .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ticker .when { color: var(--muted); white-space: nowrap; }
 .stagebar { position: absolute; right: 14px; top: 12px; display: flex; gap: 6px; }
-.fitbtn { display: flex; gap: 6px; align-items: center; background: var(--card); border: 1px solid var(--line2); border-radius: 7px; padding: 4px 9px; color: var(--muted); }
+.fitbtn { display: flex; gap: 6px; align-items: center; background: linear-gradient(var(--card), var(--card)) var(--bg); border: 1px solid var(--line2); border-radius: 7px; padding: 4px 9px; color: var(--muted); }
 .fitbtn svg { width: 13px; height: 13px; }
 .fitbtn .n { display: inline-block; min-width: 2ch; text-align: center; font-variant-numeric: tabular-nums; }   /* a count going 9 → 10 does not shift the buttons */
-.fitbtn:hover { color: var(--text-strong); border-color: var(--muted); }
+.fitbtn:hover:not(:disabled) { color: var(--text-strong); border-color: var(--muted); }
+.fitbtn:disabled { color: color-mix(in srgb, var(--muted) 45%, var(--bg)); border-color: color-mix(in srgb, var(--line2) 55%, var(--bg)); cursor: default; }   /* dim, but opaque: a card behind it does not show through */
 .empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; color: var(--muted); pointer-events: none; }
 .empty[hidden] { display: none; }
 .skel { width: 70px; height: 80px; background: var(--line2); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); opacity: .5; animation: blink 1.6s infinite; }
@@ -176,11 +177,6 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .node.finished .hex { stroke-dasharray: 3 4; }
 .node.finished:hover, .node.finished.sel { opacity: .8; }
 /* the hide button: top-left of a node that is not at work, shown on hover or when selected */
-.node .hide { opacity: 0; pointer-events: none; cursor: pointer; transition: opacity .15s; }
-.node:hover .hide, .node.sel .hide, .node:focus-visible .hide { opacity: 1; pointer-events: auto; }
-.node .hide circle { fill: var(--card); stroke: var(--line2); }
-.node .hide path { stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; }
-.node .hide:hover circle, .node .hide:hover path { stroke: var(--red); }
 .res rect.box { fill: var(--card); stroke: var(--c); stroke-width: 1.4; }
 .res text { font-family: var(--mono); font-size: 12px; fill: var(--text); }
 .res text.h { fill: var(--c); font-size: 12.5px; }
@@ -237,10 +233,6 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .ptitle .s svg, .ico12 { width: 12px; height: 12px; flex: none; }
 .ptitle .hx { width: 16px; height: 16px; } .ptitle .hx polygon { fill: none; stroke: var(--c); stroke-width: 2; }
 .pmeta { color: var(--muted); margin: 3px 0 12px; overflow-wrap: anywhere; }
-.pacts { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: -4px 0 10px; }
-.pacts .pmeta { margin: 0; font-size: 11px; }
-.pbtn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line2); border-radius: 6px; padding: 3px 9px; color: var(--muted); }
-.pbtn:hover { color: var(--text-strong); border-color: var(--muted); }
 .sec { margin: 14px 0 6px; color: var(--muted); font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase; }
 .pbar { width: 100%; height: 6px; display: block; margin: 5px 0 3px; }
 .pbar .bg { fill: var(--line); } .pbar .fg { fill: var(--green); } .pbar .fg.warn { fill: var(--amber); } .pbar .fg.crit { fill: var(--red); }

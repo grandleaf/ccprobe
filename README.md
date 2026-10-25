@@ -30,10 +30,9 @@ What you see:
 - **The shelf** at the bottom holds the HP queue and the window cards, always in the same place. The agent holding the
   window has a red lock mark, and a red line runs from it to the window card. An older agent whose name a newer one now
   holds reads "lp74 (earlier)" and folds into "N finished · show" (top right) once its turn ends; so do earlier HP agents.
-- **Hiding agents.** Hover or select an agent that is not at work (and not paused) and click the × at its top-left (or press `H`), or use
-  "Hide from the diagram" in its panel. "Clear N done" (top right) hides the finished and dead agents drawn on the
+- **Hiding agents.** "Clear N done" (top right) hides the finished and dead agents drawn on the
   graph (not the ones already folded into "N finished · show"); idle and parked agents are not done, so it leaves them.
-  "N hidden · show" (always in the top-right corner) brings them all back. A hidden agent comes back by itself as soon as
+  "N hidden · show" (top right, next to Fit) brings them all back. A hidden agent comes back by itself as soon as
   it writes anything new, and opening it from an alert or a message link shows it again. Hiding happens only in this
   browser and only on the page; it never stops an agent.
 - **Unseen sessions:** a tmux session that no terminal shows (its window was closed) is greyed out in the sessions
@@ -64,7 +63,7 @@ What you see:
   (several GB take a few seconds), then only what it gains.
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
   compact nodes, notifications.
-- **Keys:** `1` `2` `3` `4` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · `H` hides the selected agent · `Esc` deselects · wheel zooms and
+- **Keys:** `1` `2` `3` `4` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · `Esc` deselects · wheel zooms and
   dragging pans.
 - **Panel widths:** drag the splitter on either side of the graph (or focus one and use ← →) to resize the sessions list
   or the side panel, and double-click a splitter to reset it. Both widths are remembered in this browser, and the graph

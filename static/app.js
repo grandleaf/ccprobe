@@ -516,7 +516,8 @@ function selectSession(sid) {
 
 // ---- hiding agents by hand: until they write anything new, then they come back by themselves ----
 const BUSY = ['running', 'thinking', 'polling'];
-// a paused agent (or one waiting for the window) still has its task in hand, so it has no × either
+// what "Clear N done" may hide: not the lead, nor an agent at work; a paused one (or one waiting for the window) still
+// has its task in hand
 const canHide = n => n && n.id !== 'lead' && n.role !== 'lead' && !BUSY.includes(n.state?.key) && !isParked(n);
 // done means finished (its work handed back, or an earlier agent of a reused name) or dead; idle and parked agents are not done
 const isDone = a => a.finished || a.state.key === 'dead';
@@ -1032,7 +1033,7 @@ function renderGraph(s) {
   $('finBtn').hidden = !res.collapsed.length; setT($('finN'), res.collapsed.length);
   $('hiddenBtn').hidden = !nHidden; setT($('hiddenN'), nHidden);
   $('clearBtn').hidden = !S.clearable.length; setT($('clearN'), S.clearable.length);
-  $('tidyBtn').hidden = !S.canTidy;
+  $('tidyBtn').disabled = !S.canTidy;
   const byId = new Map(nodes.map(n => [n.id, n]));
   if (!byId.has(S.sel) || byId.get(S.sel).collapsed) S.sel = 'lead';
   const alertsBy = new Map();
@@ -1152,9 +1153,6 @@ function makeNode(id) {
   p.badge = el('g', { class: 'badge' }, g); el('circle', { r: 8 }, p.badge); p.badgeT = el('text', { y: 4 }, p.badge);
   p.lockm = el('g', { class: 'lockm' }, g); el('circle', { r: 9 }, p.lockm); el('use', { href: '#i-lock', x: -5.5, y: -6, width: 11, height: 11 }, p.lockm);
   el('title', {}, p.lockm).textContent = 'Holds the window';
-  p.hide = el('g', { class: 'hide' }, g); el('circle', { r: 8 }, p.hide); el('path', { d: 'M-3,-3L3,3M3,-3L-3,3' }, p.hide);
-  el('title', {}, p.hide).textContent = 'Hide from the diagram (H)';
-  p.hide.addEventListener('click', ev => { ev.stopPropagation(); hideAgents([id]); });
   g.addEventListener('click', ev => { ev.stopPropagation(); select(id); });
   g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(id); } });
   g.addEventListener('mouseenter', () => showTip(g, nodeTip(id)));
@@ -1209,10 +1207,8 @@ function updateNode(p, n, pos, now, nAlerts) {
   } else { p.meta.style.display = 'none'; yy -= 12; }
   p.badge.style.display = nAlerts ? '' : 'none';
   setA(p.badge, { transform: `translate(${(r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` }); setT(p.badgeT, '!');
-  p.hide.style.display = canHide(n) ? '' : 'none';
   p.lockm.style.display = n.holds ? '' : 'none';   // holds the window (its card is on the shelf, joined by a red line)
   setA(p.lockm, { transform: `translate(${(r * .8).toFixed(1)},${(r * .72).toFixed(1)})` });
-  setA(p.hide, { transform: `translate(${(-r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` });
   // a one-shot ring when the state changes
   const prev = S.prevState.get(n.id);
   if (prev && prev !== st.key && settings.motion === 'full' && !document.hidden) {
@@ -1449,9 +1445,9 @@ function fit(core, cards = []) {
   const keep = prev && Math.abs(prev.w - ideal.w) <= .06 * ideal.w && Math.abs(prev.h - ideal.h) <= .06 * ideal.h && serves(prev, all);
   const vb = keep ? prev : ideal;
   S.fitVb = vb;
-  if (S.userPanned) { if (vb !== prev) $('fitBtn').hidden = false; return; }
+  if (S.userPanned) { if (vb !== prev) $('fitBtn').disabled = false; return; }
   vbTarget(vb);
-  $('fitBtn').hidden = true;
+  $('fitBtn').disabled = true;
 }
 function vbTarget(vb) {
   const v = S.vbD;
@@ -1476,7 +1472,7 @@ $('graph').addEventListener('wheel', ev => {
   const p = svgPoint(ev), k = Math.exp(ev.deltaY * .0015);
   const w = Math.min(S.fitVb.w / .4, Math.max(S.fitVb.w / 3, S.vb.w * k)), f = w / S.vb.w;
   S.vb = { x: p.x - (p.x - S.vb.x) * f, y: p.y - (p.y - S.vb.y) * f, w: S.vb.w * f, h: S.vb.h * f };
-  vbRest(); S.userPanned = true; applyVb(); $('fitBtn').hidden = false;
+  vbRest(); S.userPanned = true; applyVb(); $('fitBtn').disabled = false;
 }, { passive: false });
 let drag = null;
 $('graph').addEventListener('pointerdown', ev => {
@@ -1495,7 +1491,7 @@ $('graph').addEventListener('pointermove', ev => {
   }
   const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
   S.vb = { ...drag.vb, x: drag.vb.x - dx * s, y: drag.vb.y - dy * s };
-  vbRest(); S.userPanned = true; applyVb(); $('fitBtn').hidden = false;
+  vbRest(); S.userPanned = true; applyVb(); $('fitBtn').disabled = false;
 });
 $('graph').addEventListener('pointerup', ev => {
   $('graph').classList.remove('panning');
@@ -1508,7 +1504,7 @@ $('clearBtn').addEventListener('click', () => hideAgents(S.clearable || []));
 $('tidyBtn').addEventListener('click', () => { S.tidyNow = true; hideTip(); render(); });
 $('finBtn').addEventListener('click', () => { S.expandFinished = true; render(); });
 $('hiddenBtn').addEventListener('click', () => { const s = cur(); if (s && unhideAgents((s.agents || []).map(a => a.id))) render(); });
-function doFit() { S.userPanned = false; if (S.fitVb) vbTarget(S.fitVb); $('fitBtn').hidden = true; }
+function doFit() { S.userPanned = false; if (S.fitVb) vbTarget(S.fitVb); $('fitBtn').disabled = true; }
 
 // ---- pulses: one shared rAF loop ----
 function queuePulse(m) {
@@ -1618,7 +1614,6 @@ function agentPanel(s, id) {
   let h = `<div class="ptitle c-${col}"><svg class="hx" viewBox="-10 -10 20 20"><polygon points="${hexPts(8.5)}"/></svg>${esc(label)}
     <span class="s c-${sc}">${icon(si)}${esc(st.label)}</span></div>`;
   h += `<div class="pmeta">${isLead ? esc(s.title || '') + ' · ' : esc(n.desc || '') + ' · '}${esc(modelName(n.model) || 'model ?')}${isLead ? '' : ' · ' + esc(n.id.slice(0, 9)) + '…'}</div>`;
-  if (!isLead && canHide(n)) h += `<div class="pacts"><button class="pbtn" data-hide="${esc(n.id)}">${icon('i-eye')}Hide from the diagram</button><span class="pmeta">it comes back if it starts working again · H</span></div>`;
   if (st.detail) h += `<div class="sec">Now</div><div class="said">${esc(st.detail)}</div>`;
   if (row) h += `<div class="sec">Task</div><div class="taskcell"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}<div class="pmeta">${esc(row.status)}</div></div>`;
   h += `<div class="sec">Context</div>${pbar(pct, lvl)}<div class="pmeta">${n.ctx ? kfmt(n.ctx) + ' / ' + kfmt(n.ctx_max) + ' tokens · ' + Math.round(pct * 100) + '%' : 'not known yet'}${(n.compactions || []).length ? ' · compacted ' + n.compactions.length + '× in view' : ''}</div>`;
@@ -1840,9 +1835,8 @@ $('panel').addEventListener('click', e => {
     if (k.dataset.tktab) S.tab = 'tokens';
     return renderPanel();
   }
-  const t = e.target.closest('[data-select],[data-dismiss],[data-snooze],[data-jump],[data-hide]');
+  const t = e.target.closest('[data-select],[data-dismiss],[data-snooze],[data-jump]');
   if (!t) return;
-  if (t.dataset.hide) return hideAgents([t.dataset.hide]);
   if (t.dataset.jump) { $('g-' + t.dataset.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
   if (t.dataset.dismiss) { dismissed[t.dataset.dismiss] = 1e12; store.set('ccprobe.dismissed', dismissed); return render(); }
   if (t.dataset.snooze) { dismissed[t.dataset.snooze] = Date.now() / 1000 + 3600; store.set('ccprobe.dismissed', dismissed); return render(); }
@@ -2000,10 +1994,6 @@ document.addEventListener('keydown', e => {
   if (e.target.closest('input, textarea, select')) return;
   if (e.key === 'Escape') { if (!$('settings').hidden) $('settings').hidden = true; else if (!$('tokPop').hidden) $('tokPop').hidden = true; else select('lead'); }
   else if (e.key === 'f' || e.key === 'F') doFit();
-  else if (e.key === 'h' || e.key === 'H' || e.key === 'Delete' || e.key === 'Backspace') {
-    const s = cur(), n = s && S.sel !== 'lead' ? nodeById(s, S.sel) : null;
-    if (canHide(n)) { e.preventDefault(); hideAgents([n.id]); }
-  }
   else if (e.key.length === 1 && '1234'.includes(e.key)) {   // the shown tabs, in order
     tabsFor(cur()); const t = [...document.querySelectorAll('.tabs button:not([hidden])')][+e.key - 1]?.dataset.tab; if (t) { S.tab = t; renderPanel(); }
   }
