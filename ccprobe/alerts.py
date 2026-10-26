@@ -105,13 +105,14 @@ def compute(sessions, now, mem):
         # the HP state file against the worker (a deliberate stop is not an alert: wts shows ■ stopped)
         worker = next((a for a in agents.values() if a["role"] == "worker"), None)
         sf = (w.get("state_file") or "").strip()
-        m = re.match(r"running\s+(\d+)", sf)
+        m = re.match(r"running((?:\s+\d+)+)", sf)    # "running 128 171": more than one HP task may run
         if m:
-            r = rows.get(int(m.group(1)))
-            bad = not r or r["kind"] not in ("active", "done", "closed")
-            if mem.held_for(f"hp-run:{root}", bad, now) >= 120:
+            off = [(n, rows.get(n)) for n in map(int, m.group(1).split())]
+            off = [(n, r) for n, r in off if not r or r["kind"] not in ("active", "done", "closed")]
+            if mem.held_for(f"hp-run:{root}", bool(off), now) >= 120:
+                n, r = off[0]
                 add(f"hp-state:{root}", "amber", "HP state file disagrees with the queue",
-                    f"state says \"{sf}\", but row {m.group(1)} is {r['status'] if r else 'not in the queue'}.", s, worker and worker["id"])
+                    f"state says \"{sf}\", but row {n} is {r['status'] if r else 'not in the queue'}.", s, worker and worker["id"])
         else:
             mem.held_for(f"hp-run:{root}", False, now)
         working = bool(sf.startswith(("stopped", "paused")) and worker and worker["state"]["key"] in BUSY)

@@ -1,8 +1,10 @@
-"""HTTP: the page, /api/state (JSON), /api/agent (one agent's panel detail) and /api/events (SSE). Loopback only, token-gated, no file-path endpoint."""
+"""HTTP: the page, /api/state (JSON), /api/agent (one agent's panel detail), /api/notes and /api/notes-pic (a task's notes and
+the pictures they name, by task number and index) and /api/events (SSE). Loopback only, token-gated, no file-path endpoint."""
 import hmac
 import http.server
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -107,6 +109,15 @@ def make_handler(collector, token, port, use_token=True, host=None):
             if path == "/api/agent":                # one agent's panel detail (asked for only while it is on screen)
                 d = collector.agent_detail(q.get("s", [""])[0], q.get("a", [""])[0])
                 return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
+            if path in ("/api/notes", "/api/notes-pic"):   # a task's notes, by session and task number (never a path)
+                sid, n, i = q.get("s", [""])[0], q.get("n", [""])[0], q.get("i", [""])[0]
+                if not re.fullmatch(r"\d{1,4}", n) or (path == "/api/notes-pic" and not re.fullmatch(r"\d{1,3}", i)):
+                    return self._send(400, "text/plain", "bad request\n")
+                if path == "/api/notes":
+                    d = collector.notes(sid, int(n))
+                    return self._send(200 if d else 404, "application/json", json.dumps(d))
+                pic = collector.notes_pic(sid, int(n), int(i))
+                return self._send(200, pic[0], pic[1]) if pic else self._send(404, "text/plain", "not found\n")
             if path == "/api/health":
                 return self._send(200, "application/json", json.dumps({"ok": True, "ready": collector.snapshot()[0] is not None}))
             if path == "/api/events":

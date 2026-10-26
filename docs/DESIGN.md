@@ -198,7 +198,7 @@ session, agent?}`. `since` = the first tick its key was seen; it is kept in memo
 | red | `stale-lock:<root>` | the lock has been held ≥ 15 min and the holder is `ended`/`dead`/`stuck`/unknown |
 | red | `orphan-row:<n>` | the row is `active` and its bound agent is `dead`, or `ended` ≥ 10 min with no pending message to it |
 | red | `stale-row:<n>` | an agent's `queue.py state N --text "<head>"` was an error, or ≥ 2 min later the row's state does not start with that head |
-| amber | `hp-state:<root>` | `state` = `running N` but row N is not active/done; or `stopped`/`paused` while the worker is `running` on an HP row; or `stopped` with open HP rows and the worker `ended` |
+| amber | `hp-state:<root>` | `state` = `running N` (or `running N M`: each is checked) but a row named is not active/done; or `stopped`/`paused` while the worker is `running` on an HP row; or `stopped` with open HP rows and the worker `ended` |
 | amber | `mode-breach:<root>:<grp>` | MP or LP is `desk`/`paused`, but an agent of that group holds the lock |
 | amber | `waiting-free:<agent>` | a waiter exists and the lock has been free ≥ 2 min |
 | amber | `stuck:<agent>` | state `stuck` |
@@ -484,6 +484,17 @@ methods, kept small:
   minutes (no agent came or went), or on Tidy: gaps close (stepping around reserved slots), a helper away from the
   agent it serves goes back under it if a slot there is free (tried at most once a minute), and swaps that remove 2+
   crossings happen (at most every 5 minutes).
+- **Balance (2026-10-25):** a row used to keep to one side: a newcomer whose only line was to the lead went to the
+  row's end (the worker far left, others far right), since the lead was not counted as a neighbour, and closing gaps
+  never changed sides. Now the lead counts as the middle of the top row, a slot's cost adds .3 per column the row's
+  middle moves off the lead (a tie sends the worker left, others right), and closing up (quiet time or Tidy) slides
+  each row back under the lead: an odd row centred, an even row split about the lead when those places are free (−1 1,
+  −2 −1 1 2). A helper under an agent that slid moves with it when its row has room. First sight uses the same shape,
+  and Tidy lights up for an off-centre row.
+- **HP workers (2026-10-25):** the state file may name more than one running HP task (`running 128 171`); each gets
+  its worker: the newest agent named for it (`hp128`, or with a round, `hp128r3`, `hp141b`) or, unnamed, described as
+  it, an unfinished one first. Before, only the first number counted and only a bare `hp<N>` name, so a redo agent
+  `hp128r3` was a plain helper while the finished first round kept the row and was taken for the window's holder.
 - **Routing:** lines go from under the upper agent's labels to the top of the lower one (S-curves), dip into the
   channel for agents in the same row, and run down column gaps past rows in between. Parallel runs get lanes.
 
@@ -585,3 +596,33 @@ Laid out with a UI advisor.
   follows the same rule.
 - "N hidden here · Show" un-hides this session's alerts (the ⚙ reset still resets everything); "N in other sessions →"
   does what the bell does.
+
+## 21. Task notes (2026-10-25)
+
+The worker skill keeps one notes file per task (`<root>/.autopilot/worker/<N>.md`, the handoff an agent knowing nothing
+of the task can resume from) and the lead's briefs beside it (`<N>-brief.md`, `<N>-redo2-brief.md` …). For a finished
+task they say what was done far better than the transcript, so ccprobe shows them.
+
+- **Where:** a digest in the Agent tab (the side panel is narrow: right for an outline, wrong for tables and long
+  reading) and the whole document in a reader that takes the graph's place (the widest area; the panel stays beside it
+  for context; Esc gives the graph back). The WTS tab marks rows with notes, so a task whose agent is gone is reachable.
+- **Digest:** the notes cut at their `##` headings (their headings vary: "The fix", "What changed", "Changes",
+  "Results", "State", "Final state of …"). Sections that say what came out open by default: those headings, from the
+  last "Final …" on; the rest one line each with their first line as a preview. Notes in parts (a later `#`, "# Redo 2")
+  show the last part, earlier parts folded to a line. Folds follow the panel's rule (per agent; your last choice is the
+  default). The whole digest is open for a finished agent, folded for a running one, under the report.
+- **From the graph (2026-10-25):** a click only selects (the panel follows: selection is how the graph is read, and a
+  pop-up on every click would cover it); a double-click, or Enter on the selected agent, opens the reader. A small
+  page mark at the hex's lower left, ringed and tinted in the agent's colour, says there are notes; hovering lights
+  and grows it (with its own tip), and clicking it opens them (the only way on a touch screen). Two HP workers at once
+  each keep their place (a lineage per task, `worker:<N>`); a new task's worker takes the place of the one that went.
+- **Reader:** task, group, status and title; a tab per document (notes, then briefs); contents on the left (hidden when
+  narrow; full screen below 1100 px); Markdown rendered by a small escaped-first renderer (headings, nested lists,
+  tables, quotes, code; **bold**, `code`); the pictures the notes name in a strip and as links where they are named,
+  full size in a lightbox (← →, Esc).
+- **Server:** `/api/notes?s=&n=` returns the documents (redacted, up to 400 KB each) and the pictures: paths the notes
+  name (`…/181/sheet.png`, or a bare name looked for in the worker folder, its `<N>/` folder and every folder the notes
+  mention) that resolve inside the project, up to 40. `/api/notes-pic?s=&n=&i=` serves one by index: no URL names a
+  file. The model carries only the notes' time (each WTS row's `notes`, each agent's `notes: {n, t}`), so the page
+  fetches a document again only when it changes.
+

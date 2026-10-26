@@ -12,11 +12,13 @@ python3 ccprobe.py --help        # --port, --window 6h, --ctx-max, --interval, -
 
 What you see:
 - **Graph.** The lead sits on top. Below it is a grid of rows at fixed heights, five places per row; every agent keeps
-  its place. A new agent goes to the free place nearest the agents it works with (a helper under the agent it serves),
-  chosen so it adds the fewest crossing lines. A blocked agent stays where it is with a dashed outline. A fresh HP
+  its place. A new agent goes to the free place nearest the agents it works with (a helper under the agent it serves;
+  the lead counts as the middle of the top row), chosen so it adds the fewest crossing lines and keeps its row even about
+  the lead. A blocked agent stays where it is with a dashed outline. A fresh HP
   worker takes the previous worker's place, and a reused name takes its predecessor's. When an agent leaves, its place
   stays free for 2 minutes (5 for the HP worker's or a reused name's place, so the successor lands there). Once no
-  agent has come or gone for 2 minutes, the rows close up around places still held, a helper left away from the agent
+  agent has come or gone for 2 minutes, the rows close up around places still held and slide back under the lead (an
+  even row splits about it: two agents sit one each side, the lead between them; a helper moves with its agent), a helper left away from the agent
   it serves goes back under it (when a place there is free), and neighbours that would remove 2+ crossings are swapped
   at most every 5 minutes. **Tidy** (top right, shown when there is something to
   tidy) does it all at once. Places survive a reload. The view itself stays put while everything is on screen: a speech
@@ -56,9 +58,18 @@ What you see:
   lines with "show all". **Files changed:** the files it edited, with edits and +/− lines; files a shared working tree
   shows changed by others sit apart, folded ("seen in shared tree"). Recent tools show descriptions, with failed calls
   marked. Folds remember your choice per agent, and your last choice becomes the default. The detail comes from
-  `/api/agent` for the one agent on screen, so the page's data stays small.
+  `/api/agent` for the one agent on screen, so the page's data stays small. **Notes:** an agent that worked on a WTS
+  task with a notes file (the worker's `.autopilot/worker/<N>.md`) shows them under its report, cut into their
+  sections: the outcome (the fix, what changed, results, the final state, what is left open) open, the rest one line
+  each; notes in parts (redo 2, redo 3) show the latest part and fold the earlier ones. Open for a finished agent,
+  folded for a running one. **Read the notes** opens the whole document over the graph (the panel stays beside it):
+  contents on the left, tables, the pictures the notes name (click one for full size, ← → for the others) and the
+  lead's briefs as tabs. Esc closes it. On the graph, a page mark (ringed in the agent's colour) says its task has notes:
+  click the mark, double-click the agent, or press Enter on the selected one to read them; a click elsewhere on the
+  agent still just selects.
 - **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
-  its agent is actually doing, and amber marks a mismatch.
+  its agent is actually doing, and amber marks a mismatch. A row with notes has a page icon: click it (or a row with
+  no agent) to read them.
 - **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
   severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,
@@ -78,7 +89,7 @@ What you see:
   (several GB take a few seconds), then only what it gains.
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
   compact nodes, notifications.
-- **Keys:** `1` `2` `3` `4` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · `Esc` deselects · wheel zooms and
+- **Keys:** `1` `2` `3` `4` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · double-click an agent with a page mark: its notes · `Esc` closes the notes, else deselects · wheel zooms and
   dragging pans.
 - **Panel widths:** drag the splitter on either side of the graph (or focus one and use ← →) to resize the sessions list
   or the side panel, and double-click a splitter to reset it. Both widths are remembered in this browser, and the graph

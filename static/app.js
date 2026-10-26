@@ -189,6 +189,7 @@ function render() {
     renderGraph(s);
   }
   renderPanel();
+  syncReader();
   renderTimeline(s);
 }
 function showEmpty(text) { $('empty').hidden = false; setT($('emptyText'), text); }
@@ -601,14 +602,15 @@ const LEAD_X = 550, COLW = 240, MAXC = 2, Y_AGENTS = 420, ROW_GAP = 270, QUIET_M
 // how long a place stays free after its agent went: 2 minutes, or 5 for a place with an heir (the HP worker's, a reused
 // name's), so the next worker still lands where the last one was
 const GHOST_MS = 120000, HEIR_MS = 300000;
-const heirKey = k => k === 'worker' || k.startsWith('name:');
+const heirKey = k => k === 'worker' || k.startsWith('worker:') || k.startsWith('name:');
 // rows: the lead 0; then one grid of rows 1, 1.1, 1.2 … (five slots each, columns −2…2) at fixed heights, shared by
 // agents and helpers (a helper's place is under its anchor, one row down); finished 3; the shelf 4. Because every row
 // has a fixed height, a new row never pushes anything.
 const BAND = { lead: 0, agents: 1, finished: 3, shelf: 4 };
 S.mem = new Map();   // session id -> { agents: Map(key -> {sub, col, seen}), sig, since, lastReorder }
 // the place belongs to a line of succession: the HP worker's place passes to the next hp<N>, a name's to its successor
-const lineage = n => n.role === 'worker' ? 'worker' : n.name ? 'name:' + n.name : n.id;
+// (one per running HP task, so two at once keep their own places)
+const lineage = n => n.role === 'worker' ? 'worker:' + (n.task ?? n.id) : n.name ? 'name:' + n.name : n.id;
 const slotKey = (sub, col) => sub + ':' + col;
 function memFor(sid) {
   let m = S.mem.get(sid);
@@ -660,8 +662,9 @@ function crossings(E, at) {
   return n;
 }
 // the grid: remembered slots first; then each newcomer takes the free slot that costs least (distance from the slot it
-// wants, 5 per row away from the row it wants, plus 2 per crossing it adds); the slots of agents that left stay
-// reserved for GHOST_MS (HEIR_MS when a successor may come)
+// wants, 5 per row away from the row it wants, plus 2 per crossing it adds, plus .3 per column the row's middle moves
+// off the lead; on a tie the worker goes left, others right); the slots of agents that left stay reserved for GHOST_MS
+// (HEIR_MS when a successor may come)
 function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `slots` (id -> {sub, col}), which `at` reads
   const keyOf = new Map();
   for (const n of members.slice().sort((a, b) => (b.born || 0) - (a.born || 0))) {   // the newest of a line inherits
@@ -675,27 +678,37 @@ function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `
     const e = rm.get(keyOf.get(n.id));
     if (e && !used.has(slotKey(e.sub, e.col))) { slots.set(n.id, { sub: e.sub, col: e.col }); used.add(slotKey(e.sub, e.col)); }
   }
+  // a new HP worker (a new task's) takes the place of the worker that went last, so the next one lands where it was
+  for (const n of members) {
+    const k = keyOf.get(n.id);
+    if (slots.has(n.id) || !k.startsWith('worker') || rm.has(k)) continue;
+    const [gk, ge] = [...rm].filter(([x]) => x.startsWith('worker') && !present.has(x)).sort((a, b) => b[1].seen - a[1].seen)[0] || [];
+    if (gk && !used.has(slotKey(ge.sub, ge.col))) { rm.delete(gk); slots.set(n.id, { sub: ge.sub, col: ge.col }); used.add(slotKey(ge.sub, ge.col)); }
+  }
   const ghosts = [...rm].filter(([k]) => !present.has(k)).map(([, e]) => slotKey(e.sub, e.col));
   let fresh = members.filter(n => !slots.has(n.id));
   if (!slots.size && !ghosts.length) {
-    // nothing remembered (first sight): the agents in role order, rows of five centred under the lead
+    // nothing remembered (first sight): the agents in role order, rows of five centred under the lead (an even row
+    // split about it, as compactRow leaves it)
     const rank = { worker: 0, mp: 1, lp: 2, helper: 3 }, per = 2 * MAXC + 1;
     const first = fresh.filter(n => !isHelper(n)).sort((a, b) => (rank[a.role] ?? 3) - (rank[b.role] ?? 3) || (a.task || 0) - (b.task || 0) || (a.born || 0) - (b.born || 0));
     first.forEach((n, i) => {
-      const sub = Math.floor(i / per), inRow = Math.min(per, first.length - sub * per);
-      slots.set(n.id, { sub, col: i % per - Math.floor((inRow - 1) / 2) });
+      const sub = Math.floor(i / per), inRow = Math.min(per, first.length - sub * per), j = i % per, half = inRow / 2;
+      slots.set(n.id, { sub, col: inRow % 2 ? j - (inRow - 1) / 2 : j < half ? j - half : j - half + 1 });
     });
     fresh = fresh.filter(n => !slots.has(n.id));
   }
   for (const n of fresh.sort((a, b) => (isHelper(a) - isHelper(b)) || (a.born || 0) - (b.born || 0))) {   // helpers after their anchors
     const busy = new Set([...[...slots.values()].map(v => slotKey(v.sub, v.col)), ...ghosts]);
     const maxSub = Math.max(0, ...[...slots.values()].map(v => v.sub), ...ghosts.map(g => +g.split(':')[0]));
-    const w = want(n, slots);
+    const w = want(n, slots), side = n.role === 'worker' ? .001 : -.001;
+    const rowSum = sub => members.reduce((a, m) => { const v = slots.get(m.id); return a + (m !== n && !isHelper(m) && v?.sub === sub ? v.col : 0); }, 0);   // agents only, as compactRow
     let best = null;
     for (let sub = 0; sub <= Math.max(maxSub, w.sub) + 1; sub++) for (let col = -MAXC; col <= MAXC; col++) {
       if (busy.has(slotKey(sub, col))) continue;
       slots.set(n.id, { sub, col });
-      const cost = Math.abs(col - w.col) + 5 * Math.abs(sub - w.sub) + 2 * crossings(E, at) + .01 * Math.abs(col);
+      const cost = Math.abs(col - w.col) + 5 * Math.abs(sub - w.sub) + 2 * crossings(E, at) + .3 * Math.abs(rowSum(sub) + col)
+        + .01 * Math.abs(col) + side * col;
       if (!best || cost < best.cost) best = { sub, col, cost };
     }
     slots.set(n.id, { sub: best.sub, col: best.col });
@@ -703,20 +716,32 @@ function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `
   for (const n of members) { const v = slots.get(n.id); rm.set(keyOf.get(n.id), { sub: v.sub, col: v.col, seen: now }); }
   return { keyOf, ghosts: ghosts.length };
 }
-// close the gaps within each row, toward the one nearest the centre (nobody changes rows or sides); `fixed` slots
-// (helpers under their anchors) stay where they are and are stepped over
-function compactRow(rm, keys, fixed = []) {
+// close the gaps within each row, toward the one nearest the centre (nobody changes rows or order); then slide the row
+// so it sits under the lead (its ends at most half a column off centre). An even row splits evenly about the lead
+// instead (−1 1, −2 −1 1 2), a V under it, when none of those places is held. `fixed` slots (helpers under their
+// anchors) stay where they are and are stepped over. dry: only say whether anything would move.
+function compactRow(rm, keys, fixed = [], dry = false) {
   const rows = new Map(), held = new Set(fixed.map(e => slotKey(e.sub, e.col)));
-  for (const k of keys) { const e = rm.get(k); if (!rows.has(e.sub)) rows.set(e.sub, []); rows.get(e.sub).push(e); }
+  for (const k of keys) { const e = rm.get(k); if (!rows.has(e.sub)) rows.set(e.sub, []); rows.get(e.sub).push(dry ? { col: e.col } : e); }
   let moved = 0;
   for (const [sub, items] of rows) {
     items.sort((a, b) => a.col - b.col);
     const pivot = items.reduce((b, it, i) => Math.abs(it.col) < Math.abs(items[b].col) ? i : b, 0);
-    const free = c => !held.has(slotKey(sub, c));
-    let c = items[pivot].col;
-    for (let i = pivot + 1; i < items.length; i++) { c++; while (!free(c)) c++; if (items[i].col !== c) { items[i].col = c; moved++; } }
-    c = items[pivot].col;
-    for (let i = pivot - 1; i >= 0; i--) { c--; while (!free(c)) c--; if (items[i].col !== c) { items[i].col = c; moved++; } }
+    const free = c => !held.has(slotKey(sub, c)) && Math.abs(c) <= MAXC;
+    const was = items.map(it => it.col), cols = was.slice();
+    let c = cols[pivot];
+    for (let i = pivot + 1; i < items.length; i++) { c++; while (!free(c) && c < MAXC) c++; cols[i] = c; }
+    c = cols[pivot];
+    for (let i = pivot - 1; i >= 0; i--) { c--; while (!free(c) && c > -MAXC) c--; cols[i] = c; }
+    if (!cols.every(free)) cols.splice(0, cols.length, ...was);   // held places in the way: leave the row as it is
+    const n = items.length, half = n / 2, split = cols.map((_, i) => i < half ? i - half : i - half + 1);
+    if (n % 2 === 0 && n <= 2 * MAXC && split.every(free)) cols.splice(0, n, ...split);
+    // else the smallest slide that centres the row, if every place it lands on is free
+    const off = cols[0] + cols[cols.length - 1];
+    if (Math.abs(off) > 1) for (const d of [-Math.trunc(off / 2), -Math.trunc(off / 2) - Math.sign(off)]) {
+      if (Math.abs(off + 2 * d) <= 1 && cols.every(x => free(x + d))) { cols.forEach((x, i) => cols[i] = x + d); break; }
+    }
+    items.forEach((it, i) => { if (cols[i] !== was[i]) { moved++; if (!dry) it.col = cols[i]; } });
   }
   return moved;
 }
@@ -752,12 +777,13 @@ function layout(nodes, s) {
   const slot = new Map();
   const at = id => id === 'lead' ? { row: 0, col: 0 } : slot.has(id) ? { row: 1 + slot.get(id).sub / 10, col: slot.get(id).col } : null;
   const nbrs = id => E.filter(e => e[0] === id || e[1] === id).map(e => e[0] === id ? e[1] : e[0]);
-  // where a newcomer wants to be: a helper under its anchor; an agent among those it talks to, else at the row's end
+  // where a newcomer wants to be: a helper under its anchor; an agent among those it talks to (the lead counts as the
+  // middle of the top row), else the middle of the top row
   const want = (n, slots) => {
     if (isHelper(n) && slots.has(n.anchor)) return { sub: slots.get(n.anchor).sub + 1, col: slots.get(n.anchor).col };
-    const near = nbrs(n.id).filter(x => slots.has(x)).map(x => slots.get(x));
+    const near = nbrs(n.id).map(x => x === 'lead' ? { sub: 0, col: 0 } : slots.get(x)).filter(Boolean);
     if (near.length) return { sub: Math.min(...near.map(v => v.sub)), col: near.reduce((a, v) => a + v.col, 0) / near.length };
-    return { sub: 0, col: n.role === 'worker' ? -MAXC : MAXC };
+    return { sub: 0, col: 0 };
   };
   const g = placeRow(mem.agents, live, want, E, at, now, slot, isHelper);
 
@@ -785,7 +811,15 @@ function layout(nodes, s) {
     compactRow(mem.agents, agentKeys, helperSlots()); sync();
     placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
   } else if (quiet) {
+    // the helpers under an agent that slid along slide with it, when their own row has room
+    const was = live.filter(underAgent).map(n => [n, slot.get(n.anchor)?.col]);
     compactRow(mem.agents, agentKeys, [...helperSlots(), ...reserved().map(k => mem.agents.get(k))]); sync();
+    const moves = was.map(([n, c0]) => [mem.agents.get(g.keyOf.get(n.id)), (slot.get(n.anchor)?.col ?? c0) - c0]).filter(([e, d]) => e && d);
+    for (const [e, d] of moves.sort((p, q) => q[0].col * Math.sign(q[1]) - p[0].col * Math.sign(p[1]))) {
+      const col = e.col + d;
+      if (Math.abs(col) <= MAXC && ![...mem.agents.values()].some(o => o !== e && o.sub === e.sub && o.col === col)) e.col = col;
+    }
+    sync();
     // a stray helper goes back under its agent, one at a time, and only when a place there is free (else it stays put);
     // tried at most once a minute, so a helper that cannot get there is not shuffled about
     if (mem.lastHelpers === undefined || now - mem.lastHelpers > 60000) {
@@ -806,12 +840,11 @@ function layout(nodes, s) {
     sync();
   }
   if (tidy) mem.lastReorder = now;
-  // can Tidy do anything? (a gap inside a row, a reserved slot, or a helper away from its anchor)
-  const rowsOf = new Map();
-  for (const n of live) { if (isHelper(n)) continue; const v = slot.get(n.id); if (!rowsOf.has(v.sub)) rowsOf.set(v.sub, []); rowsOf.get(v.sub).push(v.col); }
-  const gap = [...rowsOf.values()].some(c => Math.max(...c) - Math.min(...c) + 1 > c.length);
+  // can Tidy do anything? (a row with a gap or off centre, a reserved slot, or a helper away from its anchor)
+  // (held as Tidy holds them: Tidy lifts the helpers under an agent before closing up, so they do not count here)
+  const loose = compactRow(mem.agents, agentKeys, live.filter(n => isHelper(n) && !underAgent(n)).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean), true) > 0;
   const astray = live.some(isAstray);
-  S.canTidy = gap || reserved().length > 0 || astray;
+  S.canTidy = loose || reserved().length > 0 || astray;
   const key = JSON.stringify([...mem.agents].map(([k, e]) => [k, e.sub, e.col]));
   if (key !== mem.savedKey) { mem.savedKey = key; saveMem(s.id, mem); }
 
@@ -1217,8 +1250,23 @@ function makeNode(id) {
   p.badge = el('g', { class: 'badge' }, g); el('circle', { r: 8 }, p.badge); p.badgeT = el('text', { y: 4 }, p.badge);
   p.lockm = el('g', { class: 'lockm' }, g); el('circle', { r: 9 }, p.lockm); el('use', { href: '#i-lock', x: -5.5, y: -6, width: 11, height: 11 }, p.lockm);
   el('title', {}, p.lockm).textContent = 'Holds the window';
+  // the notes mark: a ring in the agent's colour; hover lights it, a click opens the notes (as a double-click does)
+  p.notem = el('g', { class: 'notem' }, g);
+  const nm = el('g', { class: 'nm' }, p.notem); el('circle', { r: 9 }, nm); el('use', { href: '#i-doc', x: -5.5, y: -5.5, width: 11, height: 11 }, nm);
+  // a click selects (the panel follows); a double-click, or Enter on the selected agent, opens its task's notes
+  const notesOf = () => { const s = cur(); return s && nodeById(s, id)?.notes; };
   g.addEventListener('click', ev => { ev.stopPropagation(); select(id); });
-  g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(id); } });
+  g.addEventListener('dblclick', ev => { ev.stopPropagation(); const nt = notesOf(); if (nt) openReader(nt.n); });
+  p.notem.addEventListener('click', ev => { ev.stopPropagation(); const nt = notesOf(); if (!nt) return; if (S.sel !== id) select(id); openReader(nt.n); });
+  p.notem.addEventListener('dblclick', ev => ev.stopPropagation());   // its click already opened them
+  p.notem.addEventListener('mouseenter', () => { const nt = notesOf(); if (nt) showTip(p.notem, `Task ${nt.n}'s notes · updated ${hhmm(nt.t)}\nclick to read`); });
+  p.notem.addEventListener('mouseleave', () => showTip(g, nodeTip(id)));
+  g.addEventListener('keydown', ev => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    ev.preventDefault();
+    const nt = ev.key === 'Enter' && S.sel === id && notesOf();
+    if (nt) openReader(nt.n); else select(id);
+  });
   g.addEventListener('mouseenter', () => showTip(g, nodeTip(id)));
   g.addEventListener('mouseleave', hideTip);
   return p;
@@ -1272,6 +1320,8 @@ function updateNode(p, n, pos, now, nAlerts) {
   p.badge.style.display = nAlerts ? '' : 'none';
   setA(p.badge, { transform: `translate(${(r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` }); setT(p.badgeT, '!');
   p.lockm.style.display = n.holds ? '' : 'none';   // holds the window (its card is on the shelf, joined by a red line)
+  p.notem.style.display = n.notes ? '' : 'none';    // its task has notes: a double-click reads them
+  setA(p.notem, { transform: `translate(${(-r * .8).toFixed(1)},${(r * .72).toFixed(1)})` });
   setA(p.lockm, { transform: `translate(${(r * .8).toFixed(1)},${(r * .72).toFixed(1)})` });
   // a one-shot ring when the state changes
   const prev = S.prevState.get(n.id);
@@ -1654,7 +1704,7 @@ function nodeTip(id) {
   const n = nodeById(s, id); if (!n) return '';
   const st = n.state || {};
   return [n.label || s.project, st.label, n.task ? `task ${n.task}: ${n.task_title || ''}` : '', n.ctx ? `context ${kfmt(n.ctx)} / ${kfmt(n.ctx_max)}` : '',
-    st.detail ? 'now: ' + st.detail : '', 'last active ' + ago(n.last_ts, S.model.now)].filter(Boolean).join('\n');
+    st.detail ? 'now: ' + st.detail : '', 'last active ' + ago(n.last_ts, S.model.now), n.notes ? `double-click: task ${n.notes.n}'s notes` : ''].filter(Boolean).join('\n');
 }
 
 document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) { S.tab = b.dataset.tab; renderPanel(); } });
@@ -1818,6 +1868,266 @@ function msgsHtml(s, n, isLead) {
   return h;
 }
 
+// ---- a task's notes (the worker's .autopilot/worker/<N>.md) and the lead's briefs: a digest in the Agent tab, the whole
+// document in a reader over the graph. Fetched from /api/notes while shown, again when the notes file changes ----
+S.notes = new Map();   // sid/n -> { t, d, busy, v } (v: which fetch d came from, so the reader knows it changed)
+S.notesV = 0;
+function wantNotes(sid, n, t) {
+  const k = sid + '/' + n, e = S.notes.get(k);
+  if (e && (e.busy || e.t >= t)) return e.d;   // only a newer file is fetched again (two sources of t may lag each other)
+  S.notes.set(k, { t, d: e?.d, busy: true, v: e?.v });
+  fetch(`/api/notes?s=${encodeURIComponent(sid)}&n=${n}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null)
+    .then(d => { S.notes.set(k, { t, d, busy: false, v: ++S.notesV }); renderPanel(); syncReader(); });
+  return e?.d;
+}
+// the notes file's time as the model knows it (its WTS row, else an agent that worked on it)
+function notesT(s, n) {
+  for (const g of Object.values(s.wts?.groups || {})) for (const r of g) if (r.n === n && r.notes) return r.notes;
+  return (s.agents || []).find(a => a.notes?.n === n)?.notes.t ?? 0;
+}
+const kbn = b => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
+const RE_PICREF = /[\w./~-]*[\w-]\.(?:png|jpe?g|webp|gif)\b/gi;
+
+// Markdown, the subset the notes use: headings, paragraphs, nested lists, tables, quotes, code; **bold**, *em*, `code`.
+// Escaped first; a picture the notes name becomes a button that opens it.
+function mdInline(s, refs) {
+  const keep = [];
+  const put = h => `\u0001${keep.push(h) - 1}\u0002`;
+  const pic = (txt, ref) => { const i = refs?.get(ref); return i == null ? null : put(`<button class="piclink" data-pic="${i}">${icon('i-image')}${esc(txt)}</button>`); };
+  let t = String(s).replace(/`([^`\n]+)`/g, (_, c) => { const r = c.match(RE_PICREF); return (r && pic(c, r[0])) || put(`<code>${esc(c)}</code>`); });
+  if (refs?.size) t = t.replace(RE_PICREF, r => pic(r, r) || r);
+  t = esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[\s(])\*(?!\s)([^*\n]+?)\*(?=$|[\s).,;:!?])/g, '$1<i>$2</i>')
+    .replace(/\[([^\]\n]+)\]\(([^)\s\u0001\u0002]+)\)/g, '<span class="mdlink" data-tip="$2">$1</span>');   // a kept span never goes in the tip
+  return t.replace(/\u0001(\d+)\u0002/g, (_, i) => keep[+i]);
+}
+const mdPlain = s => String(s).replace(/`([^`]*)`/g, '$1').replace(/\*\*|__/g, '').replace(/^\s*(?:[-*+]|\d+[.)]|>)\s+/, '').replace(/\s*\|\s*/g, ' · ').trim();
+function mdList(items, inl) {
+  const root = { kids: [] }, st = [{ ind: -1, node: root }];
+  for (const it of items) {
+    while (st.length > 1 && st[st.length - 1].ind >= it.ind) st.pop();
+    const node = Object.assign({ kids: [] }, it);
+    st[st.length - 1].node.kids.push(node); st.push({ ind: it.ind, node });
+  }
+  const out = kids => {
+    let h = '', k = 0;
+    while (k < kids.length) {
+      const ord = kids[k].ord, start = kids[k].start; let g = '';
+      while (k < kids.length && kids[k].ord === ord) { const x = kids[k++]; g += `<li>${inl(x.text)}${x.kids.length ? out(x.kids) : ''}</li>`; }
+      h += ord ? `<ol${start > 1 ? ` start="${start}"` : ''}>${g}</ol>` : `<ul>${g}</ul>`;
+    }
+    return h;
+  };
+  return out(root.kids);
+}
+function mdBlocks(lines, refs, heads, pfx) {   // heads: collects the inner headings (for the reader's contents)
+  const inl = s => mdInline(s, refs);
+  const isList = l => /^\s*(?:[-*+]|\d{1,3}[.)])\s+\S/.test(l);
+  const isTable = (a, b) => /^\s*\|/.test(a) && /^\s*\|?\s*:?-{2,}/.test(b || '');
+  const isRule = l => /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(l);
+  const starts = (l, nx) => /^\s*```/.test(l) || /^#{1,6}\s/.test(l) || isList(l) || /^\s*>/.test(l) || isTable(l, nx) || isRule(l);
+  let h = '', i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    let m;
+    if (!l.trim()) { i++; continue; }
+    if (/^\s*```/.test(l)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++; h += `<pre class="mdpre">${esc(buf.join('\n'))}</pre>`; continue;
+    }
+    if ((m = l.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/))) {
+      const id = `${pfx}-${heads.length}`;
+      heads.push({ id, text: mdPlain(m[2]) });
+      h += `<div class="mdh" data-sec="${id}">${inl(m[2])}</div>`; i++; continue;
+    }
+    if (isRule(l)) { h += '<hr>'; i++; continue; }
+    if (isTable(l, lines[i + 1])) {
+      const cells = s => s.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+      const head = cells(l), body = []; i += 2;
+      while (i < lines.length && /^\s*\|/.test(lines[i])) body.push(cells(lines[i++]));
+      h += `<div class="mdtable"><table><thead><tr>${head.map(c => `<th>${inl(c)}</th>`).join('')}</tr></thead><tbody>`
+        + body.map(r => `<tr>${r.map(c => `<td>${inl(c)}</td>`).join('')}</tr>`).join('') + '</tbody></table></div>';
+      continue;
+    }
+    if (/^\s*>/.test(l)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
+      h += `<blockquote>${mdBlocks(buf, refs, heads, pfx)}</blockquote>`; continue;
+    }
+    if (isList(l)) {
+      const items = [];
+      while (i < lines.length) {
+        const x = lines[i];
+        if (!x.trim()) {   // a blank line ends the list unless more of it follows
+          let j = i + 1; while (j < lines.length && !lines[j].trim()) j++;
+          if (j < lines.length && (isList(lines[j]) || /^\s{2,}\S/.test(lines[j]))) { i = j; continue; }
+          break;
+        }
+        const mm = x.match(/^(\s*)([-*+]|\d{1,3}[.)])\s+([\s\S]*)$/);   // as isList (a U+2028 in the text too)
+        if (mm) items.push({ ind: mm[1].length, ord: /\d/.test(mm[2]), start: parseInt(mm[2], 10) || 1, text: mm[3] });
+        else if (/^\s/.test(x) || !starts(x, lines[i + 1])) items[items.length - 1].text += '\n' + x.trim();   // a wrapped line
+        else break;
+        i++;
+      }
+      h += mdList(items, inl); continue;
+    }
+    const buf = [l]; i++;
+    while (i < lines.length && lines[i].trim() && !starts(lines[i], lines[i + 1])) buf.push(lines[i++]);
+    h += `<p>${inl(buf.join('\n'))}</p>`;
+  }
+  return h;
+}
+// the document cut at its # / ## headings (the first # is its title); the sections a reader wants first open by default:
+// the outcome (the fix, what changed, results, the final state, what is left open), the latest when there are rounds
+const OUTCOME = /^(?:the\s+)?(?:fix(?:es)?|changes?|what (?:changed|was (?:built|done|changed))|results?|outcome|summary|final\b|state|verdict|open\b|done\b|conclusion)/i;
+function mdDoc(d, doc) {
+  if (doc._p) return doc._p;
+  const refs = new Map();
+  for (const p of d.pics || []) for (const r of p.refs) refs.set(r, p.i);
+  const lines = doc.text.replace(/\r/g, '').split('\n');
+  let title = '', fence = false, cur = { h: '', lines: [] };
+  const secs = [cur];
+  for (const l of lines) {
+    if (/^\s*```/.test(l)) fence = !fence;
+    const m = !fence && l.match(/^(#{1,2})\s+(.*?)\s*#*\s*$/);
+    if (m && m[1] === '#' && !title && secs.length === 1 && !cur.lines.some(x => x.trim())) { title = m[2]; continue; }
+    if (m) { cur = { h: m[2], lv: m[1].length, lines: [] }; secs.push(cur); continue; }
+    cur.lines.push(l);
+  }
+  const pre = secs.shift(), used = new Set();
+  const slug = h => { let s = mdPlain(h).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'sec', k = s, j = 2; while (used.has(k)) k = `${s}-${j++}`; used.add(k); return k; };
+  const out = secs.map((x, i) => {
+    const heads = [], k = slug(x.h), text = x.lines.join('\n');
+    const first = x.lines.find(l => l.trim() && !/^\s*(?:#|```|\|?\s*:?-{2,})/.test(l)) || '';
+    const npic = new Set([...text.matchAll(RE_PICREF)].map(r => refs.get(r[0])).filter(v => v != null)).size;
+    const rows = x.lines.filter(l => /^\s*\|/.test(l)).length;
+    return { h: x.h, lv: x.lv, slug: k, html: mdBlocks(x.lines, refs, heads, 's' + i), toc: heads, preview: mdPlain(first).slice(0, 160),
+      meta: [rows > 2 ? `table · ${rows - 2} rows` : '', npic ? `${npic} picture${npic > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · '),
+      outcome: OUTCOME.test(mdPlain(x.h)) };
+  });
+  // a document in parts (a later # heading: "# Redo 2 …"): only the last part counts for what opens first
+  const from = out.map(x => x.lv === 1).lastIndexOf(true) + 1, last = out.slice(from);
+  const fin = last.map(x => /^final\b/i.test(mdPlain(x.h))).lastIndexOf(true);
+  last.forEach((x, i) => { x.def = x.outcome && i >= Math.max(0, fin); });
+  if (!last.some(x => x.def) && last.length) (last.find(x => !/\bask\b|brief/i.test(x.h)) || last[0]).def = true;
+  const preH = [];
+  return (doc._p = { title, pre: mdBlocks(pre.lines, refs, preH, 'p'), secs: out });
+}
+// "Task 181 (HP): a menu that closes … Notes by hp181, 2026-10-25" → "a menu that closes …"
+const notesTitle = t => { const x = String(t).replace(/^task\s*\d+\s*(?:\((?:HP|MP|LP)\))?\s*(?:notes)?\s*[:·—-]?\s*/i, '').replace(/\.?\s*notes by [^.]*$/i, '')
+  .replace(/\s*\((?:by\s+)?(?:hp|mp|lp)\d+[a-z]?\b[^)]*\)\s*$/i, '').replace(/\s*\(\d{4}-\d\d-\d\d\)\s*$/, '').trim(); return x.startsWith('(') ? '' : x; };
+const docLabel = x => x.kind === 'notes' ? 'Notes' : 'Brief' + ((x.name.match(/^\d+-(.+)-brief\.md$/) || [])[1] ? ' · ' + x.name.match(/^\d+-(.+)-brief\.md$/)[1] : '');
+
+// the Agent tab: the notes folded to their sections, the outcome open; "Read" opens the whole of it over the graph
+function notesHtml(s, n, fin) {
+  const nt = n.notes;
+  if (!nt) return '';
+  const d = wantNotes(s.id, nt.n, nt.t), doc = d?.docs?.find(x => x.kind === 'notes');
+  const open = isOpen(n.id, 'notes', fin);
+  let h = foldBtn('notes', open, `Notes · task ${nt.n}`, `${doc ? kbn(doc.size) + ' · ' : ''}updated ${hhmm(nt.t)}`);
+  if (!open) return h;
+  if (!doc) return h + `<div class="empty-note">${d === undefined ? 'loading…' : 'could not be read'}</div>`;
+  const p = mdDoc(d, doc), title = notesTitle(p.title) || rowIndex(s).get(nt.n)?.title || '';
+  h += `<div class="notes" data-nn="${nt.n}">` + (title ? `<div class="ntitle">${mdInline(title, null)}</div>` : '');
+  const sec = x => {
+    const so = isOpen(n.id, 'n:' + x.slug, x.def);
+    return `<button class="nsec" data-fold="n:${x.slug}" data-k="n-${x.slug}" aria-expanded="${so}">${icon('i-chev', 'chev')}<span class="nh">${esc(mdPlain(x.h))}</span>`
+      + `<span class="fm">${esc(x.meta)}</span>${so || !x.preview ? '' : `<span class="np">${esc(x.preview)}</span>`}</button>` + (so ? `<div class="md">${x.html}</div>` : '');
+  };
+  // in parts ("# Redo 2 …"): the last part laid out, the earlier ones folded to a line each
+  const parts = [{ head: null, secs: [] }];
+  for (const x of p.secs) if (x.lv === 1) parts.push({ head: x, secs: [] }); else parts[parts.length - 1].secs.push(x);
+  parts.forEach((pt, i) => {
+    if (!pt.head) { h += pt.secs.map(sec).join(''); return; }
+    const lastPart = i === parts.length - 1, po = lastPart || isOpen(n.id, 'np:' + pt.head.slug, false);
+    h += lastPart ? `<div class="npart">${esc(mdPlain(pt.head.h))}</div>`
+      : `<button class="nsec npart" data-fold="np:${pt.head.slug}" data-k="np-${pt.head.slug}" aria-expanded="${po}">${icon('i-chev', 'chev')}<span class="nh">${esc(mdPlain(pt.head.h))}</span><span class="fm">${pt.secs.length} sections</span></button>`;
+    if (po) h += (pt.head.html ? `<div class="md">${pt.head.html}</div>` : '') + pt.secs.map(sec).join('');
+  });
+  const briefs = d.docs.filter(x => x.kind === 'brief').length;
+  h += `</div><div class="nfoot"><button class="linkbtn" data-notes="${nt.n}" data-k="n-read">${icon('i-doc')}Read the notes${d.pics.length ? ` · ${d.pics.length} picture${d.pics.length > 1 ? 's' : ''}` : ''}</button>`
+    + (briefs ? `<button class="linkbtn" data-notes="${nt.n}" data-doc="${d.docs.findIndex(x => x.kind === 'brief')}">the lead's brief${briefs > 1 ? 's · ' + briefs : ''}</button>` : '') + '</div>';
+  return h;
+}
+
+// the reader: over the graph (the widest place), the panel stays beside it; Esc or × closes it
+S.reader = null;   // { sid, n, doc, pic }
+function openReader(n, doc = 0, pic = null) { S.reader = { sid: S.sid, n, doc, pic }; S.readerKey = null; hideTip(); syncReader(); $('reader').querySelector('.rdx')?.focus({ preventScroll: true }); }
+function closeReader() { const was = S.reader; S.reader = null; syncReader(); if (was) document.querySelector(`#panel [data-notes="${was.n}"]`)?.focus({ preventScroll: true }); }
+function syncReader() {
+  const R = S.reader, el = $('reader');
+  if (!R || !cur() || cur().id !== R.sid) {
+    S.reader = null; S.readerKey = null;
+    if (!el.hidden) { el.hidden = true; el.innerHTML = ''; $('stage').classList.remove('reading'); }
+    return;
+  }
+  const s = cur(), t = notesT(s, R.n), d = wantNotes(s.id, R.n, t);
+  const key = [R.sid, R.n, R.doc, t, S.notes.get(s.id + '/' + R.n)?.v ?? '', R.pic].join('|');
+  if (key === S.readerKey) return;
+  if (S.readerKey && d && key.split('|').slice(0, -1).join('|') === S.readerKey.split('|').slice(0, -1).join('|')) {
+    S.readerKey = key; el.querySelector('.lightbox')?.remove();   // only the picture changed: the rest stays (and its thumbnails)
+    if (R.pic != null) el.insertAdjacentHTML('beforeend', lightboxHtml(s, R, d));
+    return;
+  }
+  const body = el.querySelector('.rdbody'), keepAt = S.readerKey && S.readerKey.split('|').slice(0, 3).join('|') === key.split('|').slice(0, 3).join('|');
+  const top = body ? body.scrollTop : 0;
+  S.readerKey = key; el.hidden = false; $('stage').classList.add('reading');
+  el.innerHTML = readerHtml(s, R, d);
+  if (keepAt) el.querySelector('.rdbody').scrollTop = top;
+}
+function readerHtml(s, R, d) {
+  const row = rowIndex(s).get(R.n);
+  const doc = d?.docs?.[R.doc] || d?.docs?.[0], p = doc && mdDoc(d, doc);
+  const title = (p && notesTitle(p.title)) || row?.title || p?.title || '';
+  const st = row ? String(row.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '') : '';
+  let h = `<div class="rdhead"><div class="rdt"><span class="rdn">Task ${R.n}</span>${row ? `<span class="rdg c-${GROUPCOL[row.group] || 'slate'}">${row.group}</span><span class="rds">${esc(st)}</span>` : ''}`
+    + `<button class="iconbtn rdx" data-rdclose aria-label="Close the notes (Esc)" data-tip="Close (Esc)">${icon('i-x')}</button></div>`
+    + `<div class="rdtitle" id="rdTitle">${mdInline(title, null)}</div>`;
+  if (!d) return h + `</div><div class="rdbody"><div class="empty-note">${d === undefined ? 'Loading…' : 'The notes could not be read.'}</div></div>`;
+  h += `<div class="rdtabs" role="tablist">${d.docs.map((x, i) => `<button role="tab" aria-selected="${x === doc}" data-rddoc="${i}">${esc(docLabel(x))}</button>`).join('')}`
+    + `<span class="rdmeta">${esc(doc.name)} · updated ${hhmm(doc.mtime)}${S.model.now - doc.mtime > 86400 ? ' ' + new Date(doc.mtime * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''} · ${kbn(doc.size)}${doc.cut ? ' · cut at 400 KB' : ''}</span></div></div>`;
+  const pics = doc.kind === 'notes' ? d.pics : [];
+  const toc = p.secs.map(x => `<button${x.lv === 1 ? ' class="part"' : ''} data-rdsec="${x.slug}">${esc(mdPlain(x.h))}</button>` + x.toc.map(t => `<button class="sub" data-rdsec="${t.id}">${esc(t.text)}</button>`).join('')).join('');
+  h += `<div class="rdbody"><nav class="rdtoc" aria-label="Contents">${pics.length ? `<button data-rdsec="pics">Pictures · ${pics.length}</button>` : ''}${toc}</nav><article class="md rdart">`;
+  const src = i => `/api/notes-pic?s=${encodeURIComponent(s.id)}&n=${R.n}&i=${i}`;
+  if (pics.length) h += `<div class="rdpics" data-sec="pics">${pics.map(x => `<button class="thumb" data-pic="${x.i}" data-tip="${esc(x.refs[0])} · ${kbn(x.size)}"><img src="${src(x.i)}" alt="" loading="lazy"><span>${esc(x.name)}</span></button>`).join('')}</div>`;
+  if (p.pre) h += p.pre;
+  h += p.secs.map(x => `<section data-sec="${x.slug}"${x.lv === 1 ? ' class="part"' : ''}><h2>${mdInline(x.h, null)}</h2>${x.html}</section>`).join('') + '</article></div>';
+  return h + lightboxHtml(s, R, d);
+}
+function lightboxHtml(s, R, d) {
+  const lp = R.pic != null && d.pics.find(x => x.i === R.pic);
+  if (!lp) return '';
+  const src = `/api/notes-pic?s=${encodeURIComponent(s.id)}&n=${R.n}&i=${lp.i}`;
+  return `<div class="lightbox" data-lbclose><img src="${src}" alt="${esc(lp.name)}"><div class="lbcap"><span>${esc(lp.refs[0])} · ${kbn(lp.size)}${d.pics.length > 1 ? ` · ${lp.i + 1} of ${d.pics.length} · ← →` : ''}</span>`
+    + `<a href="${src}" target="_blank" rel="noopener">open full size</a><button class="linkbtn" data-lbclose>close</button></div></div>`;
+}
+$('reader').addEventListener('click', e => {
+  const t = e.target.closest('[data-rdclose],[data-rddoc],[data-rdsec],[data-pic],[data-lbclose]');
+  if (!t || (t.hasAttribute('data-lbclose') && e.target.closest('img, a'))) return;
+  const R = S.reader;
+  if (!R) return;
+  if (t.hasAttribute('data-rdclose')) return closeReader();
+  if (t.hasAttribute('data-lbclose')) { R.pic = null; return syncReader(); }
+  if (t.dataset.rddoc) { R.doc = +t.dataset.rddoc; R.pic = null; S.readerKey = null; syncReader(); $('reader').querySelector('.rdbody').scrollTop = 0; return; }
+  if (t.dataset.pic) { R.pic = +t.dataset.pic; return syncReader(); }
+  const sec = $('reader').querySelector(`.rdart [data-sec="${t.dataset.rdsec}"]`);
+  if (sec) { const b = $('reader').querySelector('.rdbody'); b.scrollTo({ top: b.scrollTop + sec.getBoundingClientRect().top - b.getBoundingClientRect().top - 8, behavior: settings.motion === 'full' ? 'smooth' : 'auto' }); }
+});
+function readerKey(e) {   // true when the reader took the key
+  const R = S.reader;
+  if (!R) return false;
+  if (e.key === 'Escape') { if (R.pic != null) { R.pic = null; syncReader(); } else closeReader(); return true; }
+  if (R.pic != null && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    const pics = S.notes.get(R.sid + '/' + R.n)?.d?.pics || [];
+    const k = pics.findIndex(x => x.i === R.pic);
+    if (pics.length) { R.pic = pics[(k + (e.key === 'ArrowRight' ? 1 : -1) + pics.length) % pics.length].i; syncReader(); }
+    return true;
+  }
+  return false;
+}
+
 function agentPanel(s, id) {
   const now = S.model.now;
   const n = nodeById(s, id) || nodeById(s, 'lead');
@@ -1860,10 +2170,10 @@ function agentPanel(s, id) {
     for (const x of (s.lead.notices || [])) h += `<div class="alert amber"><div class="ad">${hhmm(x.t)} · ${esc(x.text)}</div></div>`;
     h += said() + context() + filesHtml(aid, d) + toolsHtml(s, n, d, false) + msgsHtml(s, n, true);
   } else if (fin) {
-    h += report() + filesHtml(aid, d) + troubleHtml(d?.trouble) + task() + brief() + toolsHtml(s, n, d, true) + msgsHtml(s, n, false);
+    h += report() + notesHtml(s, n, true) + filesHtml(aid, d) + troubleHtml(d?.trouble) + task() + brief() + toolsHtml(s, n, d, true) + msgsHtml(s, n, false);
   } else {
     h += nowBlock(s, n, st, d, now, sc) + (n.role === 'helper' ? said() : '') + task() + brief() + context() + report()
-      + filesHtml(aid, d) + toolsHtml(s, n, d, false) + msgsHtml(s, n, false);
+      + notesHtml(s, n, false) + filesHtml(aid, d) + toolsHtml(s, n, d, false) + msgsHtml(s, n, false);
   }
   return h;
 }
@@ -1995,7 +2305,7 @@ function wtsPanel(s) {
     : 'Window free'}${(win.waiters || []).length ? ' · waiting: ' + win.waiters.map(id => esc(nm(id))).join(', ') : ''}</span></div>`;
   const counts = ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${(w.groups[g] || []).length}</a>`).join('');
   h += `<div class="jump">${counts}</div>`;
-  const cur = +((w.state_file || '').match(/running\s+(\d+)/) || [])[1];
+  const running = new Set(((w.state_file || '').match(/^running((?:\s+\d+)+)/) || ['', ''])[1].split(/\s+/).filter(Boolean).map(Number));
   for (const g of ['HP', 'MP', 'LP']) {
     const rows = w.groups[g] || [];
     const runs = [...new Set(rows.map(r => r.runs_on))];
@@ -2008,8 +2318,9 @@ function wtsPanel(s) {
       const a = r.agent ? agents.get(r.agent) : null;
       const statusText = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '');
       const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
-      h += `<div class="wrow ${r.n === cur ? 'cur' : ''}${a ? ' bound' : ''}${live ? ` live c-${rc}` : ''}" ${a ? `data-select="${esc(a.id)}"` : ''} data-tip="${esc(r.task)}">
-        <span class="n">${r.n}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : ''}">${icon(ri)}${esc(statusText)}</span>`;
+      const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
+      h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(r.task)}">
+        <span class="n">${r.n}</span><span class="t">${nb}${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : ''}" data-tip="${esc(r.status)}">${icon(ri)}<span>${esc(statusText)}</span></span>`;
       if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
       if (a) {
         const [ai, ac] = stLook(a.state);
@@ -2107,6 +2418,12 @@ $('panel').addEventListener('click', e => {
     }
     store.set('ccprobe.dismissed', dismissed);
     return render();
+  }
+  const nb = e.target.closest('[data-notes],[data-pic]');   // a task's notes: the reader over the graph
+  if (nb) {
+    if (nb.dataset.notes) return openReader(+nb.dataset.notes, +(nb.dataset.doc || 0));
+    const nn = nb.closest('[data-nn]');
+    if (nn) return openReader(+nn.dataset.nn, 0, +nb.dataset.pic);
   }
   const f = e.target.closest('[data-fold]');
   if (f) {
@@ -2278,6 +2595,7 @@ $('resetBtn').addEventListener('click', () => {
 // ---- keyboard ----
 document.addEventListener('keydown', e => {
   if (e.target.closest('input, textarea, select')) return;
+  if (readerKey(e)) return void e.preventDefault();
   if (e.key === 'Escape') { if (!$('settings').hidden) $('settings').hidden = true; else if (!$('tokPop').hidden) $('tokPop').hidden = true; else select('lead'); }
   else if (e.key === 'f' || e.key === 'F') doFit();
   else if (e.key.length === 1 && '1234'.includes(e.key)) {   // the shown tabs, in order

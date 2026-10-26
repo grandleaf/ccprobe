@@ -20,11 +20,12 @@ AGENT_BACKFILL, AGENT_MAX = 2 << 20, 32 << 20
 HISTORY_S = 2 * 3600            # how far back a transcript is read on first sight (time-based, capped in bytes)
 # "Task 74: Part 5 rebuild", "MP 141b: widgets", "HP 135 redo: …" (anchored at the start: audit minor 4). Only a
 # letter suffix or a redo word may come before the colon: "MP 141 advisor:" is a helper's, "Task 2026-10-24 notes:" none
-RE_AGAIN = r"[a-z]?(?:\s+(?:redo|retry|rerun|again|round\s*\d+|take\s*\d+|part\s*\d+|v\d+))?\s*:"
-RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})" + RE_AGAIN, re.I)
-RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|task)(\d{1,4})$", re.I)    # meta.name "mp111"
-RE_HP_NAME = re.compile(r"^hp(\d{1,4})$", re.I)                      # the HP worker, one fresh agent per task: "hp154"
-RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})" + RE_AGAIN, re.I)        # or, started without a name: "HP 163: …", "HP 135 redo: …"
+RE_AGAIN = r"[A-Za-z]?(?i:\s+\(?(?:(?:redo|retry|rerun|again|fix)(?:\s*#?\d+)?|(?:round|take|part)\s*#?\d+|v\d+)\)?)?\s*:"
+RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})" + RE_AGAIN)
+# a name may carry a round: a letter ("mp141b") or r<N> ("hp128r3", redo 3)
+RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|task)(\d{1,4})(?:[a-z]|r\d{1,2})?$", re.I)    # meta.name "mp111"
+RE_HP_NAME = re.compile(r"^hp(\d{1,4})(?:[a-z]|r\d{1,2})?$", re.I)       # the HP worker, one fresh agent per task: "hp154"
+RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})" + RE_AGAIN)        # or, started without a name: "HP 163: …", "HP 135 redo: …"
 RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|task)\s*(\d{1,4})\b", re.I)
 HOT_S = 60
 DEAD_KEEP_S = 600
@@ -122,6 +123,20 @@ class Collector:
             d["brief"] = tr.brief()               # a file read (once): outside the lock
         return d
 
+    def _root(self, sid):
+        with self.lock:
+            s = next((x for x in (self.model or {}).get("sessions", []) if x["id"] == sid), None)
+        return (s.get("wts") or {}).get("root") if s else None
+
+    def notes(self, sid, n):
+        """Task n's notes, briefs and the pictures they name (None when the session has no queue or the task none)."""
+        root = self._root(sid)
+        return wts_mod.notes(root, n) if root else None
+
+    def notes_pic(self, sid, n, i):
+        root = self._root(sid)
+        return wts_mod.notes_pic(root, n, i) if root else None
+
     def snapshot(self):
         with self.lock:
             return self.model, self.digest
@@ -197,25 +212,29 @@ class Collector:
         for c in cands:
             if c["meta"].get("name"):
                 latest_by_name[c["meta"]["name"]] = c["id"]
-        # the HP worker: the newest agent for the running HP task, named for it ("hp135") or, started without a name,
-        # described as it ("HP 135 redo: …"), so a redo replaces the first round's agent; else the newest hp<N> (or a
-        # "worker" from before the skill named them by task); every other HP agent is retired
-        hp_running = None
+        # the HP workers: for each running HP task ("running 128 171": more than one may run), the newest agent for it,
+        # named for it ("hp135", "hp128r3" for redo 3) or, started without a name, described as it ("HP 135 redo: …"),
+        # so a redo replaces the first round's agent; else the newest hp<N> (or a "worker" from before the skill named
+        # them by task); every other HP agent is retired. worker_id is the first task's.
+        hp_running = []
         if wok:
-            m = re.match(r"running\s+(\d+)", w.get("state_file") or "")
-            hp_running = int(m.group(1)) if m else None
-        worker_id = None
+            m = re.match(r"running((?:\s+\d+)+)", w.get("state_file") or "")
+            hp_running = [int(x) for x in m.group(1).split()] if m else []
+        workers = []
         if wok:
-            if hp_running is not None:          # cands are oldest first: the last match is the newest
-                mine = [c for c in cands if c["meta"].get("name") == f"hp{hp_running}"
+            for hp_n in hp_running:              # cands are oldest first: the last match is the newest
+                mine = [c for c in cands if ((mm := RE_HP_NAME.match(c["meta"].get("name") or "")) and int(mm.group(1)) == hp_n)
                         or (not c["meta"].get("name") and (c["meta"].get("spawnDepth") or 1) == 1
-                            and (mm := RE_HP_DESC.match(c["meta"].get("description") or "")) and int(mm.group(1)) == hp_running)]
-                live = [c for c in mine if not c["meta"].get("finished")]   # Claude Code's own word: a finished round gives way
-                worker_id = (live or mine)[-1]["id"] if mine else None
-            if not worker_id:
+                            and (mm := RE_HP_DESC.match(c["meta"].get("description") or "")) and int(mm.group(1)) == hp_n)]
+                # Claude Code's own word: a finished (or stopped) round gives way
+                live = [c for c in mine if not (c["meta"].get("finished") or c["meta"].get("stoppedByUser"))]
+                if mine:
+                    workers.append((live or mine)[-1]["id"])
+            if not workers:
                 hp_named = [c for c in cands if _is_worker_name(c["meta"].get("name"))]
-                worker_id = hp_named[-1]["id"] if hp_named else None
-        in_view = [c for c in cands if now - c["mtime"] <= self.window_s or c["id"] == worker_id]
+                workers = [hp_named[-1]["id"]] if hp_named else []
+        worker_id = workers[0] if workers else None
+        in_view = [c for c in cands if now - c["mtime"] <= self.window_s or c["id"] in workers]
         trs = {c["id"]: self.transcript(c["path"], AGENT_BACKFILL, AGENT_MAX) for c in in_view}
         for c in in_view:
             self.where[(sid, c["id"])] = (c["path"], s["cwd"])
@@ -225,7 +244,7 @@ class Collector:
         task_of = {}
         for c in in_view:
             aid, meta = c["id"], c["meta"]
-            n = hp_running if aid == worker_id and meta.get("name") == "worker" else None   # an hp<N> says its own task
+            n = hp_running[0] if hp_running and aid == worker_id and meta.get("name") == "worker" else None   # an hp<N> says its own task
             for rx, src in ((RE_NAME_TASK, meta.get("name") or ""), (RE_TASK, meta.get("description") or "")):
                 if n is None:
                     mm = rx.match(src)
@@ -235,9 +254,9 @@ class Collector:
             if n is not None and n in rows:
                 task_of[aid] = n
         agent_of_row = {}
-        for c in in_view:                     # newest agent wins a row; the worker always keeps its HP row
+        for c in in_view:                     # newest agent wins a row; a worker always keeps its HP row
             n = task_of.get(c["id"])
-            if n is not None and agent_of_row.get(n) != worker_id:
+            if n is not None and agent_of_row.get(n) not in workers:
                 agent_of_row[n] = c["id"]
         for aid in list(task_of):
             if agent_of_row.get(task_of[aid]) != aid:
@@ -299,10 +318,12 @@ class Collector:
                 if tid in ids and t > stopped.get(tid, (0, None))[0]:
                     stopped[tid] = (t, src)
 
+        nidx = wts_mod.notes_index(w["root"]) if wok else {}
         agents = []
         for c in in_view:
             aid, meta, tr = c["id"], c["meta"], trs[c["id"]]
             n = task_of.get(aid)
+            nn = n if n in nidx else _task_of_meta(meta, nidx)     # the task whose notes it wrote (its row may be gone)
             row = rows.get(n) if n is not None else None
             row_open = (row["kind"] in wts_mod.OPEN) if row else None
             st = agent_state(tr, now, alive=s["alive"], lock_name=lock_name, is_holder=holder == aid, row_open=row_open,
@@ -322,7 +343,7 @@ class Collector:
                     st = {"key": "parked", "label": clip(head, 40), "since": st["since"], "detail": "its row says so", "sub": "hold"}
             if holder == aid and st["key"] in ("running", "polling", "waiting_window"):
                 st = dict(st, key="running", label="holds the window · " + _dur(now - (win.get("since") or now)))
-            role = "worker" if aid == worker_id else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
+            role = "worker" if aid in workers else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
             label = meta.get("name") or _short_desc(meta.get("description")) or aid[:7]
             hp = RE_HP_NAME.match(meta.get("name") or "") or (None if meta.get("name") or (meta.get("spawnDepth") or 1) > 1
                                                               else RE_HP_DESC.match(meta.get("description") or ""))
@@ -333,7 +354,7 @@ class Collector:
             # a fresh agent per task: an older holder of a name, or an HP worker that is not the current one, is retired
             # once its turn has ended
             superseded = bool(meta.get("name")) and latest_by_name.get(meta["name"]) != aid
-            retired = superseded or ((_is_worker_name(meta.get("name")) or bool(hp)) and wok and aid != worker_id)
+            retired = superseded or ((_is_worker_name(meta.get("name")) or bool(hp)) and wok and aid not in workers)
             if superseded:
                 label = f"{meta['name']} (earlier)"
             finished = st["key"] == "dead" or (st["key"] == "ended" and (retired or st.get("sub") == "stopped" or (st.get("sub") == "done" and now - st["since"] > 120)))
@@ -348,7 +369,7 @@ class Collector:
                 "state": st, "ctx": tr.ctx, "ctx_max": self.ctx_max, "said": tr.said, "recent": list(tr.recent),
                 "last_ts": tr.last_ts, "born": c["birth"], "finished": finished,
                 "qstate": list(tr.qstate)[-3:], "compactions": [x[0] for x in tr.compactions if now - x[0] <= self.window_s],
-                "talked": talked.get(aid, 0), "anchor": None,
+                "talked": talked.get(aid, 0), "anchor": None, "notes": {"n": nn, "t": nidx[nn]} if nn is not None else None,
             })
         by_id = {a["id"]: a for a in agents}
 
