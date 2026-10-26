@@ -2320,7 +2320,7 @@ function wtsPanel(s) {
       const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
       const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
       h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(r.task)}">
-        <span class="n">${r.n}</span><span class="t">${nb}${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : ''}" data-tip="${esc(r.status)}">${icon(ri)}<span>${esc(statusText)}</span></span>`;
+        <span class="n">${r.n}${nb}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : ''}" data-tip="${esc(r.status)}">${icon(ri)}<span>${esc(statusText)}</span></span>`;
       if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
       if (a) {
         const [ai, ac] = stLook(a.state);

@@ -271,7 +271,7 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .gh .gname { padding: 1px 9px; border-radius: 6px; background: var(--c); color: var(--bg); font-weight: 800; font-size: 14px; letter-spacing: .04em; }   /* HP / MP / LP: solid, in the group's colour */
 .gh .gm { color: var(--muted); font-size: 11.5px; display: inline-flex; align-items: center; gap: 5px; }
 .gh svg { width: 11px; height: 11px; }
-.wrow { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 6px; padding: 5px 4px; border-bottom: 1px solid var(--line); cursor: default; }
+.wrow { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; gap: 6px; padding: 5px 4px; border-bottom: 1px solid var(--line); cursor: default; }
 .wrow.bound { cursor: pointer; } .wrow.bound:hover { background: var(--surface); }
 .wrow.cur { background: color-mix(in srgb, var(--amber) 8%, transparent); }
 .wrow .n { color: var(--muted); }
@@ -434,7 +434,9 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .tkpop b { color: var(--text-strong); border-top: 1px solid var(--line); padding-top: 4px; }
 
 /* ---- a task's notes: the digest in the Agent tab, the reader over the graph, the WTS notes icon ---- */
-.wrow .nbtn { color: var(--muted); margin-right: 6px; vertical-align: -2px; }
+/* the notes icon sits beside the task number, so every title starts at the same place */
+.wrow .n { display: flex; align-items: center; gap: 5px; height: 1.45em; }
+.wrow .nbtn { color: var(--muted); display: flex; }
 .wrow .nbtn svg { width: 12px; height: 12px; } .wrow .nbtn:hover { color: var(--cyan); }
 .notes { border-left: 2px solid var(--line2); padding: 0 0 0 10px; }
 .ntitle { color: var(--text-strong); margin: 2px 0 6px; overflow-wrap: anywhere; }
