@@ -35,6 +35,8 @@ GLOB_S = 60.0                     # how often it looks for transcripts written t
 DROP_S = 600.0                    # a ledger nobody asked for this long (and not written today) is dropped
 RE_MSG_ID = re.compile(rb'"id":"(msg_[A-Za-z0-9_]+)"')
 RE_TS = re.compile(rb'"timestamp":"([0-9T:.\-Z+]+)"')
+# a write to a WTS row's State (`queue.py … state 119 --text "done $(date +%H:%M): …"`, or the skill's `Q state …`)
+RE_QWRITE = re.compile(r"\bstate\s+(\d{1,4})\s+--text\s+[\"']?\W*?(in progress|in hand|done|paused|parked|queued|waiting|on hold|hold|needs the user)\b", re.I)
 
 
 def day_of(t):
@@ -68,6 +70,8 @@ class Ledger:
         self.replies = 0
         self.compactions = 0
         self.model = None
+        self.first = self.last = None      # the first and last reply's time (how long an agent worked)
+        self.qwrites = set()               # (time, row, what) for each write to a WTS row's State
         self.minutes = {}                  # minute start -> [4], the last SERIES_S only
         self.days = {}                     # local date -> [4]
         self.day_replies = collections.Counter()
@@ -155,6 +159,8 @@ class Ledger:
             return
         vec = [int(u.get(k) or 0) for k in KINDS]
         t = ts_of(d) or time.time()
+        self.first = t if self.first is None else min(self.first, t)
+        self.last = t if self.last is None else max(self.last, t)
         key = msg.get("id") or d.get("uuid")
         old = self.recent.pop(key, None) if key else None
         if old:
@@ -168,6 +174,11 @@ class Ledger:
             self.recent[key] = entry
             if len(self.recent) > RECENT_IDS:
                 self.recent.popitem(last=False)
+        for b in msg.get("content") if isinstance(msg.get("content"), list) else []:
+            cmd = (b.get("input") or {}).get("command") if isinstance(b, dict) and b.get("type") == "tool_use" else None
+            if isinstance(cmd, str) and "--text" in cmd:
+                for m in RE_QWRITE.finditer(cmd):
+                    self.qwrites.add((t, int(m.group(1)), m.group(2).lower()))
         if msg.get("model") and not str(msg["model"]).startswith("<"):
             self.model = msg["model"]
 

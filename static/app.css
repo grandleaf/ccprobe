@@ -277,11 +277,13 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .wrow .n { color: var(--muted); }
 .wrow .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wrow.open .t, .wrow.cur .t, .wrow.live .t { white-space: normal; }
-.wrow .st2 { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; color: var(--c); max-width: 26ch; min-width: 0; }
+.wrow .st2 { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; color: var(--c); max-width: 30ch; min-width: 0; }
 .wrow .st2 > span { overflow: hidden; text-overflow: ellipsis; }   /* a long state ("queued (started and …") keeps the title in view */
 /* live rows (in progress, paused, asking) stand out: a filled pill and a bar down the left edge */
 .wrow .st2.pill { align-self: start; padding: 1px 8px 1px 6px; border-radius: 999px; font-weight: 600;
   background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
+/* done: the same pill, outlined only (violet: finished, as merged work reads on GitHub; green stays for running) */
+.wrow .st2.pill.ring { background: none; font-weight: 500; border-color: color-mix(in srgb, var(--c) 60%, transparent); }
 .wrow.live { box-shadow: inset 3px 0 0 var(--c); }
 .wrow.live .n { color: var(--c); font-weight: 600; }
 .gh .mode { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
@@ -516,3 +518,5 @@ div.npart { padding: 6px 0 2px; border-top: 1px solid var(--line2); }
 .rdtoc button.part { color: var(--cyan); margin-top: 8px; }
 .rdart section.part h2 { margin-top: 38px; padding: 8px 0 6px; border-top: 2px solid var(--cyan); border-bottom: 0; color: var(--cyan); font-size: 14px; }
 .legend .lg-notes { width: 26px; height: 12px; color: var(--muted); flex: none; }   /* as wide as the other keys */
+.rst { display: inline-flex; align-items: center; gap: 5px; } .rst svg { width: 12px; height: 12px; color: var(--c); flex: none; }
+.rst b, .wrow .st2 b { font-weight: 600; }

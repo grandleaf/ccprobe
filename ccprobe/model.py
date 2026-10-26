@@ -450,17 +450,20 @@ class Collector:
         self.books.want([main_path] + [c["path"] for c in cands])
         day = tokens_mod.day_of(now)
         nodes = [("lead", main_path, {}, None)] + [(c["id"], c["path"], c["meta"], c) for c in cands]
-        own_task = {}
+        own_task, primary = {}, {}
         for aid, _, meta, c in nodes[1:]:
             n = _task_of_meta(meta, rows)
             if n is not None:
                 own_task[aid] = n
+            n = _task_of_meta(meta, rows, primary=True)
+            if n is not None:
+                primary[aid] = n
         task = dict(own_task)
         for aid, _, meta, c in nodes[1:]:   # a helper an agent spawned works on that agent's task
             if aid not in task and meta.get("parentAgentId") in own_task:
                 task[aid] = own_task[meta["parentAgentId"]]
         total, today, replies, compactions, ready = [0, 0, 0, 0], [0, 0, 0, 0], 0, 0, True
-        per, tasks, minutes = [], {}, {}
+        per, tasks, minutes, writes = [], {}, {}, {}
         lead_own = None
         with self.books.lock:
             for aid, path, meta, c in nodes:
@@ -486,12 +489,26 @@ class Collector:
                     t = tasks.setdefault(n, {"v": [0, 0, 0, 0], "agents": 0})
                     tokens_mod.add(t["v"], v)
                     t["agents"] += 1
+                # the task's latest run: its newest own agent (an hp/mp name or a "Task N:" description, not a helper),
+                # from its first reply to its last, so a done row says how long it took after its agent left the view
+                pn = primary.get(aid)
+                if pn is not None and L.first is not None:
+                    t = tasks.setdefault(pn, {"v": [0, 0, 0, 0], "agents": 0})
+                    if not t.get("run") or L.first > t["run"][0]:
+                        t["run"] = [L.first, L.last]
                 per.append({"id": aid, "label": "lead" if aid == "lead" else a["label"] if a else _label_of_meta(meta, rows, aid),
                             "role": role, "task": n, "shown": aid == "lead" or bool(a),
                             "finished": bool(a and a["finished"]) or (aid != "lead" and not a), **own})
+                for t, n, what in L.qwrites:
+                    if n in rows:
+                        writes.setdefault(n, set()).add((t, what))
                 ri = ROLES.index(role) if role in ROLES else ROLES.index("helper")
                 for m, mv in L.minutes.items():
                     tokens_mod.add(minutes.setdefault((m, ri), [0, 0, 0, 0]), mv)
+        # each row's own State writes, by whoever made them (an agent may do a row as part of another task: 119 inside
+        # 141): its last "in progress" stretch, from its first such write to the first "done" after it
+        for n, ws in writes.items():
+            tasks.setdefault(n, {"v": [0, 0, 0, 0], "agents": 0})["writes"] = state_run(ws)
         t0 = int((now - tokens_mod.SERIES_S) // 60 * 60)
         # per minute and role: [minute, role, fresh in (input + cache write), cache read, output]
         series = [[(m - t0) // 60, ri, v[0] + v[1], v[2], v[3]] for (m, ri), v in sorted(minutes.items()) if m >= t0 and any(v)]
@@ -501,13 +518,26 @@ class Collector:
 
 
 ROLES = ["lead", "worker", "mp", "lp", "helper"]
+
+
+def state_run(ws):
+    """A row's last stretch from its State writes [(time, what)]: start (its first "in progress") and done (the first
+    "done" after it), or open (in progress since). A "done" written again later changes nothing."""
+    start, done, open_ = None, None, None
+    for t, what in sorted(ws):
+        if what in ("in progress", "in hand"):
+            open_ = t if open_ is None else open_
+        elif what == "done" and (open_ is not None or done is None):
+            start, done, open_ = open_, t, None
+    return {"start": start, "done": done, "open": open_}
 RE_HELPER_TASK = re.compile(r"^[a-z]+-?(\d{2,4})$", re.I)     # a helper named for its task: "adv129"
 
 
-def _task_of_meta(meta, rows):
-    """The WTS task an agent worked on, from its name ("hp129", "mp112", "adv129") or description ("Task 74: …")."""
+def _task_of_meta(meta, rows, primary=False):
+    """The WTS task an agent worked on, from its name ("hp129", "mp112", "adv129") or description ("Task 74: …").
+    primary: only the task's own agents (not a helper named for it, "adv129")."""
     name = meta.get("name") or ""
-    for rx, src in ((RE_NAME_TASK, name), (RE_TASK, meta.get("description") or ""), (RE_HELPER_TASK, name)):
+    for rx, src in ((RE_NAME_TASK, name), (RE_TASK, meta.get("description") or ""), (RE_HELPER_TASK, name))[:2 if primary else 3]:
         m = rx.match(src)
         if m and int(m.group(1)) in rows:
             return int(m.group(1))

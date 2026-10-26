@@ -28,7 +28,7 @@ const STATUS = {
 const stLook = st => st.key === 'parked' && st.sub === 'hold' ? ['i-wait', 'amber'] : STATUS[st.key] || STATUS.unknown;
 const ROWKIND = {
   active: ['i-run', 'green'], queued: ['i-wait', 'slate'], paused: ['i-park', 'slate'], parked: ['i-wait', 'amber'],
-  asks: ['i-ask', 'rose'], done: ['i-done', 'green'], closed: ['i-done', 'slate'], other: ['i-wait', 'slate'],
+  asks: ['i-ask', 'rose'], done: ['i-done', 'violet'], closed: ['i-done', 'slate'], other: ['i-wait', 'slate'],
 };
 // the hotter the colour, the higher the priority: HP rose, MP amber, LP green
 const ROLECOL = { lead: 'cyan', worker: 'rose', mp: 'amber', lp: 'green', helper: 'violet' };
@@ -2080,8 +2080,8 @@ function readerHtml(s, R, d) {
   const row = rowIndex(s).get(R.n);
   const doc = d?.docs?.[R.doc] || d?.docs?.[0], p = doc && mdDoc(d, doc);
   const title = (p && notesTitle(p.title)) || row?.title || p?.title || '';
-  const st = row ? String(row.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '') : '';
-  let h = `<div class="rdhead"><div class="rdt"><span class="rdn">Task ${R.n}</span>${row ? `<span class="rdg c-${GROUPCOL[row.group] || 'slate'}">${row.group}</span><span class="rds">${esc(st)}</span>` : ''}`
+  const st = row && rowStatus(row, S.model.now, taskRun(s, R.n, (s.agents || []).find(a => a.id === row.agent), row.kind));
+  let h = `<div class="rdhead"><div class="rdt"><span class="rdn">Task ${R.n}</span>${row ? `<span class="rdg c-${GROUPCOL[row.group] || 'slate'}">${row.group}</span><span class="rds rst c-${st.rc}">${icon(st.ri)}${st.html}</span>` : ''}`
     + `<button class="iconbtn rdx" data-rdclose aria-label="Close the notes (Esc)" data-tip="Close (Esc)">${icon('i-x')}</button></div>`
     + `<div class="rdtitle" id="rdTitle">${mdInline(title, null)}</div>`;
   if (!d) return h + `</div><div class="rdbody"><div class="empty-note">${d === undefined ? 'Loading…' : 'The notes could not be read.'}</div></div>`;
@@ -2161,7 +2161,7 @@ function agentPanel(s, id) {
   }
   const context = () => secH('ctx', 'Context') + pbar(pct, lvl)
     + `<div class="ctxl"><span>${n.ctx ? kfmt(n.ctx) + ' / ' + kfmt(n.ctx_max) + ' · ' + Math.round(pct * 100) + '%' : 'not known yet'}${(n.compactions || []).length ? ' · compacted ' + n.compactions.length + '×' : ''}</span>${out}</div>`;
-  const task = () => row ? secH('task', 'Task') + `<div class="taskcell${fin ? ' one' : ''}"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}${fin ? '' : `<div class="pmeta">${esc(row.status)}</div>`}</div>` : '';
+  const task = () => row ? secH('task', 'Task') + `<div class="taskcell${fin ? ' one' : ''}"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}${fin ? '' : (x => `<div class="pmeta rst c-${x.rc}">${icon(x.ri)}${x.html}</div>`)(rowStatus(row, now, taskRun(s, row.n, n, row.kind)))}</div>` : '';
   const brief = () => textFold(aid, 'brief', `Brief${d?.brief?.t ? ' · ' + hhmm(d.brief.t) : ''}`, d?.brief, false, true);
   const report = () => textFold(aid, 'rep', `Report${d?.rounds > 1 ? ' · round ' + d.rounds : ''} · ${hhmm(d?.report?.t)}${fin ? ' · final' : ''}`, d?.report, fin, false);
   const said = () => n.said ? secH('said', 'Last said') + `<div class="said">${esc(n.said)}</div>` : '';
@@ -2289,6 +2289,65 @@ function tokensPanel(s) {
 document.addEventListener('mouseover', e => { S.tokHold = !!e.target.closest('.tklist'); });   // rows hold still under the pointer
 
 const LIVEKIND = ['active', 'paused', 'parked', 'asks'];
+// a WTS row's status with its time made useful. In progress reads as its icon, the start and how long so far
+// ("▶ 17:24 · 3h 41m": the icon and the green pill already say "in progress", the tooltip has the State's words);
+// paused and asking read as their icon too, parked keeps its word (its icon is queued's), all say for how long
+// ("⏸ 23:12 · 22h 05m"); done reads as its ✓, when
+// it was marked done and how long its agent worked on it ("✓ 21:40 · 1h 59m"). The times come from the task's latest
+// run (its agent in view, else its first and last reply in the session's history): the worker rewrites the State's
+// time at every step, and the State has HH:MM only, so its time is placed on the day of that run (else today, or
+// yesterday when later than now; a done row with no run known keeps its bare time, whose day nothing tells); a day that
+// is not today is shown ("24 Oct 15:06").
+const longFor = s => s < 60 ? '<1m' : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}m` : `${Math.floor(s / 86400)}d ${Math.floor(s % 86400 / 3600)}h`;
+function atHM(hm, near, now) {   // the time HH:MM nearest `near` (default now) that is not in the future
+  const [h, m] = hm.split(':').map(Number), ref = near ?? now, d = new Date(ref * 1000);
+  d.setHours(h, m, 0, 0);
+  const c = [-1, 0, 1].map(k => d / 1000 + k * 86400).filter(t => t <= now + 60);
+  return c.reduce((a, t) => Math.abs(t - ref) < Math.abs(a - ref) ? t : a, c[0]);
+}
+const sameDay = (a, b) => new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
+const whenHM = (t, now) => (sameDay(t, now) ? '' : new Date(t * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ') + hhmm(t);
+// a task's latest run ({born, last_ts}): its agent in view; else its own agent in the session's history; else the row's
+// own State writes, from its first "in progress" to the "done" after it (a row done inside another task, 119 in 141;
+// with no "in progress" write only the day is known)
+function taskRun(s, n, a, kind) {
+  if (a?.born) return a;
+  const t = s.tokens?.tasks?.[n];
+  if (t?.run) return { born: t.run[0], last_ts: t.run[1] };
+  const w = t?.writes;
+  if (kind === 'done' ? !w?.done : !w?.open) return null;
+  return kind === 'done' ? { born: w.start, last_ts: w.done } : { born: w.open, last_ts: null };
+}
+function rowStatus(r, now, run) {
+  const [ri, rc] = r.kind === 'parked' && /waiting for the window/i.test(r.status) ? STATUS.waiting_window : ROWKIND[r.kind] || ROWKIND.other;
+  const [head, ...extra] = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '').split(' · ');
+  const RE_HM = /\b([01]?\d|2[0-3]):[0-5]\d\b/, tail = extra.length ? ' · ' + extra.join(' · ') : '';
+  let tm = head.match(RE_HM);
+  const lead = tm ? head.slice(0, tm.index).trim() : '', rest = tm ? head.slice(tm.index + tm[0].length) : '';
+  // queue.py cuts a long head ("in progress (hp183 with adv183, started 2..."): its time is then in the full State's head
+  if (!tm && r.kind === 'active') tm = String(r.state || '').split(/:\s/)[0].match(RE_HM);
+  let html = esc(head + tail), sr = '';
+  if (r.kind === 'active' && run?.born) {
+    sr = '<span class="sr">in progress, started </span>';
+    html = `${whenHM(run.born, now)} · <b>${longFor(now - run.born)}</b>` + esc(tail);
+  } else if (tm && LIVEKIND.includes(r.kind)) {
+    const at = atHM(tm[0], run?.last_ts, now), took = `${whenHM(at, now)} · <b>${longFor(now - at)}</b>`;
+    // a word its own icon already says goes (in progress ▶, paused ⏸, needs the user ?); one an icon shares stays (parked)
+    const said = r.kind === 'active' || (r.kind === 'paused' && /^paused$/i.test(lead)) || (r.kind === 'asks' && /^needs the user$/i.test(lead));
+    if (r.kind === 'active') { sr = '<span class="sr">in progress, started </span>'; html = took + esc(tail); }
+    else if (said && !rest.trim()) { sr = `<span class="sr">${esc(lead)} since </span>`; html = took + esc(tail); }
+    else if (/^[a-z ]*$/i.test(lead) && !rest.trim()) html = esc(lead ? lead + ' ' : '') + took + esc(tail);
+  } else if (tm && r.kind === 'done' && /^done$/i.test(lead)) {
+    sr = '<span class="sr">done at </span>';
+    if (!run) html = esc(tm[0] + rest + tail);   // no run known: nor its day, so the time stays as written
+    else {
+      // from its agent's start to its last step, or to the row's "done" if that came first (a lead may mark it later)
+      const at = atHM(tm[0], run.last_ts, now), end = Math.min(at, run.last_ts || Infinity), spent = run.born && end > run.born ? end - run.born : 0;
+      html = whenHM(at, now) + (spent ? ` · <b>${longFor(spent)}</b>` : '') + esc(rest + tail);
+    }
+  }
+  return { ri, rc, html: sr + html };
+}
 const GROUPCOL = { HP: ROLECOL.worker, MP: ROLECOL.mp, LP: ROLECOL.lp };   // the same colours as the agents on the graph
 // a group's mode (HP: the worker's state line; MP/LP: running, desk-only or paused) as an icon and a colour
 const modeLook = t => /running/i.test(t) ? ['i-run', 'green'] : /paus/i.test(t) ? ['i-park', 'slate'] : /desk/i.test(t) ? ['i-park', 'cyan']
@@ -2314,13 +2373,12 @@ function wtsPanel(s) {
     h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}">${icon(mi)}${esc(head || '—')}</span>${runs.length === 1 ? `<span class="gm">${esc(runs[0])}</span>` : ''}</div>`;
     if (!rows.length) h += '<div class="empty-note">empty</div>';
     for (const r of rows) {
-      const [ri, rc] = r.kind === 'parked' && /waiting for the window/i.test(r.status) ? STATUS.waiting_window : ROWKIND[r.kind] || ROWKIND.other;
-      const a = r.agent ? agents.get(r.agent) : null;
-      const statusText = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '');
+      const a = r.agent ? agents.get(r.agent) : null, run = taskRun(s, r.n, a, r.kind);
+      const { ri, rc, html: stHtml } = rowStatus(r, now, run);
       const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
       const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
       h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(r.task)}">
-        <span class="n">${r.n}${nb}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : ''}" data-tip="${esc(r.status)}">${icon(ri)}<span>${esc(statusText)}</span></span>`;
+        <span class="n">${r.n}${nb}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : r.kind === 'done' ? ' pill ring' : ''}" data-tip="${esc(r.status + (['done', 'active'].includes(r.kind) && run?.born ? `\n${a ? 'its agent ' + a.label : 'worked on'}: ${whenHM(run.born, now)}–${run.last_ts ? whenHM(run.last_ts, now) : 'now'}` : ''))}">${icon(ri)}<span>${stHtml}</span></span>`;
       if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
       if (a) {
         const [ai, ac] = stLook(a.state);

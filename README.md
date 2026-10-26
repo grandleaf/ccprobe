@@ -68,8 +68,14 @@ What you see:
   click the mark, double-click the agent, or press Enter on the selected one to read them; a click elsewhere on the
   agent still just selects.
 - **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
-  its agent is actually doing, and amber marks a mismatch. A row with notes has a page icon: click it (or a row with
-  no agent) to read them.
+  its agent is actually doing, and amber marks a mismatch. A row in progress reads as its ▶, its start and how long
+  so far (`▶ 17:24 · 3h 41m`); paused and asking rows read as their icon too, parked keeps its word, and all say for
+  how long; a done row is an outlined violet pill with when it was marked done and how long its agent worked on it
+  (`✓ 21:40 · 1h 59m`). The times come from the task's latest run: its agent in view, else its first and last reply in
+  the session's whole history (so older MP rows get theirs too). The worker rewrites the State's time at every step,
+  and the State has HH:MM only, so its time is placed on the day of that run, and a day that is not today is shown
+  (`24 Oct 15:06`). A done row with no run known keeps its bare time. The State's own words are in the tooltip.
+  A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
 - **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
   severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,
