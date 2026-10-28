@@ -25,7 +25,8 @@ const STATUS = {
   waiting_user: ['i-ask', 'rose'], idle: ['i-done', 'slate'], shell: ['i-wait', 'slate'], unknown: ['i-wait', 'slate'], parked: ['i-park', 'slate'],
 };
 // paused by hand (slate ⏸: stays so until someone resumes it) is not waiting (amber: it goes on by itself)
-const stLook = st => st.key === 'parked' && st.sub === 'hold' ? ['i-wait', 'amber'] : STATUS[st.key] || STATUS.unknown;
+// a worker waiting for its advisor's round (waits_for) reads as waiting, like one on its background job, not as done
+const stLook = st => st.key === 'parked' && st.sub === 'hold' ? ['i-wait', 'amber'] : st.waits_for ? STATUS.ended_bg : STATUS[st.key] || STATUS.unknown;
 const ROWKIND = {
   active: ['i-run', 'green'], queued: ['i-wait', 'slate'], paused: ['i-park', 'slate'], parked: ['i-wait', 'amber'],
   asks: ['i-ask', 'rose'], done: ['i-done', 'violet'], closed: ['i-done', 'slate'], other: ['i-wait', 'slate'],
@@ -628,13 +629,14 @@ function saveMem(sid, m) {
 function layoutEdges(s, now, born) {
   return (s.edges || []).filter(e => edgeShow(e, now, born, null).show).map(e => [e.from, e.to]);
 }
-// lines that say something: tasks, recent messages, one agent spawning another, a newborn's spawn (2 min);
-// the rest only for the selected agent
+// lines that say something: tasks, recent messages, one agent spawning another, a newborn's spawn (2 min), and the
+// lines the server keeps (a current worker's line from the lead, a helper's to the worker of its task); the rest only
+// for the selected agent
 function edgeShow(e, now, born, sel, all = false) {   // all: the "Show all relationships" setting
   const age = now - (e.last || 0), talked = e.last > 0 && age < 600;
   const mine = !!sel && sel !== 'lead' && (e.from === sel || e.to === sel);
   const kind = e.kind === 'spawn' && talked ? 'msg' : e.kind;
-  let show = e.kind === 'task' || talked || (e.kind === 'spawn' && e.from !== 'lead') || (e.kind === 'spawn' && now - (born.get(e.to) || 0) < 120);
+  let show = e.kind === 'task' || talked || e.keep || (e.kind === 'spawn' && e.from !== 'lead') || (e.kind === 'spawn' && now - (born.get(e.to) || 0) < 120);
   if (!show && (mine || all)) show = true;
   return { show, kind, faint: kind === 'msg' && !e.hot, dim: !!sel && sel !== 'lead' && !mine };
 }
@@ -1050,13 +1052,19 @@ function rounded(pts, r) {
   for (let i = 0; i < lens.length; i++) { if (half <= lens[i]) { const f = half / (lens[i] || 1); mid = { x: pts[i].x + (pts[i + 1].x - pts[i].x) * f, y: pts[i].y + (pts[i + 1].y - pts[i].y) * f }; break; } half -= lens[i]; }
   return { d, mid };
 }
+// every line drawn gets its own lane, so two horizontal runs along one channel (the queue's and an advisor's, say) never
+// lie on top of each other: 0, +7, -7, +14, … px from the channel's middle, in a fixed order so a line keeps its lane
+const LANES = [0, 7, -7, 14, -14, 21, -21, 28, -28];
+function laneMap(keys) {
+  return new Map([...keys].sort().map((k, i) => [k, LANES[i % LANES.length]]));
+}
 function routeEdge(key, A, B, ida, idb, bend) {
   const band = id => S.band?.get(id) ?? (S.disp.get(id)?.kind === 'res' ? BAND.shelf : null);
   const ba = band(ida), bb = band(idb);
   if (ba == null || bb == null || !S.chan) return edgePath(A, B, bend);
   const flip = ba > bb || (ba === bb && A.x > B.x);
   const [U, L, bu, bl] = flip ? [B, A, bb, ba] : [A, B, ba, bb];
-  const lane = ((hash(key) % 5) - 2) * 6;   // parallel runs sit a little apart
+  const lane = S.lanes?.get(key) ?? ((hash(key) % 5) - 2) * 6;   // parallel runs sit apart: each line has its own lane
   const up = { x: U.x, y: U.y + U.bottom + 4 };
   let out;
   if (bu === bl) {
@@ -1220,6 +1228,7 @@ function renderGraph(s) {
   if (w && w.window && w.window.held && seen.has(w.window.holder) && S.res.has('_window')) drawEdge('lock', w.window.holder, '_window', 'edge lock' + dimRes(w.window.holder), '', eSeen);
   if (w && worker && S.res.has('_queue')) drawEdge('queue', worker.id, '_queue', 'edge queue' + dimRes(worker.id), '', eSeen);
   for (const [k, e] of S.edges) if (!eSeen.has(k) && !e.leaving) leave(e, 150, () => { e.g.remove(); S.edges.delete(k); });
+  S.lanes = laneMap(eSeen);
 
   const cards = placeCards(nodes, pos, boxes, now);
   fit(boxes, cards);
@@ -1286,7 +1295,7 @@ function updateNode(p, n, pos, now, nAlerts) {
   // inner mark: the lead's star; when blocked, why (a window: waiting for it, ⏸: paused by hand, an hourglass: on hold)
   // in that state's colour; a status icon otherwise
   const hold = !n.finished && n.role !== 'lead' && isParked(n) ? holdOf(n) : null;
-  const markId = n.role === 'lead' ? 'i-lead' : hold ? hold[0] : (st.key === 'dead' ? 'i-dead' : st.key === 'ended' ? 'i-done' : 'i-think');
+  const markId = n.role === 'lead' ? 'i-lead' : hold ? hold[0] : (st.key === 'dead' ? 'i-dead' : st.key === 'ended' && !st.waits_for ? 'i-done' : 'i-think');
   p.mark.setAttribute('class', hold ? `mark c-${hold[1]}` : 'mark');
   const ms = n.role === 'lead' ? r * .62 : r * .5;
   setA(p.mark, { href: '#' + markId, x: -ms / 2, y: -ms / 2, width: ms, height: ms });
@@ -2401,7 +2410,7 @@ function wtsPanel(s) {
       if (a) {
         const [ai, ac] = stLook(a.state);
         const mismatch = (r.kind === 'active' && ['dead', 'stuck'].includes(a.state.key)) ||
-          (r.kind === 'active' && a.state.key === 'ended' && now - a.state.since > 600) ||
+          (r.kind === 'active' && a.state.key === 'ended' && !a.state.waits_for && now - a.state.since > 600) ||   // waiting for its advisor is fine
           (['paused', 'parked'].includes(r.kind) && a.state.key === 'running' && !/window/.test(a.state.label));
         if (holds) {   // its agent line in the window's colours: red with the lock (holds it), amber with the window (waits)
           const also = /holds the window/.test(a.state.label) ? '' : ' · ' + a.state.label;

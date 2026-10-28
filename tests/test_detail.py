@@ -107,6 +107,14 @@ class TaskPatternTests(unittest.TestCase):
         self.assertIsNone(_hp_of_desc({"description": "hp178b: x", "name": "adv178"}, rows))   # a name says who it is
         self.assertIsNone(_hp_of_desc({"description": "hp178b: x", "spawnDepth": 2}, rows))   # a helper's helper
 
+    def test_a_helper_described_by_its_name(self):
+        from ccprobe.model import _task_of_meta
+        rows = {191: {"group": "HP"}}
+        self.assertEqual(_task_of_meta({"description": "adv191c: review advisor"}, rows), 191)
+        self.assertEqual(_task_of_meta({"name": "adv191c", "description": "x"}, rows), 191)
+        self.assertIsNone(_task_of_meta({"description": "adv191c: x"}, rows, primary=True))   # a helper is not the task's own
+        self.assertIsNone(_task_of_meta({"description": "adv192: x"}, rows))
+
 
 if __name__ == "__main__":
     unittest.main()

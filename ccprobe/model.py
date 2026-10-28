@@ -349,7 +349,8 @@ class Collector:
             if holder == aid and st["key"] in ("running", "polling", "waiting_window"):
                 st = dict(st, key="running", label="holds the window · " + _dur(now - (win.get("since") or now)))
             role = "worker" if aid in workers else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
-            label = meta.get("name") or _short_desc(meta.get("description")) or aid[:7]
+            dn = None if meta.get("name") else RE_DESC_NAME.match(meta.get("description") or "")
+            label = meta.get("name") or (dn.group(1) if dn else _short_desc(meta.get("description"))) or aid[:7]
             hp = RE_HP_NAME.match(meta.get("name") or "")
             hp = int(hp.group(1)) if hp else _hp_of_desc(meta, rows)
             if role in ("mp", "lp") and n is not None:
@@ -374,9 +375,18 @@ class Collector:
                 "state": st, "ctx": tr.ctx, "ctx_max": self.ctx_max, "said": tr.said, "recent": list(tr.recent),
                 "last_ts": tr.last_ts, "born": c["birth"], "finished": finished,
                 "qstate": list(tr.qstate)[-3:], "compactions": [x[0] for x in tr.compactions if now - x[0] <= self.window_s],
-                "talked": talked.get(aid, 0), "anchor": None, "notes": {"n": nn, "t": nidx[nn]} if nn is not None else None,
+                "talked": talked.get(aid, 0), "anchor": None, "helps": n if n is not None else _task_of_meta(meta, rows), "notes": {"n": nn, "t": nidx[nn]} if nn is not None else None,
             })
         by_id = {a["id"]: a for a in agents}
+
+        # a worker whose turn ended while another agent on its task is at work (its advisor's round) waits for it: its
+        # round is not over, whatever Claude Code's meta says (the next message revives it)
+        for a in agents:
+            if a["role"] == "worker" and a["task"] is not None and a["state"]["key"] == "ended" and a["state"].get("sub") != "stopped":
+                busy = [h for h in agents if h is not a and h["helps"] == a["task"] and h["state"]["key"] in LIVE]
+                if busy:
+                    a["finished"] = False
+                    a["state"] = dict(a["state"], label=f"waiting for {busy[0]['label']}", sub="waiting", waits_for=busy[0]["id"])
 
         # anchors: a helper sits beside the agent it talks to most (not the lead), else its parent
         for a in agents:
@@ -409,6 +419,18 @@ class Collector:
             e["last"] = max(e["last"], m["t"])
             if now - m["t"] <= HOT_S:
                 e["hot"] = True
+
+        # lines that stay drawn while both ends are at it: the lead's line to a current worker (busy or waiting), and a
+        # helper's to the worker of the task it helps (an advisor between rounds)
+        for a in agents:
+            if a["finished"]:
+                continue
+            if a["role"] == "worker":
+                edges[_ekey(a["parent"], a["id"])]["keep"] = True
+            mate = by_id.get(a["anchor"]) if a["role"] == "helper" else None
+            if mate and not mate["finished"] and mate["task"] is not None and mate["task"] == a["helps"]:
+                key = _ekey(a["id"], mate["id"])
+                edges.setdefault(key, {"key": key, "from": a["id"], "to": mate["id"], "kind": "msg", "hot": False, "last": 0})["keep"] = True
 
         wpub = None
         if w:
@@ -538,7 +560,7 @@ def state_run(ws):
         elif what == "queued":
             open_ = None
     return {"start": start, "done": done, "open": open_, "last": last}
-RE_HELPER_TASK = re.compile(r"^[a-z]+-?(\d{2,4})$", re.I)     # a helper named for its task: "adv129"
+RE_HELPER_TASK = re.compile(r"^[a-z]+-?(\d{2,4})(?:[a-z]|r\d{1,2})?$", re.I)     # a helper named for its task: "adv129", "adv191c"
 
 
 def _hp_of_desc(meta, rows):
@@ -563,7 +585,8 @@ def _task_of_meta(meta, rows, primary=False):
     if primary:
         m = RE_NAME_TASK.match(name) if name else RE_TASK.match(meta.get("description") or "")
         return int(m.group(1)) if m and int(m.group(1)) in rows else _hp_of_desc(meta, rows)
-    for rx, src in ((RE_NAME_TASK, name), (RE_TASK, meta.get("description") or ""), (RE_HELPER_TASK, name))[:2 if primary else 3]:
+    dn = RE_DESC_NAME.match(meta.get("description") or "") if not name else None      # unnamed: "adv191c: …"
+    for rx, src in ((RE_NAME_TASK, name), (RE_TASK, meta.get("description") or ""), (RE_HELPER_TASK, name or (dn.group(1) if dn else "")))[:2 if primary else 3]:
         m = rx.match(src)
         if m and int(m.group(1)) in rows:
             return int(m.group(1))

@@ -71,7 +71,9 @@ def compute(sessions, now, mem):
                 other = m["to"] if m["from"] == aid else m["from"]
                 if other in agents and agents[other]["state"]["key"] in LIVE:
                     return True
-            return any(x["parent"] == aid and x["state"]["key"] in LIVE for x in agents.values())
+            me = agents.get(aid) or {}
+            return any((x["parent"] == aid or (me.get("task") is not None and x is not me and x.get("helps") == me["task"]))
+                       and x["state"]["key"] in LIVE for x in agents.values())
 
         for r in rows.values():
             if r["kind"] == "asks":
