@@ -1,10 +1,7 @@
 __pycache__/
 *.pyc
 .DS_Store
-# the mockup's captured session data and its build output (regenerate: python3 mockup/snapshot.py && python3 mockup/build.py)
-mockup/snapshot.json
-mockup/index.html
-
-# screen captures stay local: they show real sessions
-mockup/screens/
+# kept local, not published: the early mockup and the advice notes were made from real sessions, and so are screen captures
+mockup/
+docs/advice/
 x.png

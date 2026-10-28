@@ -4,8 +4,8 @@ A local, read-only web dashboard for every Claude Code session on this Mac (in t
 spawn, and the background-worker queue ("WTS"). The graph is drawn in the style of agent-flow, and it moves with the
 live activity.
 
-Inputs: the user's four goals, `docs/advice/features.md` (the feature advisor) and `docs/advice/ui.md` (the UI advisor).
-Status: revision 2, 2026-10-22. It applies `docs/advice/design-audit.md` (see §15), and v1 is implemented.
+Inputs: the user's four goals, a feature advisor's and a UI advisor's notes (not published).
+Status: revision 2, 2026-10-22. It applies a design audit (see §15), and v1 is implemented.
 
 ## 1. Goals and non-goals
 
@@ -82,7 +82,7 @@ ccprobe/
 static/
   index.html  app.css  app.js  theme.js     (no framework, no build step)
 tests/                      unittest with synthetic fixtures; a read-only smoke test against the live data
-docs/                       DESIGN.md, advice/
+docs/                       DESIGN.md
 ```
 
 Python ≥ 3.10, standard library only (3.14 is installed). One **collector thread** ticks every 1.5 s and builds an

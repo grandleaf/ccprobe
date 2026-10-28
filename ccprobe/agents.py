@@ -1,6 +1,6 @@
 """Transcript reducer: folds new JSONL entries into what ccprobe shows (state, tools, messages, context).
 
-The state rules follow DESIGN.md §5.5 as revised by the audit (docs/advice/design-audit.md B1–B3, M1):
+The state rules follow DESIGN.md §5.5 as revised by the design audit (B1–B3, M1):
 only conversational entries move `last_kind`; a hand-back's own tool_result is not news; text ends a turn only with
 stop_reason "end_turn"; received messages are `user` entries with a top-level `origin` or `queued_command` attachments.
 """

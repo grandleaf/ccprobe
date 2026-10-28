@@ -113,7 +113,6 @@ Safety:
 
 Tests: `python3 -m unittest discover -s tests` (unit) · `python3 tests/smoke_live.py` (read-only check against this Mac).
 
-Design: `docs/DESIGN.md`. Advice it is based on: `docs/advice/{features,ui,design-audit}.md`. The static mockup it grew
-from: `mockup/`.
+Design: `docs/DESIGN.md`.
 
 Licence: MIT (`LICENSE`).

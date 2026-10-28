@@ -1,4 +1,4 @@
-/* ccprobe: every colour is a token; dark = "observatory", light = "daylight blueprint" (docs/advice/ui.md §1) */
+/* ccprobe: every colour is a token; dark = "observatory", light = "daylight blueprint" (the UI advice, §1) */
 :root, :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #060915; --bg-glow: #0d1430; --surface: #0a0f22; --panel: rgb(13 19 40 / .9); --card: rgb(16 23 48 / .97);
