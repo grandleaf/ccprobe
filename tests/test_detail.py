@@ -97,6 +97,16 @@ class TaskPatternTests(unittest.TestCase):
             m1, m2 = RE_TASK.match(text), RE_HP_DESC.match(text)
             self.assertEqual((m1 and int(m1.group(1)), m2 and int(m2.group(1))), (task, hp), text)
 
+    def test_an_unnamed_worker_described_by_its_name(self):
+        from ccprobe.model import _hp_of_desc
+        rows = {178: {"group": "HP"}, 2: {"group": "LP"}}
+        cases = {"hp178b: widget redo": 178, "hp178r2: again": 178, "HP 178 redo: x": 178, "hp2: printer driver": None,
+                 "hp179b: no such row": None}
+        for d, want in cases.items():
+            self.assertEqual(_hp_of_desc({"description": d}, rows), want, d)
+        self.assertIsNone(_hp_of_desc({"description": "hp178b: x", "name": "adv178"}, rows))   # a name says who it is
+        self.assertIsNone(_hp_of_desc({"description": "hp178b: x", "spawnDepth": 2}, rows))   # a helper's helper
+
 
 if __name__ == "__main__":
     unittest.main()

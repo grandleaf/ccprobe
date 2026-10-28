@@ -333,6 +333,8 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
 - **WTS tab:**
   - the window line as a neutral row (holder · since hh:mm:ss · waiters);
   - group headers `HP · ⏵ running 152 · Worker (Opus 5.5)`, `MP · desk-only`, `LP · desk-only`;
+    a group none of whose rows can run (only done rows, or paused ones under a running mode, or none) reads `idle`
+    (moon), here and in the header chips; the tip keeps the mode its file says;
   - a sticky jump bar `HP 17 · MP 6 · LP 3`;
   - icon rows. The current row is expanded, and queued rows are one line that expands on click.
   - Clicking a row with an agent selects it in the graph and flashes the node.

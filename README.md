@@ -67,15 +67,18 @@ What you see:
   lead's briefs as tabs. Esc closes it. On the graph, a page mark (ringed in the agent's colour) says its task has notes:
   click the mark, double-click the agent, or press Enter on the selected one to read them; a click elsewhere on the
   agent still just selects.
-- **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. Next to each bound row is what
+- **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. A group with nothing that can run (no rows, only done rows, or only paused ones) reads 🌙 idle, not running, in its heading and in the header chips. Next to each bound row is what
   its agent is actually doing, and amber marks a mismatch. A row in progress reads as its ▶, its start and how long
   so far (`▶ 17:24 · 3h 41m`); paused and asking rows read as their icon too, parked keeps its word, and all say for
   how long; a done row is an outlined violet pill with when it was marked done and how long its agent worked on it
-  (`✓ 21:40 · 1h 59m`). The times come from the task's latest run: its agent in view, else its first and last reply in
-  the session's whole history (so older MP rows get theirs too). The worker rewrites the State's time at every step,
-  and the State has HH:MM only, so its time is placed on the day of that run, and a day that is not today is shown
-  (`24 Oct 15:06`). A done row with no run known keeps its bare time. The State's own words are in the tooltip.
+  (`✓ 21:40 · 1h 59m`). The start and length come from the task's latest run, the newest of: its agent in view, its own
+  agent's first and last reply in the session's whole history (so older MP rows get theirs too), and the row's own
+  State writes found in the transcripts (a row done inside another task). The State has HH:MM only: its day is that of
+  the row's latest State write, and a day that is not today is shown (`24 Oct 15:06`); a done row nothing dates keeps
+  its bare time. The State's own words are in the tooltip.
   A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
+  The row whose agent holds the window is red, as on the graph: a red edge and number, and its agent line red with the
+  lock (`agent HP 175: holds the window · 4m`); an agent waiting for the window has its line in amber with the window.
 - **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
   severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,

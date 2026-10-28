@@ -216,6 +216,8 @@ class HolderTests(Base):
         self.assertEqual(_holder("worker capture Thu", None, trs, {}, {"worker": "old"}, "hp129"), "hp129")
         self.assertEqual(_holder("lead build+show 152", None, {}, {}, {}), "lead")
         self.assertEqual(_holder("MP 111 build + captures", None, {"m": tr}, {"m": 111}, {}), "m")
+        self.assertEqual(_holder("hp183c capture 22:09 pid=1", None, {"c": tr}, {}, {"hp183c": "c"}), "c")   # unnamed, described "hp183c: …"
+        self.assertEqual(_holder("hp183c capture 22:09 pid=1", None, {"c": tr}, {"c": 183}, {}), "c")        # else by its row
 
 
 class RedactTests(unittest.TestCase):

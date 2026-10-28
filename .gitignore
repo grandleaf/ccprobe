@@ -4,3 +4,7 @@ __pycache__/
 # the mockup's captured session data and its build output (regenerate: python3 mockup/snapshot.py && python3 mockup/build.py)
 mockup/snapshot.json
 mockup/index.html
+
+# screen captures stay local: they show real sessions
+mockup/screens/
+x.png

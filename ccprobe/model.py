@@ -26,7 +26,9 @@ RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})" + RE_AGAIN)
 RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|task)(\d{1,4})(?:[a-z]|r\d{1,2})?$", re.I)    # meta.name "mp111"
 RE_HP_NAME = re.compile(r"^hp(\d{1,4})(?:[a-z]|r\d{1,2})?$", re.I)       # the HP worker, one fresh agent per task: "hp154"
 RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})" + RE_AGAIN)        # or, started without a name: "HP 163: …", "HP 135 redo: …"
-RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|task)\s*(\d{1,4})\b", re.I)
+RE_HP_DESC_NAME = re.compile(r"^hp(\d{1,4})(?:[a-z]|r\d{1,2})?\s*:", re.I)    # or described by the name it lacks: "hp178b: …"
+RE_DESC_NAME = re.compile(r"^([a-z]+\d{1,4}(?:[a-z]|r\d{1,2})?)\s*:", re.I)   # a description led by an agent name
+RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|task)\s*(\d{1,4})(?:[a-z]|r\d{1,2})?\b", re.I)   # "HP 183 …", "hp183c capture …"
 HOT_S = 60
 DEAD_KEEP_S = 600
 LIVE = ("running", "thinking", "polling", "waiting_window")
@@ -208,12 +210,14 @@ class Collector:
         except OSError:
             pass
         cands.sort(key=lambda c: c["birth"])
-        latest_by_name = {}
+        latest_by_name, who_names = {}, {}
         for c in cands:
             if c["meta"].get("name"):
-                latest_by_name[c["meta"]["name"]] = c["id"]
+                latest_by_name[c["meta"]["name"]] = who_names[c["meta"]["name"].lower()] = c["id"]
+            elif mm := RE_DESC_NAME.match(c["meta"].get("description") or ""):   # unnamed, described by a name: "hp183c: …"
+                who_names[mm.group(1).lower()] = c["id"]
         # the HP workers: for each running HP task ("running 128 171": more than one may run), the newest agent for it,
-        # named for it ("hp135", "hp128r3" for redo 3) or, started without a name, described as it ("HP 135 redo: …"),
+        # named for it ("hp135", "hp128r3" for redo 3) or, started without a name, described as it ("HP 135 redo: …", "hp178b: …"),
         # so a redo replaces the first round's agent; else the newest hp<N> (or a "worker" from before the skill named
         # them by task); every other HP agent is retired. worker_id is the first task's.
         hp_running = []
@@ -224,8 +228,7 @@ class Collector:
         if wok:
             for hp_n in hp_running:              # cands are oldest first: the last match is the newest
                 mine = [c for c in cands if ((mm := RE_HP_NAME.match(c["meta"].get("name") or "")) and int(mm.group(1)) == hp_n)
-                        or (not c["meta"].get("name") and (c["meta"].get("spawnDepth") or 1) == 1
-                            and (mm := RE_HP_DESC.match(c["meta"].get("description") or "")) and int(mm.group(1)) == hp_n)]
+                        or _hp_of_desc(c["meta"], rows) == hp_n]
                 # Claude Code's own word: a finished (or stopped) round gives way
                 live = [c for c in mine if not (c["meta"].get("finished") or c["meta"].get("stoppedByUser"))]
                 if mine:
@@ -249,6 +252,8 @@ class Collector:
                 if n is None:
                     mm = rx.match(src)
                     n = int(mm.group(1)) if mm else None
+            if n is None:
+                n = _hp_of_desc(meta, rows)
             if n is None and trs[aid].qstate:
                 n = trs[aid].qstate[-1]["n"]
             if n is not None and n in rows:
@@ -266,7 +271,7 @@ class Collector:
         win = w["window"] if wok else {}
         holder = None
         if win.get("held"):
-            holder = _holder(win.get("who") or "", main, trs, task_of, latest_by_name, worker_id)
+            holder = _holder(win.get("who") or "", main, trs, task_of, who_names, worker_id)
 
         def resolve(to):
             if not to:
@@ -345,16 +350,16 @@ class Collector:
                 st = dict(st, key="running", label="holds the window · " + _dur(now - (win.get("since") or now)))
             role = "worker" if aid in workers else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
             label = meta.get("name") or _short_desc(meta.get("description")) or aid[:7]
-            hp = RE_HP_NAME.match(meta.get("name") or "") or (None if meta.get("name") or (meta.get("spawnDepth") or 1) > 1
-                                                              else RE_HP_DESC.match(meta.get("description") or ""))
+            hp = RE_HP_NAME.match(meta.get("name") or "")
+            hp = int(hp.group(1)) if hp else _hp_of_desc(meta, rows)
             if role in ("mp", "lp") and n is not None:
                 label = f"{role.upper()} {n}"
-            elif hp:
-                label = f"HP {int(hp.group(1))}"
+            elif hp is not None:
+                label = f"HP {hp}"
             # a fresh agent per task: an older holder of a name, or an HP worker that is not the current one, is retired
             # once its turn has ended
             superseded = bool(meta.get("name")) and latest_by_name.get(meta["name"]) != aid
-            retired = superseded or ((_is_worker_name(meta.get("name")) or bool(hp)) and wok and aid not in workers)
+            retired = superseded or ((_is_worker_name(meta.get("name")) or hp is not None) and wok and aid not in workers)
             if superseded:
                 label = f"{meta['name']} (earlier)"
             finished = st["key"] == "dead" or (st["key"] == "ended" and (retired or st.get("sub") == "stopped" or (st.get("sub") == "done" and now - st["since"] > 120)))
@@ -507,13 +512,12 @@ class Collector:
                     tokens_mod.add(minutes.setdefault((m, ri), [0, 0, 0, 0]), mv)
         # each row's own State writes, by whoever made them (an agent may do a row as part of another task: 119 inside
         # 141): its last "in progress" stretch, from its first such write to the first "done" after it
-        for n, ws in writes.items():
-            tasks.setdefault(n, {"v": [0, 0, 0, 0], "agents": 0})["writes"] = state_run(ws)
+        row_writes = {str(n): state_run(ws) for n, ws in writes.items()}   # apart from tasks: no empty "By task" rows
         t0 = int((now - tokens_mod.SERIES_S) // 60 * 60)
         # per minute and role: [minute, role, fresh in (input + cache write), cache read, output]
         series = [[(m - t0) // 60, ri, v[0] + v[1], v[2], v[3]] for (m, ri), v in sorted(minutes.items()) if m >= t0 and any(v)]
         return {"v": total, "today": today, "n": replies, "cx": compactions, "ready": ready, "agents": per,
-                "tasks": {str(k): v for k, v in tasks.items()}, "series": {"t0": t0, "roles": ROLES, "rows": series},
+                "tasks": {str(k): v for k, v in tasks.items()}, "rows": row_writes, "series": {"t0": t0, "roles": ROLES, "rows": series},
                 "lead_own": lead_own}
 
 
@@ -522,26 +526,48 @@ ROLES = ["lead", "worker", "mp", "lp", "helper"]
 
 def state_run(ws):
     """A row's last stretch from its State writes [(time, what)]: start (its first "in progress") and done (the first
-    "done" after it), or open (in progress since). A "done" written again later changes nothing."""
-    start, done, open_ = None, None, None
+    "done" after it), or open (in progress since); last: the latest write [time, what], the exact day of the State's
+    HH:MM. A "done" written again later changes nothing; a row queued again starts a new stretch."""
+    start, done, open_, last = None, None, None, None
     for t, what in sorted(ws):
+        last = [t, what]
         if what in ("in progress", "in hand"):
             open_ = t if open_ is None else open_
         elif what == "done" and (open_ is not None or done is None):
             start, done, open_ = open_, t, None
-    return {"start": start, "done": done, "open": open_}
+        elif what == "queued":
+            open_ = None
+    return {"start": start, "done": done, "open": open_, "last": last}
 RE_HELPER_TASK = re.compile(r"^[a-z]+-?(\d{2,4})$", re.I)     # a helper named for its task: "adv129"
+
+
+def _hp_of_desc(meta, rows):
+    """The HP task an unnamed top-level agent is the worker for, by its description: "HP 135 redo: …", or the name it
+    was not given, "hp178b: …", which counts only for an HP row (so "hp2: printer driver" binds nothing)."""
+    if meta.get("name") or (meta.get("spawnDepth") or 1) > 1:
+        return None
+    d = meta.get("description") or ""
+    m = RE_HP_DESC.match(d)
+    if m:
+        return int(m.group(1))
+    m = RE_HP_DESC_NAME.match(d)
+    r = rows.get(int(m.group(1))) if m else None
+    return int(m.group(1)) if isinstance(r, dict) and r.get("group") == "HP" else None
 
 
 def _task_of_meta(meta, rows, primary=False):
     """The WTS task an agent worked on, from its name ("hp129", "mp112", "adv129") or description ("Task 74: …").
-    primary: only the task's own agents (not a helper named for it, "adv129")."""
+    primary: only the task's own agents: named for it ("hp129", "mp112r2") or, with no name, described as it; a helper
+    named otherwise ("adv129") is not one, whatever its description says."""
     name = meta.get("name") or ""
+    if primary:
+        m = RE_NAME_TASK.match(name) if name else RE_TASK.match(meta.get("description") or "")
+        return int(m.group(1)) if m and int(m.group(1)) in rows else _hp_of_desc(meta, rows)
     for rx, src in ((RE_NAME_TASK, name), (RE_TASK, meta.get("description") or ""), (RE_HELPER_TASK, name))[:2 if primary else 3]:
         m = rx.match(src)
         if m and int(m.group(1)) in rows:
             return int(m.group(1))
-    return None
+    return _hp_of_desc(meta, rows)
 
 
 def _role_of_meta(meta, rows):
@@ -559,8 +585,9 @@ def _label_of_meta(meta, rows, aid):
     """The name an agent that is no longer in view goes by, as the graph would have shown it."""
     name = meta.get("name") or ""
     hp = RE_HP_NAME.match(name)
-    if hp:
-        return f"HP {int(hp.group(1))}"
+    hp = int(hp.group(1)) if hp else _hp_of_desc(meta, rows)
+    if hp is not None:
+        return f"HP {hp}"
     role = _role_of_meta(meta, rows)
     m = RE_NAME_TASK.match(name) or RE_TASK.match(meta.get("description") or "")
     if role in ("mp", "lp") and m:
@@ -607,7 +634,7 @@ def _holder(who, main, trs, task_of, by_name, worker_id=None):
     first = low.split()[0] if low.split() else ""
     if first == "worker" and worker_id in trs:      # the worker's scripts still write "worker …": the current HP worker
         return worker_id
-    if by_name.get(first) in trs:                 # "worker capture …" → the agent named worker
+    if by_name.get(first) in trs:                 # "worker capture …" → the agent named (or described as) worker
         return by_name[first]
     m = RE_WHO_ROW.match(who)
     if m:

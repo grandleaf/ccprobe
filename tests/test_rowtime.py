@@ -33,12 +33,21 @@ class RowTimeTests(unittest.TestCase):
 
     def test_state_run(self):
         self.assertEqual(state_run({(10, "in progress"), (20, "in progress"), (30, "done"), (40, "done")}),
-                         {"start": 10, "done": 30, "open": None})          # a later "done" rewrite changes nothing
+                         {"start": 10, "done": 30, "open": None, "last": [40, "done"]})   # a later "done" rewrite changes nothing
         self.assertEqual(state_run({(10, "in progress"), (30, "done"), (50, "in progress")}),
-                         {"start": 10, "done": 30, "open": 50})           # a redo in progress
+                         {"start": 10, "done": 30, "open": 50, "last": [50, "in progress"]})   # a redo in progress
         self.assertEqual(state_run({(10, "in progress"), (30, "done"), (50, "in progress"), (70, "done")}),
-                         {"start": 50, "done": 70, "open": None})          # the last round counts
-        self.assertEqual(state_run({(30, "done")}), {"start": None, "done": 30, "open": None})   # only its day is known
+                         {"start": 50, "done": 70, "open": None, "last": [70, "done"]})   # the last round counts
+        self.assertEqual(state_run({(30, "done")}), {"start": None, "done": 30, "open": None, "last": [30, "done"]})   # only its day
+        self.assertEqual(state_run({(10, "in progress"), (20, "queued"), (60, "in progress"), (70, "done")})["start"], 60)   # requeued
+
+    def test_primary_agents(self):
+        from ccprobe.model import _task_of_meta
+        rows = {129}
+        self.assertEqual(_task_of_meta({"name": "hp129"}, rows, primary=True), 129)
+        self.assertEqual(_task_of_meta({"description": "Task 129: build"}, rows, primary=True), 129)
+        self.assertIsNone(_task_of_meta({"name": "adv129", "description": "Task 129: review"}, rows, primary=True))
+        self.assertEqual(_task_of_meta({"name": "adv129"}, rows), 129)        # still the task's, for its tokens
 
 
 if __name__ == "__main__":
