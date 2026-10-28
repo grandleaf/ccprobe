@@ -226,7 +226,11 @@ class Collector:
             hp_running = [int(x) for x in m.group(1).split()] if m else []
         workers = []
         if wok:
-            for hp_n in hp_running:              # cands are oldest first: the last match is the newest
+            # a paused or stopped worker is still its task's worker (the state file then says only "paused"): every HP
+            # row still open (paused, parked, asking) has one too, after the running ones
+            hp_tasks = hp_running + [n for n, r in rows.items() if r["group"] == "HP" and n not in hp_running
+                                     and r["kind"] in ("active", "paused", "parked", "asks")]
+            for hp_n in hp_tasks:                # cands are oldest first: the last match is the newest
                 mine = [c for c in cands if ((mm := RE_HP_NAME.match(c["meta"].get("name") or "")) and int(mm.group(1)) == hp_n)
                         or _hp_of_desc(c["meta"], rows) == hp_n]
                 # Claude Code's own word: a finished (or stopped) round gives way
