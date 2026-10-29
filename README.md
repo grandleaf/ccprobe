@@ -11,7 +11,13 @@ python3 ccprobe.py --help        # --port, --window 6h, --ctx-max, --interval, -
 ```
 
 What you see:
-- **Graph.** The lead sits on top. Below it is a grid of rows at fixed heights, five places per row; every agent keeps
+- **Graph.** Each hexagon says who it is, in its own colour: `HP` over `184e` (task 184, its round e), `adv` over
+  `184d` for a helper, `Lead` for the lead; under it, the task's title. A badge at its top-left corner says why it is
+  not at work, each kind of waiting with its own icon and colour: ✈ cyan waiting for a message, the Blender logo
+  waiting on Blender, ⚙ magenta on another job (a build, tests), ↻ lime polling, ⏸ yellow paused by hand, four
+  violet squares waiting for the window, ⧗ violet on hold, a red clock stuck, ✕ red dead, ✓ blue finished, and the
+  lead's rose ? waiting for you. A busy agent has none, only its spinning arc. The status line under the hex uses the
+  same icon and colour. Bottom left, a green page: the task has notes; bottom right, a red lock: it holds the window. The lead sits on top. Below it is a grid of rows at fixed heights, five places per row; every agent keeps
   its place. A new agent goes to the free place nearest the agents it works with (a helper under the agent it serves;
   the lead counts as the middle of the top row), chosen so it adds the fewest crossing lines and keeps its row even about
   the lead. A blocked agent stays where it is with a dashed outline. A fresh HP
@@ -49,7 +55,7 @@ What you see:
   the pointer is over the list, and happen at most every 4 s.
 - **States** come from the transcripts (DESIGN.md §5.5): running a tool (for how long), thinking, quiet, stuck?, polling,
   waiting for the window (amber window icon: it goes on by itself), paused by hand (grey ⏸: until someone
-  resumes it), on hold for something else (amber hourglass), holds the window, turn ended (waiting / done), idle or waiting for you (the lead: waiting for you only
+  resumes it), on hold for something else (amber hourglass), holds the window, waiting for a message (its turn ended) or done, waiting on Blender / a build / its job, idle or waiting for you (the lead: waiting for you only
   when it asked you a question or left a plan for you to approve), dead.
 - **Agent tab** (click an agent). **Now:** what it is doing in its own words (a Bash call's description), the command
   under it (without the leading `cd <project>;`, temp paths shortened; "whole command" opens it), its background jobs,
@@ -64,7 +70,7 @@ What you see:
   each; notes in parts (redo 2, redo 3) show the latest part and fold the earlier ones. Open for a finished agent,
   folded for a running one. **Read the notes** opens the whole document over the graph (the panel stays beside it):
   contents on the left, tables, the pictures the notes name (click one for full size, ← → for the others) and the
-  lead's briefs as tabs. Esc closes it. On the graph, a page mark (ringed in the agent's colour) says its task has notes:
+  lead's briefs as tabs. Esc closes it. On the graph, a green page badge says its task has notes:
   click the mark, double-click the agent, or press Enter on the selected one to read them; a click elsewhere on the
   agent still just selects.
 - **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. A group with nothing that can run (no rows, only done rows, or only paused ones) reads 🌙 idle, not running, in its heading and in the header chips. Next to each bound row is what
@@ -115,4 +121,5 @@ Tests: `python3 -m unittest discover -s tests` (unit) · `python3 tests/smoke_li
 
 Design: `docs/DESIGN.md`.
 
-Licence: MIT (`LICENSE`).
+Licence: MIT (`LICENSE`). The Blender logo, used only to show that an agent waits on Blender, is a trademark of the
+Blender Foundation.

@@ -248,13 +248,15 @@ class AlertTests(unittest.TestCase):
     def keys(self, s, now=None):
         return {a["key"].split(":")[0] for a in alerts.compute([s], now or time.time(), alerts.Memory())}
 
-    def test_worker_waiting_on_advisor_is_not_orphaned(self):  # audit M2
+    def test_a_waiting_worker_is_not_orphaned(self):  # audit M2; waiting for a message is normal (the user's call)
         now = time.time()
         rows = [{"n": 153, "kind": "active", "status": "in progress", "title": "t", "agent": "w"}]
         s = session([agent("w", "ended", now - 1200, role="worker"), agent("adv", "running", now - 5, role="helper")], rows,
                     msgs=[{"t": now - 900, "from": "w", "to": "adv", "kind": "send"}])
         self.assertNotIn("orphan-row", self.keys(s, now))
-        s = session([agent("w", "ended", now - 1200, role="worker")], rows)
+        s = session([agent("w", "ended", now - 7200, role="worker")], rows)
+        self.assertNotIn("orphan-row", self.keys(s, now))
+        s = session([agent("w", "dead", now - 1200, role="worker")], rows)
         self.assertIn("orphan-row", self.keys(s, now))
 
     def test_caffeinate_only_when_working(self):

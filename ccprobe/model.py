@@ -391,6 +391,10 @@ class Collector:
                 if busy:
                     a["finished"] = False
                     a["state"] = dict(a["state"], label=f"waiting for {busy[0]['label']}", sub="waiting", waits_for=busy[0]["id"])
+                elif (rows.get(a["task"]) or {}).get("kind") in ("active", "paused", "parked", "asks"):
+                    # its row is still open: it is the task's worker, waiting to be woken, not a finished round (it stays
+                    # on the graph, and its row's mismatch and alert still say that nobody is at work)
+                    a["finished"] = False
 
         # anchors: a helper sits beside the agent it talks to most (not the lead), else its parent
         for a in agents:

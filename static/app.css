@@ -4,6 +4,8 @@
   --bg: #060915; --bg-glow: #0d1430; --surface: #0a0f22; --panel: rgb(13 19 40 / .9); --card: rgb(16 23 48 / .97);
   --line: #1b2444; --line2: #26315a; --grid: #141d38;
   --text: #c8d3f0; --text-strong: #eef3ff; --muted: #7d8ab0; --dim: #55628a;
+  /* the state marks (badge, status line, WTS agent line): each kind of waiting its own colour, far apart on the wheel */
+  --b-job: #f272d6; --b-poll: #b8e34f; --b-paused: #ffd84d; --b-done: #6f9bff; --b-blender: #ea7600;
   --cyan: #5cc8ff; --amber: #f4b740; --violet: #b48cff; --green: #5fe0a0; --rose: #ff7a90; --slate: #8592b3; --red: #ff5d5d;
   --lift-shadow: 0 12px 28px rgb(0 0 0 / .55), 0 0 0 1px var(--cyan);
   --node-fill: rgb(10 15 34 / .94); --sel-tint: 18%; --halo-op: .09; --pulse: #ffffff; --star: #9fb3ff; --star-op: .45;
@@ -16,6 +18,7 @@
   --bg: #f3f5fa; --bg-glow: #ffffff; --surface: #ffffff; --panel: rgb(255 255 255 / .94); --card: #ffffff;
   --line: #dde3f0; --line2: #c6cfe3; --grid: #e6eaf3;
   --text: #1b2440; --text-strong: #0b1020; --muted: #55607f; --dim: #8a93ab;
+  --b-job: #b0258f; --b-poll: #4f7a00; --b-paused: #a07800; --b-done: #2f5fd0; --b-blender: #ea7600;
   --cyan: #0b74b0; --amber: #9a5f00; --violet: #6a3fc8; --green: #0f7a46; --rose: #c8325a; --slate: #5f6b88; --red: #c02626;
   --lift-shadow: 0 8px 24px rgb(20 30 60 / .18), 0 0 0 1px var(--cyan);
   --node-fill: #ffffff; --sel-tint: 10%; --halo-op: .06; --pulse: #ffffff; --star: #b9c3da; --star-op: .7;
@@ -155,11 +158,17 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
    outside the hex, so the busy arc around it never runs into a selection mark */
 .node.sel .hex, .node:focus-visible .hex { fill: color-mix(in srgb, var(--c) var(--sel-tint), var(--node-fill)); stroke-width: 3; }
 :root[data-motion="full"] .node .hex { transition: fill .25s, stroke-width .25s; }
-.node .mark { color: var(--c); }
+.node .word, .node .num { fill: var(--c); text-anchor: middle; dominant-baseline: central; font-family: var(--mono); font-weight: 800; }
+.node .word { letter-spacing: .04em; }
+.s-msg { --s: var(--cyan); } .s-blender { --s: var(--b-blender); } .s-job { --s: var(--b-job); } .s-poll { --s: var(--b-poll); }
+.s-paused { --s: var(--b-paused); } .s-window, .s-hold { --s: var(--violet); } .s-stuck, .s-dead { --s: var(--red); }
+.s-done { --s: var(--b-done); } .s-ask { --s: var(--rose); }
+.node .stb circle { fill: var(--bg); stroke: var(--s); stroke-width: 1.6; } .node .stb use { color: var(--s); }
 .node .arc { fill: none; stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; transform-box: fill-box; transform-origin: center; animation: spin 2.6s linear infinite; }
 .node .flash { fill: none; stroke: var(--c); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center; }
 .node .flash.go { animation: flash .6s ease-out; }
 .node .lbl { fill: var(--text-strong); font-size: 14.5px; text-anchor: middle; font-family: var(--mono); }
+.node .lbl.t { font-size: 12.5px; }   /* a task's title: smaller than a name, so more of it shows */
 .node text, .res text { paint-order: stroke; stroke: var(--bg); stroke-width: 3.5px; stroke-linejoin: round; }
 .node .sub { fill: var(--muted); font-size: 11px; text-anchor: middle; font-family: var(--mono); }
 .node .stat { font-size: 11.5px; font-family: var(--mono); }
@@ -168,6 +177,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .node .stat.k-waiting_user, .node .stat.k-asks { fill: var(--rose); }
 .node .stat.k-dead { fill: var(--red); }
 .node .stat, .node .stat.k-ended, .node .stat.k-polling, .node .stat.k-ended_bg, .node .stat.k-shell { fill: var(--slate); }
+.node .stat.mk { fill: var(--s); color: var(--s); }   /* a marked state: its text and icon in the mark's colour, as the badge */
 .node .sico { color: inherit; }
 .node .meta { fill: var(--muted); font-size: 10.5px; text-anchor: middle; font-family: var(--mono); }
 .node .barbg { fill: var(--line); } .node .bar { fill: var(--green); } .node .bar.warn { fill: var(--amber); } .node .bar.crit { fill: var(--red); }
@@ -195,11 +205,12 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .edge.queue { stroke: var(--rose); stroke-dasharray: 2 5; opacity: .45; }
 .edge.faint { opacity: .3; }                       /* a message line that is no longer hot */
 .edge.dim, .edge.hot.dim { opacity: .12; }         /* an agent is selected: lines that are not its own step back */
-.node .lockm circle { fill: var(--card); stroke: var(--red); stroke-width: 1.4; }
+.node .lockm circle { fill: var(--bg); stroke: var(--red); stroke-width: 1.6; }
 .node .lockm use { color: var(--red); }
 .node .notem { cursor: pointer; }
 .node .notem .nm { transform-box: fill-box; transform-origin: center; transition: transform .15s ease-out; }
-.node .notem circle { fill: color-mix(in srgb, var(--c) 14%, var(--card)); stroke: color-mix(in srgb, var(--c) 70%, transparent); stroke-width: 1.4; transition: fill .15s, stroke .15s; }
+.node .notem { --c: var(--green); }   /* notes: green, outlined like the other badges (not the agent's colour) */
+.node .notem circle { fill: var(--bg); stroke: var(--c); stroke-width: 1.6; transition: fill .15s, stroke .15s; }
 .node .notem use { color: var(--c); }
 .node .notem:hover .nm { transform: scale(1.18); }
 .node .notem:hover circle { fill: color-mix(in srgb, var(--c) 32%, var(--card)); stroke: var(--c); stroke-width: 1.8; filter: drop-shadow(0 0 4px var(--c)); }
@@ -292,7 +303,8 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .wrow .obs.mismatch { color: var(--amber); }
 /* the window: its holder's row has a red edge and number, its agent line red with the lock; a waiter's line is amber */
 .wrow.holds { box-shadow: inset 3px 0 0 var(--red); } .wrow.holds .n { color: var(--red); }
-.wrow .obs.win { color: var(--c); font-weight: 600; } .wrow .obs.win svg { width: 11px; height: 11px; flex: none; }
+.wrow .obs.win { color: var(--c); font-weight: 600; } .wrow .obs.win.s-window { color: var(--s); }
+.obs .mk { color: var(--s); } .wrow .obs.win svg { width: 11px; height: 11px; flex: none; }
 .wrow .ro { grid-column: 2 / 4; color: var(--dim); font-size: 11px; }
 
 /* alerts */
@@ -396,7 +408,7 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .fold[aria-expanded="true"] .chev { transform: rotate(90deg); }
 .now { border-left: 2px solid var(--c); padding: 2px 0 2px 10px; }
 .nowh { color: var(--text-strong); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
-.nowh.c-amber { color: var(--amber); } .nowh svg { width: 12px; height: 12px; vertical-align: -1px; }
+.nowh.c-amber { color: var(--amber); } .nowh.s-window { color: var(--s); } .nowh svg { width: 12px; height: 12px; vertical-align: -1px; }
 .nowsub { color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
 .cmd { margin-top: 5px; padding: 3px 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; font-size: 11.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .clamp3, .clamp8 { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
@@ -520,6 +532,9 @@ div.npart { padding: 6px 0 2px; border-top: 1px solid var(--line2); }
 .nsec.npart .nh { color: var(--cyan); font-weight: 500; }
 .rdtoc button.part { color: var(--cyan); margin-top: 8px; }
 .rdart section.part h2 { margin-top: 38px; padding: 8px 0 6px; border-top: 2px solid var(--cyan); border-bottom: 0; color: var(--cyan); font-size: 14px; }
-.legend .lg-notes { width: 26px; height: 12px; color: var(--muted); flex: none; }   /* as wide as the other keys */
+.legend .lg-notes { width: 26px; height: 12px; color: var(--muted); flex: none; }
+.legend .lg-green { color: var(--green); }
+.legend .lgmarks { flex-wrap: wrap; gap: 3px 10px; } .legend .lgmarks span { display: inline-flex; align-items: center; gap: 4px; color: var(--text); }
+.legend .lgmarks svg { width: 12px; height: 12px; color: var(--s); flex: none; }   /* as wide as the other keys */
 .rst { display: inline-flex; align-items: center; gap: 5px; } .rst svg { width: 12px; height: 12px; color: var(--c); flex: none; }
 .rst b, .wrow .st2 b { font-weight: 600; }

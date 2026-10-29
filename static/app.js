@@ -20,7 +20,7 @@ const clip = (s, n) => { s = String(s ?? ''); if (s.length <= n) return s; let c
 
 // ---- status vocabulary: one mapping, icons from the sprite (no emoji in the UI chrome) ----
 const STATUS = {
-  running: ['i-run', 'green'], thinking: ['i-think', 'cyan'], polling: ['i-wait', 'slate'], waiting_window: ['i-window', 'amber'],
+  running: ['i-run', 'green'], thinking: ['i-think', 'cyan'], polling: ['i-wait', 'slate'], waiting_window: ['i-window', 'violet'],
   ended: ['i-done', 'slate'], ended_bg: ['i-wait', 'slate'], stuck: ['i-stuck', 'amber'], dead: ['i-dead', 'red'],
   waiting_user: ['i-ask', 'rose'], idle: ['i-done', 'slate'], shell: ['i-wait', 'slate'], unknown: ['i-wait', 'slate'], parked: ['i-park', 'slate'],
 };
@@ -582,9 +582,6 @@ function rowIndex(s) {
   return m;
 }
 const isParked = n => n.state.key === 'waiting_window' || n.state.key === 'parked' || (n.rowKind === 'paused' || n.rowKind === 'parked') && !['running', 'thinking', 'polling'].includes(n.state.key);
-// why a blocked agent is not working, as [icon, colour]
-const holdOf = n => n.state.key === 'waiting_window' ? STATUS.waiting_window
-  : n.state.key === 'parked' ? stLook(n.state) : n.rowKind === 'paused' ? STATUS.parked : ['i-wait', 'amber'];
 const radius = n => {
   const c = settings.compact;
   return n.role === 'lead' ? (c ? 40 : 52) : n.role === 'worker' ? (c ? 32 : 42) : (n.finished ? 22 : c ? 22 : 30);
@@ -1246,7 +1243,10 @@ function makeNode(id) {
   p.flash = el('polygon', { class: 'flash' }, g);
   p.arc = el('circle', { class: 'arc' }, g);
   p.hex = el('polygon', { class: 'hex' }, g);
-  p.mark = el('use', {}, g); p.mark.setAttribute('class', 'mark');
+  p.word = el('text', { class: 'word' }, g);   // in the hex: who it is, "HP" over "197", "adv" over "184d", "Lead"
+  p.num = el('text', { class: 'num' }, g);
+  // the status badge, top left (the other corners: "!" top right, notes bottom left, the window's lock bottom right)
+  p.stb = el('g', { class: 'stb' }, g); el('circle', { r: 9 }, p.stb); p.stbI = el('use', { x: -5.5, y: -5.5, width: 11, height: 11 }, p.stb);
   p.lbl = el('text', { class: 'lbl' }, g);
   p.sub = el('text', { class: 'sub' }, g);
   p.stat = el('g', { class: 'stat' }, g); p.sico = el('use', { width: 12, height: 12 }, p.stat); p.stxt = el('text', {}, p.stat);
@@ -1277,10 +1277,46 @@ function makeNode(id) {
   return p;
 }
 
+// what the hex says, as [small top line, big line]: the group over the task and its round ("HP"/"184e", "MP"/"111"), a
+// helper's name split at its number ("adv"/"184d"), "Lead"; a name with no number on one line ("worker")
+const RE_DESC_NAME = /^[a-z]+\d{1,4}(?:[a-z]|r\d{1,2})?\s*:\s*/i;
+function hexWords(n) {
+  if (n.role === 'lead') return ['', 'Lead'];
+  const own = n.name || ((n.desc || '').match(RE_DESC_NAME) || [''])[0].replace(/\s*:\s*$/, '');
+  const m = own.match(/^([a-z]+)[-_]?(\d.*)$/i);
+  if (['worker', 'mp', 'lp'].includes(n.role)) {
+    const own_n = m && /^(hp|mp|lp|task)$/i.test(m[1]) && parseInt(m[2], 10) === n.task ? m[2] : null;   // its round: "184e"
+    return [n.role === 'worker' ? 'HP' : n.role.toUpperCase(), own_n || String(n.task ?? '')];
+  }
+  if (m) return [m[1].toLowerCase(), m[2]];
+  return ['', clip(own || n.label || '', 7)];
+}
+// a state's mark: one icon and one colour (the s-<mark> class, the --b-* tokens) for the corner badge, the status line
+// and the WTS agent line, so they always agree. Each kind of waiting has its own: a message (✈), Blender (its logo),
+// another job (⚙), polling (↻), paused by hand (⏸), the window (four squares), on hold (⧗); then stuck, dead,
+// finished and (the lead) waiting for you. None while it works: the spinning arc says so.
+const MARK = { msg: 'i-msg', blender: 'i-blender', job: 'i-gear', poll: 'i-poll', paused: 'i-park', window: 'i-window',
+  hold: 'i-wait', stuck: 'i-stall', dead: 'i-dead', done: 'i-done', ask: 'i-ask' };
+function markOf(n, st = n.state || {}) {
+  if (st.key === 'dead') return 'dead';
+  if (n.role === 'lead') return st.key === 'waiting_user' ? 'ask' : null;
+  if (st.key === 'waiting_window') return 'window';
+  if (!n.finished && isParked(n)) return st.key === 'parked' ? (st.sub === 'hold' ? 'hold' : 'paused') : n.rowKind === 'paused' ? 'paused' : 'hold';
+  if (st.key === 'stuck') return 'stuck';
+  if (st.what === 'Blender' && (st.key === 'ended_bg' || st.key === 'polling')) return 'blender';
+  if (st.key === 'polling') return 'poll';
+  if (st.key === 'ended_bg') return 'job';
+  if (n.finished || st.key === 'ended' && st.sub === 'done') return 'done';
+  if (st.key === 'ended' || st.waits_for) return 'msg';   // a task's worker between turns, or waiting for its advisor
+  return null;
+}
 function updateNode(p, n, pos, now, nAlerts) {
   const { x, y, r } = pos;
   const st = n.state || { key: 'unknown', label: '?' };
-  const [sIcon, sCol] = stLook(st);
+  // the status line's icon and colour are the state's mark when it has one (as its badge); else its usual look, with
+  // Blender's logo while it runs Blender
+  const mark = markOf(n, st), look = stLook(st);
+  const sIcon = mark ? MARK[mark] : st.what === 'Blender' ? 'i-blender' : look[0], sCol = look[1];
   const active = ['running', 'thinking', 'polling'].includes(st.key) || (n.role === 'lead' && !['waiting_user', 'idle', 'dead', 'shell'].includes(st.key));
   const col = n.role === 'lead' ? 'cyan' : ROLECOL[n.role] || 'violet';
   // blocked (paused, parked, waiting for or looping on the window): a dashed hex, at full strength
@@ -1292,25 +1328,39 @@ function updateNode(p, n, pos, now, nAlerts) {
   setA(p.flash, { points: hexPts(r + 3) });
   setA(p.arc, { r: r + 10, 'stroke-dasharray': `${(r * .9).toFixed(0)} ${(r * 7).toFixed(0)}` });
   p.arc.style.display = active ? '' : 'none';
-  // inner mark: the lead's star; when blocked, why (a window: waiting for it, ⏸: paused by hand, an hourglass: on hold)
-  // in that state's colour; a status icon otherwise
-  const hold = !n.finished && n.role !== 'lead' && isParked(n) ? holdOf(n) : null;
-  const markId = n.role === 'lead' ? 'i-lead' : hold ? hold[0] : (st.key === 'dead' ? 'i-dead' : st.key === 'ended' && !st.waits_for ? 'i-done' : 'i-think');
-  p.mark.setAttribute('class', hold ? `mark c-${hold[1]}` : 'mark');
-  const ms = n.role === 'lead' ? r * .62 : r * .5;
-  setA(p.mark, { href: '#' + markId, x: -ms / 2, y: -ms / 2, width: ms, height: ms });
+  // in the hex, who it is: a small line over a big one ("HP" over "184e"), both in the hex's colour; one line when the
+  // hex is small or the name has no number. Each is shrunk to fit the hex's width.
+  const [top, main] = hexWords(n), two = !!top && r >= 26, fit = (t, f) => Math.min(f, r * 1.3 / Math.max(1, t.length * .62));
+  p.word.style.display = two ? '' : 'none';
+  if (two) { setT(p.word, top); setA(p.word, { 'font-size': fit(top, r * .36).toFixed(1), y: (-r * .25).toFixed(1) }); }
+  setT(p.num, main); setA(p.num, { 'font-size': fit(main, r * .42).toFixed(1), y: two ? (r * .2).toFixed(1) : 1 });
+  // the badge, top left: the state's mark, ring and icon in its colour (the logo a little larger)
+  p.stb.style.display = mark ? '' : 'none';
+  if (mark) {
+    const w = mark === 'blender' ? 14 : 11;
+    p.stb.setAttribute('class', `stb s-${mark}`);
+    setA(p.stbI, { href: '#' + MARK[mark], x: -w / 2, y: -w / 2, width: w, height: w });
+    setA(p.stb, { transform: `translate(${(-r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` });
+  }
   // context: the bar under the label only (no "almost full" pill or alert: the user's call)
   const pct = n.ctx_max ? n.ctx / n.ctx_max : 0;
   const lvl = pct >= .9 ? 'crit' : pct >= .8 ? 'warn' : '';
   // label stack
   let yy = r + 21;
-  setA(p.lbl, { y: yy }); setT(p.lbl, fitW(clip(n.label, 20), 14.5));
+  // under the hex: the task's title (the hex already says "HP 197"), a helper's job without its name, and for the lead
+  // and a finished agent their name (a finished row is narrow)
+  const under = n.role === 'lead' || n.finished ? n.label
+    : n.role === 'helper' ? (n.desc || '').replace(RE_DESC_NAME, '').trim() || n.label : n.task_title || n.desc || n.label;
+  // a title is smaller than a name, so more of it fits in the column (cut to the column's width, not a count)
+  const titled = under !== n.label, lsz = titled ? 12.5 : 14.5;
+  p.lbl.classList.toggle('t', titled);
+  setA(p.lbl, { y: yy }); setT(p.lbl, fitW(clip(under, 40), lsz));
   const compact = settings.compact || n.finished;
-  if (n.sub && !compact) { yy += 15; setA(p.sub, { y: yy }); setT(p.sub, fitW(n.sub, 11)); p.sub.style.display = ''; } else p.sub.style.display = 'none';
+  if (n.sub && !compact && n.role === 'lead') { yy += 15; setA(p.sub, { y: yy }); setT(p.sub, fitW(n.sub, 11)); p.sub.style.display = ''; } else p.sub.style.display = 'none';
   yy += 17;
   const label = fitW(clip(st.label, 34), 11.5, LABEL_W - 16);   // the icon takes 16
   const tw = textW(label, 11.5) + 16;
-  p.stat.setAttribute('class', `stat k-${st.key} c-${sCol}`);
+  p.stat.setAttribute('class', `stat k-${st.key} ${mark ? 'mk s-' + mark : 'c-' + sCol}`);
   setA(p.sico, { href: '#' + sIcon, x: -tw / 2, y: yy - 10 });
   setA(p.stxt, { x: -tw / 2 + 16, y: yy }); setT(p.stxt, label);
   yy += 9;
@@ -1334,7 +1384,7 @@ function updateNode(p, n, pos, now, nAlerts) {
     p.flash.classList.remove('go'); void p.flash.getBBox(); p.flash.classList.add('go');
   }
   S.prevState.set(n.id, st.key);
-  const labelHalf = Math.max(textW(p.lbl.textContent, 14.5), tw, n.sub && !compact ? textW(p.sub.textContent, 11) : 0, textW(p.meta.textContent || '', 10.5)) / 2 + 6;
+  const labelHalf = Math.max(textW(p.lbl.textContent, lsz), tw, n.sub && !compact ? textW(p.sub.textContent, 11) : 0, textW(p.meta.textContent || '', 10.5)) / 2 + 6;
   return [
     { x: x - r - 12, y: y - r - (pct >= .7 ? 38 : 14), w: 2 * r + 24, h: 2 * r + (pct >= .7 ? 38 : 14) + 6, node: n.id },
     { x: x - labelHalf, y: y + r + 6, w: 2 * labelHalf, h: yy - r, node: n.id },
@@ -1782,7 +1832,7 @@ function nowBlock(s, n, st, d, now, sc) {
   let head, body = '';
   if (st.key === 'waiting_window') {
     const holder = win?.holder ? (win.holder === 'lead' ? 'lead' : (s.agents || []).find(a => a.id === win.holder)?.label) : null;
-    head = `<div class="nowh c-amber">${icon('i-window')} Waiting for the shared window</div>`;
+    head = `<div class="nowh s-window">${icon('i-window')} Waiting for the shared window</div>`;
     body = `<div class="nowsub">${holder ? `held by <button class="linkbtn" data-select="${esc(win.holder)}">${esc(holder)}</button>` : 'held elsewhere'}${win?.since ? ' since ' + hhmm(win.since) : ''}</div>`;
   } else if (p) {
     const what = p.tool === 'Bash' ? (p.d ? p.desc : (p.cmd.split('\n')[0] || p.desc)) : `${p.tool}  ${p.file || p.desc}`;
@@ -2408,17 +2458,16 @@ function wtsPanel(s) {
         <span class="n">${r.n}${nb}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : r.kind === 'done' ? ' pill ring' : ''}" data-tip="${esc(r.status + (['done', 'active'].includes(r.kind) && run?.born ? `\n${a ? 'its agent ' + a.label : 'worked on'}: ${whenHM(run.born, now)}–${run.last_ts ? whenHM(run.last_ts, now) : 'now'}` : ''))}">${icon(ri)}<span>${stHtml}</span></span>`;
       if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
       if (a) {
-        const [ai, ac] = stLook(a.state);
+        const [ai, ac] = stLook(a.state), am = markOf(a);
         const mismatch = (r.kind === 'active' && ['dead', 'stuck'].includes(a.state.key)) ||
-          (r.kind === 'active' && a.state.key === 'ended' && !a.state.waits_for && now - a.state.since > 600) ||   // waiting for its advisor is fine
           (['paused', 'parked'].includes(r.kind) && a.state.key === 'running' && !/window/.test(a.state.label));
         if (holds) {   // its agent line in the window's colours: red with the lock (holds it), amber with the window (waits)
           const also = /holds the window/.test(a.state.label) ? '' : ' · ' + a.state.label;
           h += `<span class="obs win c-red">${icon('i-lock')}agent ${esc(a.label)}: holds the window · ${dur(now - (win.since || now))}${esc(also)}</span>`;
         } else if (a.state.key === 'waiting_window') {
-          h += `<span class="obs win c-amber">${icon('i-window')}agent ${esc(a.label)}: ${esc(a.state.label)}</span>`;
+          h += `<span class="obs win s-window">${icon('i-window')}agent ${esc(a.label)}: ${esc(a.state.label)}</span>`;
         } else
-        h += `<span class="obs${mismatch ? ' mismatch' : ''}">agent ${esc(a.label)}: <span class="c-${ac}">${icon(ai)}</span>${esc(a.state.label)}${mismatch ? ' · does not match the row' : ''}</span>`;
+        h += `<span class="obs${mismatch ? ' mismatch' : ''}">agent ${esc(a.label)}: <span class="${am ? 'mk s-' + am : 'c-' + ac}">${icon(am ? MARK[am] : ai)}</span>${esc(a.state.label)}${mismatch ? ' · does not match the row' : ''}</span>`;
       } else if (r.kind === 'active') {
         h += `<span class="obs">no agent seen for this row</span>`;
       }

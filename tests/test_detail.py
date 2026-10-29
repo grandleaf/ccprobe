@@ -66,6 +66,15 @@ class DetailTests(Base):
         self.assertEqual(d["repeat"], {"n": 3, "what": "List x"})
         self.assertTrue(next(h for h in tr.history if h["id"] == "b3").get("err"))
 
+    def test_background_job_ends_when_it_stops_it(self):
+        self.w.add(tool_use(self.now - 30, "bg1", "Bash", {"command": "tools/x_blender.sh", "run_in_background": True, "description": "Build"}),
+                   result(self.now - 29, "bg1", extra={"stdout": "", "backgroundTaskId": "bgx1"}))
+        tr = self.tr()
+        self.assertEqual([j["desc"] for j in tr.detail(self.now)["bg"]], ["Build"])
+        self.w.add(tool_use(self.now - 10, "s1", "TaskStop", {"task_id": "bgx1"}), result(self.now - 9, "s1"))
+        tr.update()
+        self.assertEqual(tr.detail(self.now)["bg"], [])            # no notice follows a stop: the stop ends it
+
     def test_background_job_listed_until_its_notice(self):
         self.w.add(tool_use(self.now - 30, "bg1", "Bash", {"command": "sleep 99", "run_in_background": True, "description": "Render"}),
                    result(self.now - 29, "bg1", extra={"stdout": "", "backgroundTaskId": "bgx1"}))
@@ -75,6 +84,23 @@ class DetailTests(Base):
                     "origin": {"kind": "task-notification"}, "prompt": "<task-notification><task-id>bgx1</task-id><status>completed</status></task-notification>"}})
         tr.update()
         self.assertEqual(tr.detail(self.now)["bg"], [])
+
+
+class WhatTests(unittest.TestCase):
+    def test_what_a_job_runs_or_waits_on(self):
+        from ccprobe.agents import what_of
+        cases = [("cd /p; S=/tmp/s; SWART_SCRATCH=$S/swart Blender -b --factory-startup -P tools/art/x.py", "Fast build", "Blender"),
+                 ("L=/tmp/blend6; until grep -q check_nodes $L.out; do sleep 15; done", "Wait for the rib build", "Blender"),
+                 (".autopilot/worker/bin/model_blender.sh /tmp/full1 > /tmp/o", "Build the live model", "Blender"),
+                 ("L=~/Library/App/licenses/x.xml; m0=$(stat -f %m $L); for i in $(seq 1 720); do sleep 10; done",
+                  "Wait for the license file to be renewed", "licence"),
+                 ("WHO=lead tools/build.sh /tmp/b.log", "Rebuild", "build"),
+                 ("WHO=hp1 .autopilot/worker/bin/shots.sh /tmp/a 'after x 0 1 2'", "Capture frames", "capture"),
+                 ("tools/t1.sh /tmp/t1.log", "Run related tests and the cover rows", "tests"),
+                 ("until grep -q done /tmp/x.output; do sleep 5; done", "Wait for the round 3 package", None)]
+        for cmd, desc, want in cases:
+            got = what_of(cmd, desc)
+            self.assertEqual(got and got[0], want, desc)
 
 
 class TaskPatternTests(unittest.TestCase):

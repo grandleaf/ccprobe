@@ -150,8 +150,8 @@ Kept per transcript (main or agent), updated from new entries only:
 | `dead` | dead | the owning session pid is not alive |
 | `waiting_window` | waiting for the window | a pending Bash whose command contains the lock path and `until`/`while`; or the bound row's State says "waiting for the window" with no pending tool |
 | `running` | Bash 6m · `cd ~sf…` | a pending tool_use (the oldest pending one is shown, with how long it has run). A pending `until`/`sleep` poll loop is labelled **polling** |
-| `ended_bg` | waiting on its background job | the last kind is handback/text and `bg_pending` is not empty |
-| `ended` | turn ended · waiting for a message / done | the last kind is handback, or a final assistant text with no pending tool. The subtype is *waiting* if the bound row is open, else *done* |
+| `ended_bg` | waiting on Blender / licence / build / capture / tests / its job · how long (whole hours past the first, so it fits) | the last kind is handback/text and `bg_pending` is not empty; the newest job's command and description say what it is (`what_of`). A running or polling Bash is named the same way (`Blender · 5m`, `waiting on a build · 3m`) |
+| `ended` | waiting for a message (its turn ended; a message wakes it) / done | the last kind is handback, or a final assistant text with no pending tool. The subtype is *waiting* if the bound row is open, else *done* |
 | `thinking` | thinking | the last kind is user/tool_result/queued_command and the file grew in the last 120 s |
 | `stuck` | stuck? silent 12m | none of the above, and no growth for ≥ 10 min (shown as a question) |
 | `unknown` | unknown | the parser could not tell |
@@ -196,7 +196,7 @@ session, agent?}`. `since` = the first tick its key was seen; it is kept in memo
 | red | `asks:<n>` | a row's kind is `asks` ("needs the user") |
 | red | `usage-limit:<sid>` | a usage-limit notice in the last 60 min |
 | red | `stale-lock:<root>` | the lock has been held ≥ 15 min and the holder is `ended`/`dead`/`stuck`/unknown |
-| red | `orphan-row:<n>` | the row is `active` and its bound agent is `dead`, or `ended` ≥ 10 min with no pending message to it |
+| red | `orphan-row:<n>` | the row is `active` and its bound agent is `dead` (one waiting for a message is how a task normally waits: no alert, and no "does not match" mark in the WTS tab) |
 | red | `stale-row:<n>` | an agent's `queue.py state N --text "<head>"` was an error, or ≥ 2 min later the row's state does not start with that head |
 | amber | `hp-state:<root>` | `state` = `running N` (or `running N M`: each is checked) but a row named is not active/done; or `stopped`/`paused` while the worker is `running` on an HP row; or `stopped` with open HP rows and the worker `ended` |
 | amber | `mode-breach:<root>:<grp>` | MP or LP is `desk`/`paused`, but an agent of that group holds the lock |
@@ -299,8 +299,18 @@ Browser notifications fire once per new red key (§9.8).
 Each node shows:
 - a halo;
 - a hex in `--c`;
-- an inner mark: the ✳ path for the lead, a pause glyph when parked, a dot otherwise;
-- the label, with the task title below it (24 chars);
+- in the hex, who it is, in the hex's colour: a small line over a big one, the group over the task and its round
+  (`HP` / `184e`, `MP` / `111`), a helper's name split at its number (`adv` / `184d`), or `Lead`; one line when the
+  hex is small or the name has no number;
+- a status badge at its top-left corner, only when it is not at work (the spinning arc says when it is): the state's
+  **mark** (`markOf`, `MARK`), an outlined disc whose ring and icon take the mark's colour. Each kind of waiting has
+  its own icon and a colour far from the others: `msg` ✈ cyan (a message: a worker between turns or waiting for its
+  advisor), `blender` the Blender logo in its orange with its own white and blue eye (`state.what` from the job's
+  command), `job` ⚙ magenta (any other job), `poll` ↻ lime, `paused` ⏸ yellow, `window` four squares violet, `hold` ⧗
+  violet, `stuck` a clock red, `dead` ✕ red, `done` ✓ blue, the lead's `ask` ? rose. The status line and the WTS agent
+  line show the same mark. The other corners: "!" alerts (red), notes (a green page), the window's lock (red);
+- under the hex, the task's title (a helper: its job, without its name; the lead and a finished agent: their name),
+  and for the lead its session title below it;
 - a status line with its icon;
 - a context bar;
 - a meta line: `810k / 1M · Bash 6m`;
@@ -550,8 +560,8 @@ Verified with scripted checks (scratchpad `layout_test.py`, `stress_test.py`, `c
 - **Selection.** The selected (or keyboard-focused) hex fills with a tint of its own border colour (18% dark theme, 10%
   light) and its border thickens to 3; the outer selection ring is gone, so the busy arc (r + 10) never meets it.
   Dashed still means blocked, glow active, faded finished.
-- **Blocked, and why.** The dashed hex says an agent is blocked; the mark inside it (in the state's colour, not the
-  role's) and every status pill say why: an amber window for waiting for the window (it goes on by itself), an amber
+- **Blocked, and why.** The dashed hex says an agent is blocked; its corner badge (in the hex's colour) and every
+  status pill say why: an amber window for waiting for the window (it goes on by itself), an amber
   hourglass for on hold (a "waiting …"/"hold" row that is not about the window; the agent's label is the row's own
   words), a slate ⏸ for paused by hand (until someone resumes it). Paused groups (HP PAUSED, MP/LP paused) are slate
   too, in the WTS headers and the top chips.

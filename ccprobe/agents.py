@@ -140,6 +140,7 @@ class Transcript:
         self.cmds = collections.Counter()      # normalised Bash command -> times run
         self.repeat = None                     # {n, what}: the most repeated command
         self.bg_desc = {}                      # background tool_use_id -> what it is
+        self.bg_cmd = {}                       # background tool_use_id -> its command (to tell what program it waits on)
         self.bg_task = {}                      # background task id -> tool_use_id
         self.history = collections.deque(maxlen=14)   # recent tools with their full command, for the panel
         self._brief = False                    # not read yet (the head of the file, once)
@@ -248,6 +249,7 @@ class Transcript:
         if bg and tid:
             self.bg_pending[tid] = t
             self.bg_desc[tid] = arg
+            self.bg_cmd[tid] = cmd[:4000]
         if cmd:
             key = " ".join(cmd.split())[:2000]
             if len(self.cmds) > 400:
@@ -258,10 +260,11 @@ class Transcript:
                 self.repeat = {"n": self.cmds[key], "what": arg}
         if name not in ("SendMessage", "SubagentHandback"):
             self.history.append({"t": t, "tool": name, "arg": arg, "d": said, "cmd": clean_cmd(cmd, 500) if cmd else "", "id": tid})
-        if name == "TaskStop" and inp.get("task_id"):
-            self.stops[str(inp["task_id"])] = t
+        stop_id = inp.get("task_id") if name == "TaskStop" else inp.get("shell_id") if name == "KillShell" else None
+        if stop_id:
+            self.stops[str(stop_id)] = t
             if tid in self.pending:
-                self.pending[tid]["stop"] = str(inp["task_id"])
+                self.pending[tid]["stop"] = str(stop_id)
         if name == "SendMessage":
             self.messages.append({"t": t, "kind": "send", "to": str(inp.get("to") or ""), "to_id": None, "summary": arg, "tid": tid})
         if cmd:
@@ -322,6 +325,10 @@ class Transcript:
             p = self.pending.pop(i)
             if p.get("stop") and i in errs:
                 self.stops.pop(p["stop"], None)      # the stop failed: nothing was stopped
+            elif p.get("stop") in self.bg_task:     # it stopped its own background job: no notice follows, so it ends here
+                bid = self.bg_task.pop(p["stop"])
+                for d in (self.bg_pending, self.bg_desc, self.bg_cmd):
+                    d.pop(bid, None)
             if p["name"] == "SendMessage" and res:
                 rid = res.get("resumedAgentId") or res.get("revivedAgentId") or (res.get("pin") or {}).get("id")
                 if rid:
@@ -342,6 +349,7 @@ class Transcript:
         for tid in RE_NOTIFY_ID.findall(text) + [self.bg_task.pop(k) for k in RE_TASK_ID.findall(text) if k in self.bg_task]:
             self.bg_pending.pop(tid, None)
             self.bg_desc.pop(tid, None)
+            self.bg_cmd.pop(tid, None)
         self.received.append({"t": t, "kind": kind, "from": origin.get("from"), "sender": origin.get("senderTaskId"),
                               "handback": bool(origin.get("handback"))})
         self.last_kind = "received"
@@ -459,6 +467,29 @@ def _ladder(tr, now):
     return {"key": "stuck", "label": f"stuck? silent {_dur(quiet)}", "since": tr.last_activity, "detail": ""}
 
 
+# what a long command runs or waits on, from its command and description, for the status line: (on its own, after
+# "waiting on"). The first that matches wins: a loop that watches a licence file names the app too.
+# (The phrases are short: the status line holds about 26 characters.)
+WHAT = [("Blender", "Blender", re.compile(r"\bblender\b|_blender\.sh|\bcheck_nodes\b|\.blend\b", re.I)),
+        ("licence", "licence", re.compile(r"\blicen[cs]e", re.I)),
+        ("build", "build", re.compile(r"\bbuild\w*\.sh\b|-batchmode|\bxcodebuild\b|\b(?:cargo|npm run|make|gradle|dotnet) build\b", re.I)),
+        ("capture", "capture", re.compile(r"\bshots\w*\.sh\b|\bcaptur", re.I)),
+        ("tests", "tests", re.compile(r"\b(?:dotnet test|pytest|unittest|npm test|cargo test)\b|\brun\w* (?:the )?(?:\w+ )?tests\b", re.I))]
+
+
+def _hours(s):
+    """How long, short enough for the status line: whole hours past the first ("21h", not "21h 30m")."""
+    return _dur(s) if s < 3600 else f"{int(s // 3600)}h"
+
+
+def what_of(cmd, desc=""):
+    """(short, phrase) for what a command runs or waits on, or None."""
+    for short, phrase, rx in WHAT:
+        if rx.search(cmd or "") or rx.search(desc or ""):
+            return short, phrase
+    return None
+
+
 def pending_state(tr, now, lock_name, is_holder):
     """The state from the oldest pending tool call, or None when nothing is pending."""
     p = tr.oldest_pending()
@@ -470,9 +501,11 @@ def pending_state(tr, now, lock_name, is_holder):
         return {"key": "waiting_window", "label": "waiting for the window", "since": p["t"], "detail": p["arg"], "via": "loop"}
     if p["name"] == "Bash" and p.get("timeout") and age > p["timeout"] + 120:
         return {"key": "stuck", "label": f"stuck? Bash past its timeout · {_dur(age)}", "since": p["t"], "detail": p["arg"]}
+    w = what_of(p["cmd"], p["arg"]) if p["name"] == "Bash" else None
     if p["name"] == "Bash" and not lock_loop and RE_POLL.search(p["cmd"]) and "sleep" in p["cmd"]:
-        return {"key": "polling", "label": f"polling · {_dur(age)}", "since": p["t"], "detail": p["arg"]}
-    return {"key": "running", "label": f"{p['name']} · {_dur(age)}", "since": p["t"], "detail": p["arg"]}
+        return {"key": "polling", "label": f"waiting on {w[1]} · {_hours(age)}" if w else f"polling · {_dur(age)}", "since": p["t"],
+                "detail": p["arg"], "what": w and w[0]}
+    return {"key": "running", "label": f"{w[0] if w else p['name']} · {_dur(age)}", "since": p["t"], "detail": p["arg"], "what": w and w[0]}
 
 
 def agent_state(tr, now, *, alive=True, lock_name=None, is_holder=False, row_open=None, row_waits_window=False,
@@ -485,12 +518,17 @@ def agent_state(tr, now, *, alive=True, lock_name=None, is_holder=False, row_ope
         return st
     ended = tr.last_kind in ("handback", "end", "turn_end")
     if ended and tr.bg_pending:
-        return {"key": "ended_bg", "label": "waiting on its background job", "since": tr.last_ts, "detail": ""}
+        # the newest job it waits on, named when its command says what it is ("waiting on Blender · 12m")
+        tid, t0 = max(tr.bg_pending.items(), key=lambda kv: kv[1])
+        w = what_of(tr.bg_cmd.get(tid, ""), tr.bg_desc.get(tid, ""))
+        return {"key": "ended_bg", "label": f"waiting on {w[1] if w else 'its job'} · {_hours(now - t0)}",
+                "since": tr.last_ts, "detail": tr.bg_desc.get(tid, ""), "what": w and w[0]}
     if ended:
         if row_waits_window and not is_holder:
             return {"key": "waiting_window", "label": "waiting for the window", "since": tr.last_ts, "detail": "its row says so", "via": "row"}
         if row_open or (row_open is None and recently_messaged):
-            return {"key": "ended", "label": "turn ended · waiting for a message", "since": tr.last_ts, "detail": "", "sub": "waiting"}
+            return {"key": "ended", "label": "waiting for a message", "since": tr.last_ts,
+                    "detail": "its turn ended; a message (from the lead, its advisor) wakes it", "sub": "waiting"}
         return {"key": "ended", "label": "done", "since": tr.last_ts, "detail": "", "sub": "done"}
     if tr.last_kind is None:
         return {"key": "unknown", "label": "no recent entries", "since": tr.last_ts, "detail": ""}

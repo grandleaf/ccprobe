@@ -8,7 +8,6 @@ import time
 
 OPEN = ("asks", "active", "paused", "parked", "queued", "other")
 BUSY = ("running", "thinking", "polling")
-LIVE = BUSY + ("waiting_window", "ended_bg")
 
 
 class Memory:
@@ -30,6 +29,11 @@ class Memory:
 RE_DUR = re.compile(r"(?:\s*·)?\s*\b\d+(?:h \d+m|[hms])\b")
 
 
+
+def _cut(t, n):
+    t = " ".join(t.split())
+    return t if len(t) <= n else t[:n - 1].rstrip() + "…"
+
 def compute(sessions, now, mem):
     out, keys = [], set()
 
@@ -48,7 +52,6 @@ def compute(sessions, now, mem):
             add(f"usage-limit:{s['id']}", "red", f"{s['project']}: usage limit reached", lead["limit"]["text"], s, "lead")
         agents = {a["id"]: a for a in s.get("agents") or []}
         name = lambda aid: "lead" if aid == "lead" else (agents[aid]["label"] if aid in agents else aid)
-        lead_busy = (lead.get("state") or {}).get("key") in BUSY
 
         for a in agents.values():
             if a["state"]["key"] == "stuck" and not limited:
@@ -63,18 +66,6 @@ def compute(sessions, now, mem):
         root = w["root"]
         rows = {r["n"]: dict(r, group=g) for g, rs in w["groups"].items() for r in rs}
 
-        def related_live(aid):
-            """Someone this agent works with (spawned, messaged, was messaged by in 30 min) is still at work."""
-            for m in s.get("messages") or []:
-                if now - m["t"] > 1800 or aid not in (m["from"], m["to"]):
-                    continue
-                other = m["to"] if m["from"] == aid else m["from"]
-                if other in agents and agents[other]["state"]["key"] in LIVE:
-                    return True
-            me = agents.get(aid) or {}
-            return any((x["parent"] == aid or (me.get("task") is not None and x is not me and x.get("helps") == me["task"]))
-                       and x["state"]["key"] in LIVE for x in agents.values())
-
         for r in rows.values():
             if r["kind"] == "asks":
                 add(f"asks:{root}:{r['n']}", "red", f"{r['n']} needs you", r["title"], s, r.get("agent"))
@@ -88,11 +79,12 @@ def compute(sessions, now, mem):
             a = agents.get(r.get("agent"))
             if r["kind"] == "active" and a:
                 st = a["state"]
-                orphan = st["key"] == "dead" or (st["key"] == "ended" and now - st["since"] >= 600
-                                                 and not related_live(a["id"]) and not lead_busy)
-                if orphan:
+                # only a dead agent: one waiting for a message (its turn ended, the lead or its advisor wakes it) is the
+                # normal way a task waits, not an alert (the user's call)
+                if st["key"] == "dead":
                     add(f"orphan-row:{root}:{r['n']}", "red", f"Row {r['n']} says in progress, but {a['label']} is {st['label']}",
-                        f"{a['label']} last wrote {_ago(now - st['since'])} ago, and nobody it works with is busy.", s, a["id"])
+                        f"{a['label']} last wrote {_ago(now - st['since'])} ago; its process is gone."
+                        + (f" Its row says: \"{_cut(r.get('state') or '', 140)}\"" if r.get("state") else ""), s, a["id"])
 
         # a State write that failed (the auto-mode refusal case); heads with $(…) cannot be compared, so only errors
         for a in agents.values():
