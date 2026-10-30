@@ -78,8 +78,18 @@ svg use { pointer-events: none; }
 .seg button + button { border-left: 1px solid var(--line2); }
 .seg button.on { background: color-mix(in srgb, var(--cyan) 18%, transparent); color: var(--text-strong); }
 .seg.small button { padding: 0 6px; font-size: 11px; }
-.chk { display: flex; gap: 8px; align-items: center; margin: 7px 0; cursor: pointer; }
-.chk small { color: var(--muted); }
+/* an on/off setting: its words on the left (a hint under them), a switch on the right, as the rows above */
+.chk { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin: 9px 0; cursor: pointer; }
+.chk .cl { min-width: 0; }
+.chk small { display: block; color: var(--muted); font-size: 11px; margin-top: 1px; }
+.chk input { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 30px; height: 17px; margin: 0;
+  border-radius: 9px; background: var(--line2); cursor: pointer; }
+.chk input::before { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); }
+.chk input:checked { background: var(--cyan); }
+.chk input:checked::before { transform: translateX(13px); }
+.chk input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+@media (prefers-reduced-motion: no-preference) { .chk input, .chk input::before { transition: background .15s, transform .15s; } }
 .pop-sep { border-top: 1px solid var(--line); margin: 10px 0 8px; }
 .linkbtn { color: var(--cyan); }
 .pop-foot { color: var(--muted); font-size: 11px; margin-top: 8px; }
