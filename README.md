@@ -104,7 +104,7 @@ What you see:
   the agents waiting for one. The row whose agent holds a window is red, as on the graph: a red edge and number, and
   its agent line red with the lock (`agent HP 175: holds the window · 4m`, or `holds win1 · 4m` with two slots); an
   agent waiting for the window has its line in violet with the window.
-- **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state file that says stopped while the worker works,
+- **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
   severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,
   are dismissed one at a time, or all together with **Dismiss all**, which shows when there is a red one); **Undo**

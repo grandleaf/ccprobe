@@ -89,14 +89,9 @@ def compute(sessions, now, mem):
                         f"{a['label']} tried to set it to \"{q['head'][:40]}…\" but the write failed; the queue shows \"{rows[q['n']]['status']}\".",
                         s, a["id"])
 
-        # the HP state file against the worker (a deliberate stop is not an alert: wts shows ■ stopped). Against the
-        # queue it is not checked: the user found that one noise (the queue itself shows what runs)
-        worker = next((a for a in agents.values() if a["role"] == "worker"), None)
+        # the HP state file is not checked against the queue or the worker: the user found both noise (the queue and
+        # the Events tab show what runs)
         sf = (w.get("state_file") or "").strip()
-        working = bool(sf.startswith(("stopped", "paused")) and worker and worker["state"]["key"] in BUSY)
-        if mem.held_for(f"hp-stop:{s['id']}:{root}", working, now) >= 300:
-            add(f"hp-state-worker:{root}", "amber", "HP state file disagrees with the worker",
-                f"state says \"{sf}\", but the worker has been working for 5 min: {worker['state']['label']}.", s, worker["id"])
 
         win = w.get("window") or {}
         slots = win.get("slots") or []

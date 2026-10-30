@@ -218,7 +218,7 @@ detail}` plus, when they apply, `agent` (selectable), `n` (task), `group`, `note
 | task | queued (its title, runs on); started / resumed; paused; on hold; needs you; done; reviewed by the lead; accepted (gone from the table after done) or left the queue; moved HP → LP; queued again; HP worker paused / stopped / running again; MP/LP set to running / desk-only / paused | the row's title; the State without its head; how long it took (from its start, or its agent's); notes link |
 | agent | started (by the lead) or spawned by another agent; finished; stopped by you; died; looks stuck; the lead waiting for you; usage limit reached / lifted; the lead's context compacted | what it was started for; its model; its last words when it finishes; how long it ran |
 | window | a hold, one event per hold (`HP 213 holds win1`, then `held win1 08:30–08:34 · 4m`, updated in place); a row waiting for a window and getting one; a window reserved for / freed from your shows; the app opened / closed | holder, its lock text, how long |
-| alert | raised, then marked resolved in place: the alerts no other event tells (stale lock, orphaned or stale row, HP state against the worker, mode breach, window free while agents wait, caffeinate off) | the alert's detail; how long it was open |
+| alert | raised, then marked resolved in place: the alerts no other event tells (stale lock, orphaned or stale row, mode breach, window free while agents wait, caffeinate off) | the alert's detail; how long it was open |
 | session | the session started / ended; caffeinate on / off | |
 
 Kept in memory only (ccprobe writes nothing): 24 h, at most 600 per session and per project queue. After a restart,
@@ -228,7 +228,7 @@ last 60 ids with kind and severity) for the tab's unread count; the list itself 
 tab is open, fetched again when `rev` changes. The tab: filter chips per kind (Windows off at first: it is the
 busiest), days as headers, newest first, a cyan edge on what came since you last had it open, the agent's name a link
 to it on the graph, a notes link for a task with notes. Task done is no longer an info alert, and the HP state file
-is no longer checked against the queue: the Events tab and the queue tell those.
+is no longer checked against the queue or the worker: the Events tab and the queue tell those.
 
 ## 8. Server (`server.py`) and security
 

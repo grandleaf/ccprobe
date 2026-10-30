@@ -21,7 +21,7 @@ KEEP_N = 600                # at most this many per session and per queue
 RE_HHMM = re.compile(r"\b(\d{1,2}):(\d{2})\b")
 # the alerts that are events of their own; the rest are already told by a task or agent event (needs you, usage
 # limit, stuck, done)
-ALERT_KINDS = ("orphan-row", "stale-row", "stale-lock", "hp-state-worker", "mode-breach", "waiting-free", "caffeinate")
+ALERT_KINDS = ("orphan-row", "stale-row", "stale-lock", "mode-breach", "waiting-free", "caffeinate")
 PRIVATE = ("who", "by", "scope")    # kept on an open event to close it later; not for the page
 MODE_WORDS = {"running": "running", "desk": "desk-only", "paused": "paused"}
 
