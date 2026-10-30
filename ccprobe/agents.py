@@ -496,7 +496,7 @@ def pending_state(tr, now, lock_names, is_holder):
     if not p:
         return None
     age = now - p["t"]
-    lock_loop = p["name"] == "Bash" and any(n in p["cmd"] for n in lock_names) and RE_POLL.search(p["cmd"]) and "mkdir" in p["cmd"]
+    lock_loop = p["name"] == "Bash" and any(n in p["cmd"] for n in lock_names or ()) and RE_POLL.search(p["cmd"]) and "mkdir" in p["cmd"]
     if lock_loop and not is_holder:
         return {"key": "waiting_window", "label": "waiting for the window", "since": p["t"], "detail": p["arg"], "via": "loop"}
     if p["name"] == "Bash" and p.get("timeout") and age > p["timeout"] + 120:
@@ -555,7 +555,7 @@ def lead_state(tr, session, now):
         return {"key": "idle", "label": "idle", "since": (session.get("statusUpdatedAt") or 0) / 1000, "detail": f"{p['name']} was cut short"}
     if p:
         age = now - p["t"]
-        st = pending_state(tr, now, None, False)
+        st = pending_state(tr, now, (), False)
         if age > 60:
             st["detail"] = (st.get("detail") or "") + " (or waiting for your approval?)"
         return st

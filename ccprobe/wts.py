@@ -261,7 +261,9 @@ def read(root):
                     since = os.path.getmtime(path)
                 except OSError:
                     pass
-            slots.append({"name": os.path.basename(path), "held": bool(who), "who": who, "since": since, "holder": None})
+            # reserved: kept for the user's shows (a file <lock>.reserved): no worker takes it, held or not
+            slots.append({"name": os.path.basename(path), "held": bool(who), "who": who, "since": since, "holder": None,
+                          "reserved": os.path.isfile(path + ".reserved")})
         res = {
             "root": root, "error": None, "app": q.cfg.get("app_process") or None,
             "app_running": app_running(q.cfg.get("app_process")),
@@ -269,8 +271,9 @@ def read(root):
             "modes": {"MP": q.group_mode("MP"), "LP": q.group_mode("LP")},
             "caffeinate": caffeinated(m),
             "lock_paths": lock_paths,
-            # held: any slot is; full: every slot is (an agent that needs one waits)
-            "window": {"held": any(x["held"] for x in slots), "full": all(x["held"] for x in slots), "slots": slots, "waiters": []},
+            # held: any slot is; full: none is free for a worker (each held or reserved), so an agent that needs one waits
+            "window": {"held": any(x["held"] for x in slots), "full": all(x["held"] or x["reserved"] for x in slots),
+                       "slots": slots, "waiters": []},
             "groups": groups,
             "worker_model": q.cfg.get("worker_model"),
         }

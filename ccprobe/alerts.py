@@ -14,8 +14,6 @@ class Memory:
     def __init__(self):
         self.first_seen = {}       # alert key -> first tick it was present
         self.cond_since = {}       # condition key -> first tick it held (for grace periods)
-        self.row_kind = {}         # (root, n) -> last kind seen
-        self.done_at = {}          # (root, n) -> time it turned done
 
     def held_for(self, key, cond, now):
         """How long `cond` has held without a break (0 when it does not hold)."""
@@ -69,12 +67,7 @@ def compute(sessions, now, mem):
         for r in rows.values():
             if r["kind"] == "asks":
                 add(f"asks:{root}:{r['n']}", "red", f"{r['n']} needs you", r["title"], s, r.get("agent"))
-            k = (root, r["n"])
-            if mem.row_kind.get(k) not in (None, "done") and r["kind"] == "done":
-                mem.done_at[k] = now
-            mem.row_kind[k] = r["kind"]
-            if k in mem.done_at and now - mem.done_at[k] <= 1800 and r["kind"] == "done":
-                add(f"done:{root}:{r['n']}", "info", f"{r['n']} done", f"{r['title']} · {r['status']}", s, r.get("agent"))
+            # a task done is not an alert: the Events tab tells it
 
             a = agents.get(r.get("agent"))
             if r["kind"] == "active" and a:
@@ -96,19 +89,10 @@ def compute(sessions, now, mem):
                         f"{a['label']} tried to set it to \"{q['head'][:40]}…\" but the write failed; the queue shows \"{rows[q['n']]['status']}\".",
                         s, a["id"])
 
-        # the HP state file against the worker (a deliberate stop is not an alert: wts shows ■ stopped)
+        # the HP state file against the worker (a deliberate stop is not an alert: wts shows ■ stopped). Against the
+        # queue it is not checked: the user found that one noise (the queue itself shows what runs)
         worker = next((a for a in agents.values() if a["role"] == "worker"), None)
         sf = (w.get("state_file") or "").strip()
-        m = re.match(r"running((?:\s+\d+)+)", sf)    # "running 128 171": more than one HP task may run
-        if m:
-            off = [(n, rows.get(n)) for n in map(int, m.group(1).split())]
-            off = [(n, r) for n, r in off if not r or r["kind"] not in ("active", "done", "closed")]
-            if mem.held_for(f"hp-run:{root}", bool(off), now) >= 120:
-                n, r = off[0]
-                add(f"hp-state:{root}", "amber", "HP state file disagrees with the queue",
-                    f"state says \"{sf}\", but row {n} is {r['status'] if r else 'not in the queue'}.", s, worker and worker["id"])
-        else:
-            mem.held_for(f"hp-run:{root}", False, now)
         working = bool(sf.startswith(("stopped", "paused")) and worker and worker["state"]["key"] in BUSY)
         if mem.held_for(f"hp-stop:{s['id']}:{root}", working, now) >= 300:
             add(f"hp-state-worker:{root}", "amber", "HP state file disagrees with the worker",
@@ -124,7 +108,7 @@ def compute(sessions, now, mem):
             h = agents.get(holder)
             holder_bad = holder != "lead" and (h is None or h["state"]["key"] in ("ended", "parked", "dead", "stuck"))
             if held_for >= 900 and holder_bad and not w.get("app_running"):
-                add(f"stale-lock:{root}:{sl['name']}", "red", "Stale window lock?" if len(slots) < 2 else f"Stale lock on window {i + 1}?",
+                add(f"stale-lock:{root}:{sl['name']}", "red", "Stale window lock?" if len(slots) < 2 else f"Stale lock on win{i}?",
                     f"{sl['name']} held by \"{sl.get('who')}\" for {_ago(held_for)}; " +
                     (f"{h['label']} is {h['state']['label']}" if h else "no live agent matches it") +
                     (f", and {w.get('app')} is not running." if w.get("app") else "."), s, holder if h else None)

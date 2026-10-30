@@ -8,6 +8,7 @@ import threading
 import time
 
 from . import alerts as alerts_mod
+from . import feed as feed_mod
 from . import sessions as sessions_mod
 from . import tokens as tokens_mod
 from . import wts as wts_mod
@@ -54,6 +55,7 @@ class Collector:
         self.changed = threading.Event()
         self.last_error = None
         self.books = tokens_mod.Books(os.path.join(sessions_mod.CLAUDE, "projects"))   # token counts, on their own thread
+        self.feed = feed_mod.Feed()   # the Events tab: what changed from tick to tick
 
     # --- the tick -------------------------------------------------------------------------------------------
     def tick(self):
@@ -90,6 +92,10 @@ class Collector:
         rank = lambda x: -sum(1 for a in [x.get("lead") or {}] + (x.get("agents") or []) if (a.get("state") or {}).get("key") in LIVE)
         out.sort(key=lambda x: (not x.get("alive"), rank(x), x.get("project") or ""))
         alerts = alerts_mod.compute(out, now, self.mem)
+        try:
+            self.feed.observe(out, alerts, now)   # also gives each session its `feed` summary
+        except Exception as e:                  # the events must never stop the dashboard
+            self.last_error = f"feed: {type(e).__name__}: {e}"
         unknown, stats = {}, {"decode_errors": 0, "big_lines": 0, "skipped": 0}
         for tr in self.trs.values():
             for k, v in tr.unknown.items():
@@ -110,6 +116,12 @@ class Collector:
             self.model = model
             self.digest = digest
         self._gc()
+
+    def feed_for(self, sid):
+        """The Events tab's list for one session, newest first (None when the session is not in view)."""
+        with self.lock:
+            s = next((x for x in (self.model or {}).get("sessions", []) if x["id"] == sid), None)
+        return {"items": self.feed.for_session(s)} if s else None
 
     def agent_detail(self, sid, aid):
         """The agent panel's detail for one agent (None when it is not in view)."""
@@ -656,12 +668,13 @@ def _is_worker_name(name):
 
 
 def _holds(mine, k):
-    """How an agent's state names the window slots it holds: "the window" when there is one."""
+    """How an agent's state names the window slots it holds: "the window" when there is one, else win0, win1… (0-based,
+    as the worker skill names them)."""
     if k < 2:
         return "holds the window"
     if len(mine) == k:
         return "holds both windows" if k == 2 else "holds every window"
-    return "holds window " + " and ".join(str(i + 1) for i in mine)
+    return "holds " + " and ".join(f"win{i}" for i in mine)
 
 
 def _holder(who, main, trs, task_of, by_name, worker_id=None):

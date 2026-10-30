@@ -17,13 +17,13 @@ What you see:
   waiting on Blender, ⚙ magenta on another job (a build, tests), ↻ lime polling, ⏸ yellow paused by hand, four
   violet squares waiting for the window, ⧗ violet on hold, a red clock stuck, ✕ red dead, ✓ blue finished, and the
   lead's rose ? waiting for you. A busy agent has none, only its spinning arc. The status line under the hex uses the
-  same icon and colour. Bottom left, a green page: the task has notes; bottom right, a red lock: it holds the window. The lead sits on top. Below it is a grid of rows at fixed heights, five places per row; every agent keeps
-  its place. A new agent goes to the free place nearest the agents it works with (a helper under the agent it serves;
+  same icon and colour. Bottom left, a green page: the task has notes; bottom right, a red lock: it holds the window. The lead sits on top. Below it is a grid of rows at fixed heights, 5, 7 or 9 places per row (whichever draws the graph biggest in its
+  area: a wide window puts more agents side by side); every agent keeps its place. A new agent goes to the free place nearest the agents it works with (a helper under the agent it serves;
   the lead counts as the middle of the top row), chosen so it adds the fewest crossing lines and keeps its row even about
   the lead. A blocked agent stays where it is with a dashed outline. A fresh HP
   worker takes the previous worker's place, and a reused name takes its predecessor's. When an agent leaves, its place
   stays free for 2 minutes (5 for the HP worker's or a reused name's place, so the successor lands there). Once no
-  agent has come or gone for 2 minutes, the rows close up around places still held and slide back under the lead (an
+  agent has come or gone for 2 minutes, the rows close up around places still held and slide back under the lead; agents left in lower rows while the rows above have room move up into them, in order (an
   even row splits about it: two agents sit one each side, the lead between them; a helper moves with its agent), a helper left away from the agent
   it serves goes back under it (when a place there is free), and neighbours that would remove 2+ crossings are swapped
   at most every 5 minutes. **Tidy** (top right, shown when there is something to
@@ -39,16 +39,19 @@ What you see:
   sender to receiver. Timeline arcs end in an arrowhead on the receiver's lane.
 - **The shelf** at the bottom holds the HP queue and a card per window slot, always in the same place. A project
   can share one window (`lock` in its `config.json`) or several side by side (`locks`, a list: two game windows read
-  "Window 1" and "Window 2"); each card is red while held, with its holder and for how long, else green and "free".
+  `win0` and `win1`, counted from 0 as the worker skill names them); each card is in its slot's colour while held, with
+  its holder and for how long, slate while it is reserved for your shows (a `<lock>.reserved` file; no worker takes
+  it), else green and "free".
   The agent holding a window has a red lock mark, and a red line runs from it to that window's card; with several
-  windows each has its own colour throughout (its holder's lock, line, card, header segment and WTS lines): window 1
-  red, window 2 orange, window 3 gold. With several
+  windows each has its own colour throughout (its holder's lock, line, card, header segment and WTS lines): win0
+  red, win1 orange, win2 gold. With several
   slots the header's window chip has a segment per slot, and an agent waiting reads "waiting for a window" (any
   slot will do). An older agent whose name a newer one now
   holds reads "lp74 (earlier)" and folds into "N finished · show" (top right) once its turn ends; so do earlier HP agents.
 - **Hiding agents.** "Clear N done" (top right) hides the finished and dead agents drawn on the
   graph (not the ones already folded into "N finished · show"); idle and parked agents are not done, so it leaves them.
-  "N hidden · show" (top right, next to Fit) brings them all back. A hidden agent comes back by itself as soon as
+  ⚙ "Auto-hide done agents" does it by itself, a minute after each one finishes or dies (never the one you have
+  selected; one you bring back stays). "N hidden · show" (top right, next to Fit) brings them all back. A hidden agent comes back by itself as soon as
   it writes anything new, and opening it from an alert or a message link shows it again. Hiding happens only in this
   browser and only on the page; it never stops an agent.
 - **Unseen sessions:** a tmux session that no terminal shows (its window was closed) is greyed out in the sessions
@@ -79,6 +82,14 @@ What you see:
   lead's briefs as tabs. Esc closes it. On the graph, a green page badge says its task has notes:
   click the mark, double-click the agent, or press Enter on the selected one to read them; a click elsewhere on the
   agent still just selects.
+- **Events tab** (key `3` when there is a queue). What happened, newest first, grouped by day, to catch up after
+  being away: tasks queued, started, paused, on hold, needing you, done (how long, a notes link), reviewed, accepted;
+  agents started or spawned (what for, the model), finished (their last words, how long they ran), stopped, dead,
+  stuck; the lead waiting for you, usage limits, its context compacted; each window hold (who, from when to when);
+  alerts raised and resolved; caffeinate on and off. Chips filter by kind (Windows, the busiest, starts off). The tab
+  counts what came since you last opened it (red when one needs you); those have a cyan edge. An agent's name selects
+  it on the graph. Kept by the server in memory for 24 h; after a restart what the queue and the transcripts date is
+  filled back in.
 - **WTS tab** (only for a session with a worker queue). This is the same table as `queue.py wts`; the server imports it read-only. A group with nothing that can run (no rows, only done rows, or only paused ones) reads 🌙 idle, not running, in its heading and in the header chips. Next to each bound row is what
   its agent is actually doing, and amber marks a mismatch. A row in progress reads as its ▶, its start and how long
   so far (`▶ 17:24 · 3h 41m`); paused and asking rows read as their icon too, parked keeps its word, and all say for
@@ -91,9 +102,9 @@ What you see:
   A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
   Its top has a line per window slot (held by whom, since when, which agent), and with several slots a line naming
   the agents waiting for one. The row whose agent holds a window is red, as on the graph: a red edge and number, and
-  its agent line red with the lock (`agent HP 175: holds the window · 4m`, or `holds window 2 · 4m` with two slots); an
+  its agent line red with the lock (`agent HP 175: holds the window · 4m`, or `holds win1 · 4m` with two slots); an
   agent waiting for the window has its line in violet with the window.
-- **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
+- **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state file that says stopped while the worker works,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
   severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,
   are dismissed one at a time, or all together with **Dismiss all**, which shows when there is a red one); **Undo**
@@ -111,8 +122,8 @@ What you see:
   are no longer running); click it for each session's share. Counting reads each transcript once, on its own thread
   (several GB take a few seconds), then only what it gains.
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
-  compact nodes, notifications.
-- **Keys:** `1` `2` `3` `4` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · double-click an agent with a page mark: its notes · `Esc` closes the notes, else deselects · wheel zooms and
+  auto-hide done agents, compact nodes, notifications.
+- **Keys:** `1`…`5` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · double-click an agent with a page mark: its notes · `Esc` closes the notes, else deselects · wheel zooms and
   dragging pans.
 - **Panel widths:** drag the splitter on either side of the graph (or focus one and use ← →) to resize the sessions list
   or the side panel, and double-click a splitter to reset it. Both widths are remembered in this browser, and the graph

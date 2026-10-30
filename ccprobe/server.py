@@ -109,6 +109,9 @@ def make_handler(collector, token, port, use_token=True, host=None):
             if path == "/api/agent":                # one agent's panel detail (asked for only while it is on screen)
                 d = collector.agent_detail(q.get("s", [""])[0], q.get("a", [""])[0])
                 return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
+            if path == "/api/feed":                 # the Events tab's list (asked for only while the tab is open)
+                d = collector.feed_for(q.get("s", [""])[0])
+                return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
             if path in ("/api/notes", "/api/notes-pic"):   # a task's notes, by session and task number (never a path)
                 sid, n, i = q.get("s", [""])[0], q.get("n", [""])[0], q.get("i", [""])[0]
                 if not re.fullmatch(r"\d{1,4}", n) or (path == "/api/notes-pic" and not re.fullmatch(r"\d{1,3}", i)):

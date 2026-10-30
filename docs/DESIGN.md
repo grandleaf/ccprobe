@@ -199,15 +199,36 @@ session, agent?}`. `since` = the first tick its key was seen; it is kept in memo
 | red | `stale-lock:<root>` | the lock has been held ≥ 15 min and the holder is `ended`/`dead`/`stuck`/unknown |
 | red | `orphan-row:<n>` | the row is `active` and its bound agent is `dead` (one waiting for a message is how a task normally waits: no alert, and no "does not match" mark in the WTS tab) |
 | red | `stale-row:<n>` | an agent's `queue.py state N --text "<head>"` was an error, or ≥ 2 min later the row's state does not start with that head |
-| amber | `hp-state:<root>` | `state` = `running N` (or `running N M`: each is checked) but a row named is not active/done; or `stopped`/`paused` while the worker is `running` on an HP row; or `stopped` with open HP rows and the worker `ended` |
 | amber | `mode-breach:<root>:<grp>` | MP or LP is `desk`/`paused`, but an agent of that group holds the lock |
 | amber | `waiting-free:<agent>` | a waiter exists and the lock has been free ≥ 2 min |
 | amber | `stuck:<agent>` | state `stuck` |
 | amber | `caffeinate:<root>` | caffeinate is off while any row is open or any agent is `running`/`thinking` |
-| info | `done:<n>` | a row turned `done` in the last 30 min |
 
 Dismiss and snooze happen in the page (localStorage, keyed by `key + title`, so a changed condition shows again).
 Browser notifications fire once per new red key (§9.8).
+
+## 7b. Events (`feed.py`)
+
+Alerts say what is wrong now and go when it is fixed; the Events tab says what happened, so you can catch up after
+being away. Each tick is compared with the last, and each change becomes an event: `{id, t, cat, sev, icon, title,
+detail}` plus, when they apply, `agent` (selectable), `n` (task), `group`, `notes`, `dur`, `end`, `model`.
+
+| cat | Events | Extra |
+|---|---|---|
+| task | queued (its title, runs on); started / resumed; paused; on hold; needs you; done; reviewed by the lead; accepted (gone from the table after done) or left the queue; moved HP → LP; queued again; HP worker paused / stopped / running again; MP/LP set to running / desk-only / paused | the row's title; the State without its head; how long it took (from its start, or its agent's); notes link |
+| agent | started (by the lead) or spawned by another agent; finished; stopped by you; died; looks stuck; the lead waiting for you; usage limit reached / lifted; the lead's context compacted | what it was started for; its model; its last words when it finishes; how long it ran |
+| window | a hold, one event per hold (`HP 213 holds win1`, then `held win1 08:30–08:34 · 4m`, updated in place); a row waiting for a window and getting one; a window reserved for / freed from your shows; the app opened / closed | holder, its lock text, how long |
+| alert | raised, then marked resolved in place: the alerts no other event tells (stale lock, orphaned or stale row, HP state against the worker, mode breach, window free while agents wait, caffeinate off) | the alert's detail; how long it was open |
+| session | the session started / ended; caffeinate on / off | |
+
+Kept in memory only (ccprobe writes nothing): 24 h, at most 600 per session and per project queue. After a restart,
+first sight puts back what the model dates: agents' starts and ends, rows done (their `done HH:MM`), windows held
+since their lock's time. A row merely present is not news. Per session, the model carries `feed: {rev, recent}` (the
+last 60 ids with kind and severity) for the tab's unread count; the list itself comes from `/api/feed?s=` while the
+tab is open, fetched again when `rev` changes. The tab: filter chips per kind (Windows off at first: it is the
+busiest), days as headers, newest first, a cyan edge on what came since you last had it open, the agent's name a link
+to it on the graph, a notes link for a task with notes. Task done is no longer an info alert, and the HP state file
+is no longer checked against the queue: the Events tab and the queue tell those.
 
 ## 8. Server (`server.py`) and security
 
@@ -466,7 +487,7 @@ Times are epoch seconds. The page does all formatting.
 | B1: a hand-back's result and mid-turn text | `agents.py`: only conversational entries move `last_kind`. A result for a call never seen pending is ignored. Text is an end only with `end_turn`. One time ladder, built from entry timestamps plus `api-request` lines, replaces file growth: thinking under 3 min, then "thinking · quiet Nm", then stuck? from 10 min. |
 | B2: `origin` entries | `_user` treats any `user` entry with `origin.kind` as a receipt, the same as `queued_command`. `bg_pending` is cleared from `<tool-use-id>` in either form. |
 | B3: the lead's state | `lead_state` comes from the transcript. `turn_duration`, `end_turn` or a hand-back means `waiting_user`; a pending tool means running ("…or waiting for your approval?" after 60 s); otherwise the ladder. The registry is used only for `shell`, dead and the no-entries fallback. |
-| M1: lock holder and waiters | The holder is the transcript whose Bash last wrote a literal `echo "…" > …/who` prefix that the current `who` starts with. Fallbacks: `lead…`, then a `meta.name` match on the first word, then `MP/LP/HP/task N` → the bound agent. A holder in its lock loop shows as "holds the window · Nm" and is never a waiter. Each window slot gets its own holder this way; with two slots the state says "holds window 2" or "holds both windows", and the stale-lock alert is per slot. |
+| M1: lock holder and waiters | The holder is the transcript whose Bash last wrote a literal `echo "…" > …/who` prefix that the current `who` starts with. Fallbacks: `lead…`, then a `meta.name` match on the first word, then `MP/LP/HP/task N` → the bound agent. A holder in its lock loop shows as "holds the window · Nm" and is never a waiter. Each window slot gets its own holder this way; with two slots the state says "holds win1" (0-based, as the worker skill names them) or "holds both windows"; a slot with a `<lock>.reserved` file is kept for the user's shows, and the stale-lock alert is per slot. |
 | M2: false alerts | Each rule is rewritten as the audit says (`alerts.py`). `orphan-row` checks related live agents and the lead. `stale-row` fires only on failed writes. `usage-limit` is a state, which also suppresses `stuck`. `waiting-free` counts only polling waiters in a running group. `caffeinate` fires only when work is running. `hp-state` drops the deliberate-stop clause and gets grace periods. `stale-lock` is not raised while the app runs. |
 | M3: `__pycache__` | `sys.dont_write_bytecode` during the import, `BaseException` caught, and the previous module kept on a failed reload. |
 | M4: CSP vs inline styles | No `style=` in markup. Colours come from `c-<colour>` classes setting `--c`, and sizes from SVG attributes or CSSOM. |
@@ -489,15 +510,19 @@ methods, kept small:
 - **Fewer lines (clutter):** the lead's spawn lines are drawn only for a new agent's first 2 minutes or for the
   selected agent. Messages fade after the first minute and go after 10. Selection dims every other line
   (focus + context).
-- **Layered drawing (Sugiyama-style):** the lead, then a grid of rows at fixed heights (five columns each), then
-  finished, then the shelf. Order within a row is chosen to cut crossings.
+- **Layered drawing (Sugiyama-style):** the lead, then a grid of rows at fixed heights, then finished, then the
+  shelf. Order within a row is chosen to cut crossings. The grid has 5, 7 or 9 columns per session: the count that
+  lets Fit draw the graph biggest in the graph area (Fit never zooms past 1:1; within 4%, the more columns), so a wide window
+  takes many agents side by side instead of stacking rows that shrink everything.
 - **Incremental, mental-map preserving (DynaDAG; yFiles incremental hints; ELK semi-interactive):** each agent keeps its
   slot (remembered per session, by line of succession: the HP worker, or the agent name). A newcomer takes the free
   slot with the least cost: distance to its neighbours, plus 5 per row away, plus 2 per crossing it adds. A freed
   slot stays reserved for 2 minutes (5 for a slot with an heir: the HP worker's, a reused name's). Only after 2 quiet
   minutes (no agent came or went), or on Tidy: gaps close (stepping around reserved slots), a helper away from the
   agent it serves goes back under it if a slot there is free (tried at most once a minute), and swaps that remove 2+
-  crossings happen (at most every 5 minutes).
+  crossings happen (at most every 5 minutes). At those moments too, when the column count no longer suits (the
+  window resized, agents came or went) or the agents spread over more rows than they fill, they flow in reading order
+  into full rows centred under the lead, and the helpers go back under them.
 - **Balance (2026-10-25):** a row used to keep to one side: a newcomer whose only line was to the lead went to the
   row's end (the worker far left, others far right), since the lead was not counted as a neighbour, and closing gaps
   never changed sides. Now the lead counts as the middle of the top row, a slot's cost adds .3 per column the row's

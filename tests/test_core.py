@@ -116,6 +116,10 @@ class StateTests(Base):
         tr.update()
         self.assertEqual(agent_state(tr, self.now)["key"], "thinking")
 
+    def test_lead_running_bash(self):   # lead_state reads a pending Bash call with no lock names (a whole session failed)
+        self.w.add(tool_use(self.now - 70, "b1", "Bash", {"command": "make"}))
+        self.assertEqual(lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now)["key"], "running")
+
     def test_quiet_ladder(self):
         self.w.add(result(self.now - 2000, "x"), tool_use(self.now - 900, "b1", "Read", {"file_path": "a"}), result(self.now - 899, "b1"))
         self.assertEqual(agent_state(self.tr(), self.now)["key"], "stuck")
@@ -207,7 +211,7 @@ class StateTests(Base):
 class HolderTests(Base):
     def test_holds_names_the_slot(self):
         self.assertEqual(_holds([0], 1), "holds the window")
-        self.assertEqual(_holds([1], 2), "holds window 2")
+        self.assertEqual(_holds([1], 2), "holds win1")
         self.assertEqual(_holds([0, 1], 2), "holds both windows")
 
     def test_holder_by_who_write_then_name(self):
@@ -284,7 +288,7 @@ class AlertTests(unittest.TestCase):
         s = session([agent("w", "running", now - 5, role="worker"), agent("adv", "dead", now - 1200)], [],
                     window={"held": True, "full": True, "slots": slots, "waiters": []})
         got = [a for a in alerts.compute([s], now, alerts.Memory()) if a["key"].startswith("stale-lock")]
-        self.assertEqual([(a["key"], a["title"]) for a in got], [("stale-lock:/r:app2.lock", "Stale lock on window 2?")])
+        self.assertEqual([(a["key"], a["title"]) for a in got], [("stale-lock:/r:app2.lock", "Stale lock on win1?")])
         slots[1] = {"name": "app2.lock", "held": False, "who": None, "since": None, "holder": None}
         self.assertNotIn("stale-lock", self.keys(s, now))
 

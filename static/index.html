@@ -61,6 +61,7 @@
     <div class="set"><span>Motion</span><div class="seg" data-set="motion"><button data-v="full">Full</button><button data-v="reduced">Reduced</button><button data-v="off">Off</button></div></div>
     <div class="set"><span>Timeline</span><div class="seg" data-set="span"><button data-v="900">15m</button><button data-v="2700">45m</button><button data-v="7200">2h</button><button data-v="21600">6h</button></div></div>
     <label class="chk"><input type="checkbox" data-set="showFinished"> Show finished agents</label>
+    <label class="chk"><input type="checkbox" data-set="autoHide"> Auto-hide done agents <small>(finished or dead, after a minute)</small></label>
     <label class="chk"><input type="checkbox" data-set="allEdges"> Show all relationships <small>(every spawn and old message line)</small></label>
     <label class="chk"><input type="checkbox" data-set="compact"> Compact nodes</label>
     <label class="chk"><input type="checkbox" data-set="notify"> Desktop notifications <small>(red alerts, needs you)</small></label>
@@ -112,7 +113,7 @@
       <div><i class="lg lg-task"></i>task in flight, toward the agent doing it</div>
       <div><i class="lg lg-msg"></i>messages (hot when recent)</div>
       <div><i class="lg lg-spawn"></i>spawned by (a new agent's first 2 min, or the selected one)</div>
-      <div><i class="lg lg-lock"></i>holds a window (its card is on the bottom shelf; with several windows: 1 red, 2 orange, 3 gold)</div>
+      <div><i class="lg lg-lock"></i>holds a window (its card is on the bottom shelf; with several windows: win0 red, win1 orange, win2 gold)</div>
       <div><i class="lg lg-pulse"></i>message in transit (a glowing spot)</div>
       <div><svg class="lg-notes lg-green"><use href="#i-doc"/></svg>bottom-left badge: the task has notes: click the mark (or double-click the agent) to read them</div>
       <div>in the hex: who it is (HP 184e: task 184, round e · adv 184d · Lead)</div>
@@ -126,6 +127,7 @@
     <nav class="tabs" role="tablist">
       <button data-tab="wts" role="tab">WTS</button>
       <button data-tab="agent" role="tab">Agent</button>
+      <button data-tab="events" role="tab">Events<span class="tcount" id="evCount" hidden></span></button>
       <button data-tab="alerts" role="tab">Alerts<span class="tcount" id="tabCount" hidden></span></button>
       <button data-tab="tokens" role="tab">Tokens</button>
     </nav>

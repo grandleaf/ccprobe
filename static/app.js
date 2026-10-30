@@ -43,7 +43,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private window: settings last for this visit */ } },
 };
 const reducedOS = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, compact: false, notify: false, railSort: 'attn', hideUnseen: false, allEdges: false },
+const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, autoHide: false, compact: false, notify: false, railSort: 'attn', hideUnseen: false, allEdges: false },
   store.get('ccprobe.settings', {}));
 const saveSettings = () => store.set('ccprobe.settings', settings);
 let dismissed = store.get('ccprobe.dismissed', {});    // alert key|sig -> until (epoch s; 1e12 dismissed, 2e12 cleared)
@@ -152,8 +152,12 @@ setInterval(updateConnPill, 1000);
 function onModel(m) {
   S.model = m;
   pruneDismissed(m);
-  const ss = m.sessions || [];
-  if (!ss.find(s => s.id === S.sid)) {
+  const ss = m.sessions = m.sessions || [];
+  const here = ss.find(s => s.id === S.sid);
+  if (here) S.lastSess = { s: here, at: Date.now() };
+  // missing from one refresh only (its files mid-rewrite): keep the last copy a moment rather than jump to another session
+  else if (S.lastSess?.s.id === S.sid && Date.now() - S.lastSess.at < 15000) ss.push(S.lastSess.s);
+  else {
     const pick = ss.find(s => s.wts && s.status === 'busy') || ss.find(s => s.status === 'busy') || ss[0];
     S.sid = pick ? pick.id : null;
     S.sel = 'lead'; S.userPanned = false;
@@ -201,12 +205,13 @@ function renderHeader(m, s) {
   let h = '';
   if (w) {
     const win = w.window || {}, slots = winSlots(w), one = slots[0] || {};
-    if (slots.length > 1)   // one segment per slot, each red (held) or green (free); a red edge when none is free
-      h += `<span class="chip win slots${win.full ? ' held' : ''}" data-tip="${esc(slots.map((x, i) => `${slotName(w, i)} (${x.name}): ${x.held ? 'held by ' + x.who : 'free'}`).join('\n'))}">`
-        + slots.map((x, i) => `<span class="slot c-${x.held ? slotCol(i) : 'green'}">${icon(x.held ? 'i-lock' : 'i-unlock')}<span>${i + 1} ${x.held
-          ? esc(briefWho(x.who)) + ' · ' + dur(m.now - (x.since || m.now)) : 'free'}</span></span>`).join('') + '</span>';
+    if (slots.length > 1)   // one segment per slot in its colour (held), slate (reserved for your shows) or green (free); a red edge when none is free
+      h += `<span class="chip win slots${win.full ? ' held' : ''}" data-tip="${esc(slots.map((x, i) => `${slotName(w, i)} (${x.name}): ${x.held ? 'held by ' + x.who : 'free'}${x.reserved ? ' · reserved for your shows' : ''}`).join('\n'))}">`
+        + slots.map((x, i) => `<span class="slot c-${slotLook(x, i)[0]}">${icon(slotLook(x, i)[1])}<span>${slotName(w, i)}${x.reserved ? ' reserved' : ''}${x.held
+          ? ': ' + esc(briefWho(x.who)) + ' · ' + dur(m.now - (x.since || m.now)) : x.reserved ? '' : ' free'}</span></span>`).join('') + '</span>';
     else h += one.held
       ? `<span class="chip win held c-red" data-tip="${esc('Window held by ' + one.who)}">${icon('i-lock')}<span>Window: ${esc(shortWho(one.who))} · ${dur(m.now - (one.since || m.now))}</span></span>`
+      : one.reserved ? `<span class="chip win held c-slate" data-tip="Kept free for your shows: no worker takes it">${icon('i-lock')}<span>Window reserved</span></span>`
       : `<span class="chip win c-green">${icon('i-unlock')}<span>Window free</span></span>`;
     for (const g of ['HP', 'MP', 'LP']) {
       const { text, tip } = groupHead(w, g), [i, c] = modeLook(text);
@@ -227,6 +232,10 @@ function renderHeader(m, s) {
   for (const [id, cls, list] of [['alertCount', 'count', live], ['tabCount', 'tcount', mine]]) {
     const e = $(id), k = list.length; e.hidden = !k; e.textContent = k; e.className = cls + (list.some(a => a.sev === 'red') ? ' red' : '');
   }
+  // Events: what came since you last had the tab open (the kinds you show); red when one needs you or went wrong
+  const un = S.tab === 'events' || !s ? [] : feedUnread(s), ec = $('evCount');
+  ec.hidden = !un.length; ec.textContent = un.length > 99 ? '99+' : un.length;
+  ec.className = 'tcount ' + (un.some(x => x[2] === 'you' || x[2] === 'bad') ? 'red' : 'quiet');
   document.title = (n ? `(${n}) ` : '') + 'ccprobe';
 }
 // today's tokens per session (the chip's popover); clicking one opens its Tokens tab
@@ -255,13 +264,15 @@ const briefWho = who => shortWho(who).replace(/\s+pid=\d+$/, '').replace(/\s+\d{
 const winSlots = w => w?.window?.slots || [];
 const heldBy = (w, id) => winSlots(w).flatMap((x, i) => x.held && x.holder === id ? [i] : []);
 const heldSince = (w, idx) => Math.min(...idx.map(i => winSlots(w)[i].since || Infinity));
-const slotName = (w, i) => winSlots(w).length > 1 ? `Window ${i + 1}` : 'Window';
+const slotName = (w, i) => winSlots(w).length > 1 ? `win${i}` : 'Window';   // 0-based, as the worker skill names them
 const SLOTCOL = ['red', 'win2', 'win3'];   // a held slot's colour: red, orange, gold (then round again)
 const slotCol = i => SLOTCOL[i % SLOTCOL.length];
+// a slot's colour and icon: its own colour while held, slate while kept free for your shows, else green
+const slotLook = (x, i) => x.held ? [slotCol(i), 'i-lock'] : x.reserved ? ['slate', 'i-lock'] : ['green', 'i-unlock'];
 const lkClass = i => slotCol(i) === 'red' ? '' : ' lk-' + slotCol(i);
 function holdsText(w, idx) {   // as the model words it
   const k = winSlots(w).length;
-  return k < 2 ? 'holds the window' : idx.length === k ? (k === 2 ? 'holds both windows' : 'holds every window') : `holds window ${idx.map(i => i + 1).join(' and ')}`;
+  return k < 2 ? 'holds the window' : idx.length === k ? (k === 2 ? 'holds both windows' : 'holds every window') : `holds ${idx.map(i => 'win' + i).join(' and ')}`;
 }
 
 // ---- rail: the sessions, sorted four ways; in Custom the cards are dragged into place (iOS style) ----
@@ -539,7 +550,7 @@ $('railList').addEventListener('keydown', e => {
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.railDrag) { e.stopImmediatePropagation(); railDragEnd(false); } }, true);
 function selectSession(sid) {
   if (sid === S.sid) return;
-  S.sid = sid; store.set('ccprobe.sid', sid); S.sel = 'lead'; S.tab = null; S.userPanned = false; S.expandFinished = false;   // a session opens on its first tab
+  S.sid = sid; store.set('ccprobe.sid', sid); S.sel = 'lead'; S.tab = null; S.tabWas = null; S.userPanned = false; S.expandFinished = false;   // a session opens on its first tab
   clearGraph(); render();
 }
 
@@ -555,6 +566,20 @@ function isHidden(a) {
   if (t == null) return false;
   if ((a.last_ts || 0) > t) { delete hidden[a.id]; store.set('ccprobe.hidden', hidden); return false; }   // at work again
   return true;
+}
+// "Auto-hide done agents": Clear done by itself, for an agent done a minute (the one selected stays); once per finish,
+// so one brought back with "N hidden · show" stays until it works and is done again
+let autoHid = store.get('ccprobe.autoHid', {});        // agent id -> [its last_ts, when] it hid by itself
+function autoHide(s, now) {
+  if (!settings.autoHide) return;
+  let n = 0;
+  for (const a of s.agents || []) {
+    if (a.id === S.sel || a.id in hidden || !canHide(a) || !isDone(a) || now - (a.state.since || now) < 60 || autoHid[a.id]?.[0] === (a.last_ts || 0)) continue;
+    hidden[a.id] = now; autoHid[a.id] = [a.last_ts || 0, now]; n++;
+  }
+  if (!n) return;
+  for (const k in autoHid) if (!Array.isArray(autoHid[k]) || autoHid[k][1] < now - 86400) delete autoHid[k];
+  store.set('ccprobe.hidden', hidden); store.set('ccprobe.autoHid', autoHid);
 }
 function hideAgents(ids) {
   if (!ids.length || !S.model) return;
@@ -583,6 +608,7 @@ function buildNodes(s) {
   const rowOf = rowIndex(s);
   const wq = s.wts && !s.wts.error ? s.wts : null;
   nodes[0].holds = heldBy(wq, 'lead');
+  autoHide(s, now);
   for (const a of s.agents || []) {
     if (isHidden(a) || a.finished && !settings.showFinished) continue;
     const row = a.task != null ? rowOf.get(a.task) : null;
@@ -610,7 +636,10 @@ const radius = n => {
 // made incremental the way DynaDAG and yFiles' incremental mode are: what is on screen keeps its place, newcomers go
 // into the gap that suits them best, and a freed place stays free for a while. Tidying (closing gaps, swapping
 // neighbours to remove crossings) happens only at a quiet moment, or when you press Tidy.
-const LEAD_X = 550, COLW = 240, MAXC = 2, Y_AGENTS = 420, ROW_GAP = 270, QUIET_MS = 120000, REORDER_MS = 300000;
+const LEAD_X = 550, COLW = 240, Y_AGENTS = 420, ROW_GAP = 270, QUIET_MS = 120000, REORDER_MS = 300000;
+// columns −MAXC…MAXC: 5, 7 or 9, per session, whichever draws the graph biggest in the space it has (cols)
+const MAXC_MIN = 2, MAXC_MAX = 4;
+let MAXC = MAXC_MIN;
 // how long a place stays free after its agent went: 2 minutes, or 5 for a place with an heir (the HP worker's, a reused
 // name's), so the next worker still lands where the last one was
 const GHOST_MS = 120000, HEIR_MS = 300000;
@@ -627,16 +656,17 @@ const slotKey = (sub, col) => sub + ':' + col;
 function memFor(sid) {
   let m = S.mem.get(sid);
   if (!m) {
-    m = { agents: new Map(), sig: '', since: performance.now(), lastReorder: 0 };
+    m = { agents: new Map(), sig: '', since: performance.now(), lastReorder: 0, tidyOnce: true };   // a page load tidies each session once, when first drawn
     const saved = store.get('ccprobe.layout', {})[sid];   // a reload keeps the places
-    if (saved) for (const [k, sub, col] of saved.agents || []) if (Math.abs(col) <= MAXC) m.agents.set(k, { sub, col, seen: performance.now() });
+    if (saved) for (const [k, sub, col] of saved.agents || []) if (Math.abs(col) <= MAXC_MAX) m.agents.set(k, { sub, col, seen: performance.now() });
+    if (saved?.maxc) m.maxc = saved.maxc;
     S.mem.set(sid, m);
   }
   return m;
 }
 function saveMem(sid, m) {
   const all = store.get('ccprobe.layout', {});
-  all[sid] = { agents: [...m.agents].map(([k, e]) => [k, e.sub, e.col]), t: Date.now() };
+  all[sid] = { agents: [...m.agents].map(([k, e]) => [k, e.sub, e.col]), maxc: m.maxc, t: Date.now() };
   for (const k of Object.keys(all)) if (Date.now() - (all[k].t || 0) > 7 * 86400e3) delete all[k];
   store.set('ccprobe.layout', all);
 }
@@ -701,14 +731,10 @@ function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `
   const ghosts = [...rm].filter(([k]) => !present.has(k)).map(([, e]) => slotKey(e.sub, e.col));
   let fresh = members.filter(n => !slots.has(n.id));
   if (!slots.size && !ghosts.length) {
-    // nothing remembered (first sight): the agents in role order, rows of five centred under the lead (an even row
-    // split about it, as compactRow leaves it)
-    const rank = { worker: 0, mp: 1, lp: 2, helper: 3 }, per = 2 * MAXC + 1;
+    // nothing remembered (first sight): the agents in role order, in full rows centred under the lead
+    const rank = { worker: 0, mp: 1, lp: 2, helper: 3 };
     const first = fresh.filter(n => !isHelper(n)).sort((a, b) => (rank[a.role] ?? 3) - (rank[b.role] ?? 3) || (a.task || 0) - (b.task || 0) || (a.born || 0) - (b.born || 0));
-    first.forEach((n, i) => {
-      const sub = Math.floor(i / per), inRow = Math.min(per, first.length - sub * per), j = i % per, half = inRow / 2;
-      slots.set(n.id, { sub, col: inRow % 2 ? j - (inRow - 1) / 2 : j < half ? j - half : j - half + 1 });
-    });
+    first.forEach((n, i) => slots.set(n.id, flowSlot(i, first.length)));
     fresh = fresh.filter(n => !slots.has(n.id));
   }
   for (const n of fresh.sort((a, b) => (isHelper(a) - isHelper(b)) || (a.born || 0) - (b.born || 0))) {   // helpers after their anchors
@@ -728,6 +754,28 @@ function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `
   }
   for (const n of members) { const v = slots.get(n.id); rm.set(keyOf.get(n.id), { sub: v.sub, col: v.col, seen: now }); }
   return { keyOf, ghosts: ghosts.length };
+}
+// the i-th of n agents flowed into full rows of 2·MAXC+1, each row centred under the lead (an even one split about it,
+// as compactRow leaves it)
+function flowSlot(i, n) {
+  const per = 2 * MAXC + 1, sub = Math.floor(i / per), inRow = Math.min(per, n - sub * per), j = i % per, half = inRow / 2;
+  return { sub, col: inRow % 2 ? j - (inRow - 1) / 2 : j < half ? j - half : j - half + 1 };
+}
+// how many columns: the count that lets Fit draw the graph biggest (it never zooms past 1:1), the more on a near tie
+// (within 4%): a wide window takes many agents side by side instead of stacking rows that shrink everything.
+function bestMaxc(agents, helpers, fin) {
+  const svg = $('graph'), W = svg?.clientWidth, H = svg?.clientHeight;
+  if (!W || !H) return MAXC;
+  const k = [];
+  for (let c = MAXC_MIN; c <= MAXC_MAX; c++) {
+    const per = 2 * c + 1, rows = Math.max(1, Math.ceil(agents / per)) + (helpers ? 1 : 0);
+    const w = Math.max((Math.min(agents, per) - 1) * COLW + 2 * LABEL_W, 1000) + 100;
+    const h = Y_AGENTS + (rows - 1) * ROW_GAP + 260 + (fin ? 230 : 0) + 130;
+    k[c] = Math.min(1, W / w, H / h);
+  }
+  const top = Math.max(...k.filter(Boolean));
+  for (let c = MAXC_MAX; c > MAXC_MIN; c--) if (k[c] >= .96 * top) return c;
+  return MAXC_MIN;
 }
 // close the gaps within each row, toward the one nearest the centre (nobody changes rows or order); then slide the row
 // so it sits under the lead (its ends at most half a column off centre). An even row splits evenly about the lead
@@ -798,15 +846,20 @@ function layout(nodes, s) {
     if (near.length) return { sub: Math.min(...near.map(v => v.sub)), col: near.reduce((a, v) => a + v.col, 0) / near.length };
     return { sub: 0, col: 0 };
   };
-  const g = placeRow(mem.agents, live, want, E, at, now, slot, isHelper);
-
   // quiet-time upkeep: once nothing has come or gone for QUIET_MS, close the gaps within rows (stepping around places
   // still held for an agent that went), put a helper left away from the agent it serves back under it, and, rarely,
   // swap neighbours that remove 2+ crossings. Tidy does it all now, held places included.
   const sig = live.map(n => n.id).sort().join();
   if (sig !== mem.sig) { mem.sig = sig; mem.since = now; }
-  const quiet = now - mem.since > QUIET_MS, tidy = S.tidyNow;
-  S.tidyNow = false;   // asked once, done once (never left set if anything below fails)
+  const quiet = now - mem.since > QUIET_MS, tidy = S.tidyNow || mem.tidyOnce;
+  S.tidyNow = mem.tidyOnce = false;   // asked once, done once (never left set if anything below fails)
+  // the column count suits the window and the number of agents; it is set at first sight and changes only at a quiet
+  // moment or on Tidy, when the agents flow into the new rows
+  const nAgents = live.filter(n => !isHelper(n)).length, maxc = bestMaxc(nAgents, live.length - nAgents, fin.length);
+  const recount = mem.maxc !== undefined && maxc !== mem.maxc && (quiet || tidy);
+  if (mem.maxc === undefined || recount) mem.maxc = maxc;
+  MAXC = mem.maxc;
+  const g = placeRow(mem.agents, live, want, E, at, now, slot, isHelper);
   const reserved = () => [...mem.agents.keys()].filter(k => ![...g.keyOf.values()].includes(k));
   const sync = () => { for (const n of live) { const e = mem.agents.get(g.keyOf.get(n.id)); if (e) slot.set(n.id, { sub: e.sub, col: e.col }); } };   // helpers being re-placed have none yet
   // a helper sits under a regular agent (helpers anchored to helpers keep their own place)
@@ -816,6 +869,16 @@ function layout(nodes, s) {
   const helperSlots = () => live.filter(isHelper).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean);
   const isAstray = n => underAgent(n) && slot.has(n.anchor) && slot.has(n.id)
     && (slot.get(n.id).sub !== slot.get(n.anchor).sub + 1 || Math.abs(slot.get(n.id).col - slot.get(n.anchor).col) > 1);
+  // the agents spread over more rows than they fill (the top row freed up after they came), or the column count
+  // changed: they flow, in reading order, into full rows centred under the lead, and the helpers go back under them
+  const rowsOf = keys => new Set(keys.map(k => mem.agents.get(k)?.sub)).size;
+  if (recount || ((quiet || tidy) && rowsOf(agentKeys) > Math.ceil(agentKeys.length / (2 * MAXC + 1)))) {
+    for (const k of reserved()) mem.agents.delete(k);
+    const order = agentKeys.map(k => mem.agents.get(k)).sort((a, b) => a.sub - b.sub || a.col - b.col);
+    order.forEach((e, i) => Object.assign(e, flowSlot(i, order.length)));
+    for (const n of live.filter(isHelper)) { mem.agents.delete(g.keyOf.get(n.id)); slot.delete(n.id); }
+    sync(); placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
+  }
   if (tidy) {
     for (const k of reserved()) mem.agents.delete(k);
     // the agents close up first; then the helpers that serve one go back under it
@@ -857,7 +920,8 @@ function layout(nodes, s) {
   // (held as Tidy holds them: Tidy lifts the helpers under an agent before closing up, so they do not count here)
   const loose = compactRow(mem.agents, agentKeys, live.filter(n => isHelper(n) && !underAgent(n)).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean), true) > 0;
   const astray = live.some(isAstray);
-  S.canTidy = loose || reserved().length > 0 || astray;
+  const reflow = maxc !== mem.maxc || rowsOf(agentKeys) > Math.ceil(agentKeys.length / (2 * MAXC + 1));
+  S.canTidy = loose || reserved().length > 0 || astray || reflow;
   const key = JSON.stringify([...mem.agents].map(([k, e]) => [k, e.sub, e.col]));
   if (key !== mem.savedKey) { mem.savedKey = key; saveMem(s.id, mem); }
 
@@ -1201,8 +1265,9 @@ function renderGraph(s) {
     slots.forEach((x, i) => {
       const id = resId(i);
       resSeen.add(id);
-      boxes.push(placeRes(id, { x: at(i + 1), y: res.y }, x.held ? slotCol(i) : 'green', x.held ? 'i-lock' : 'i-unlock',
-        `${slotName(w, i)} · ${x.name}`, x.held ? clip(`${shortWho(x.who)} · ${dur(now - (x.since || now))}`, 38) : 'free',
+      boxes.push(placeRes(id, { x: at(i + 1), y: res.y }, ...slotLook(x, i),
+        `${slotName(w, i)} · ${x.name}${x.reserved ? ' · reserved' : ''}`,
+        x.held ? clip(`${shortWho(x.who)} · ${dur(now - (x.since || now))}`, 38) : x.reserved ? 'kept free for your shows' : 'free',
         waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''));   // they wait for any slot: told on each
     });
   }
@@ -1788,12 +1853,13 @@ function nodeTip(id) {
     st.detail ? 'now: ' + st.detail : '', 'last active ' + ago(n.last_ts, S.model.now), n.notes ? `double-click: task ${n.notes.n}'s notes` : ''].filter(Boolean).join('\n');
 }
 
-document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) { S.tab = b.dataset.tab; renderPanel(); } });
+document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) { S.tab = b.dataset.tab; S.tabWas = null; renderPanel(); } });
 $('alertBtn').addEventListener('click', jumpWorstAlert);
 
 function renderPanel() {
   const want = S.panelFocus; S.panelFocus = null;   // focus an action asked for (Undo after Clear): this rebuild only
   if (S.alUndo && (S.tab !== 'alerts' || S.alUndo.sid !== S.sid)) S.alUndo = null;   // Undo lasts while you stay on the tab
+  if (S.tab !== 'events') S.feedMark = null;   // what is new is worked out again when you come back
   tabsFor(cur());
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
   const s = cur();
@@ -1803,6 +1869,7 @@ function renderPanel() {
   else if (!s) h = '<div class="empty-note">No session selected.</div>';
   else if (S.tab === 'wts') h = wtsPanel(s);
   else if (S.tab === 'tokens') h = tokensPanel(s);
+  else if (S.tab === 'events') h = eventsPanel(s);
   else h = agentPanel(s, S.sel);
   const focusOn = k => k && ($('panel').querySelector(`[data-k="${k}"]`) || (want && $('panel').querySelector('.alhead button')))?.focus({ preventScroll: true });
   if (h === S.panelHtml) return void focusOn(want);
@@ -1860,8 +1927,8 @@ function nowBlock(s, n, st, d, now, sc) {
     const slots = winSlots(s.wts), nm = id => id === 'lead' ? 'lead' : (s.agents || []).find(a => a.id === id)?.label;
     const by = x => (nm(x.holder) ? `held by <button class="linkbtn" data-select="${esc(x.holder)}">${esc(nm(x.holder))}</button>` : 'held elsewhere') + (x.since ? ' since ' + hhmm(x.since) : '');
     head = `<div class="nowh s-window">${icon('i-window')} Waiting for ${slots.length > 1 ? 'a' : 'the shared'} window</div>`;
-    body = slots.length > 1 ? slots.map((x, i) => `<div class="nowsub">${slotName(s.wts, i)}: ${x.held ? by(x) : 'free'}</div>`).join('')
-      : `<div class="nowsub">${slots[0]?.held ? by(slots[0]) : 'held elsewhere'}</div>`;
+    body = slots.length > 1 ? slots.map((x, i) => `<div class="nowsub">${slotName(s.wts, i)}: ${x.held ? by(x) : x.reserved ? 'kept for your shows' : 'free'}</div>`).join('')
+      : `<div class="nowsub">${slots[0]?.held ? by(slots[0]) : slots[0]?.reserved ? 'kept for your shows' : 'held elsewhere'}</div>`;
   } else if (p) {
     const what = p.tool === 'Bash' ? (p.d ? p.desc : (p.cmd.split('\n')[0] || p.desc)) : `${p.tool}  ${p.file || p.desc}`;
     head = `<div class="nowh">${esc(what)}</div>`;
@@ -2257,7 +2324,7 @@ function agentPanel(s, id) {
   const said = () => n.said ? secH('said', 'Last said') + `<div class="said">${esc(n.said)}</div>` : '';
   if (isLead) {
     h += nowBlock(s, n, st, d, now, sc);
-    for (const x of (s.lead.notices || [])) h += `<div class="alert amber"><div class="ad">${hhmm(x.t)} · ${esc(x.text)}</div></div>`;
+    for (const x of (s.lead?.notices || [])) h += `<div class="alert amber"><div class="ad">${hhmm(x.t)} · ${esc(x.text)}</div></div>`;
     h += said() + context() + filesHtml(aid, d) + toolsHtml(s, n, d, false) + msgsHtml(s, n, true);
   } else if (fin) {
     h += report() + notesHtml(s, n, true) + filesHtml(aid, d) + troubleHtml(d?.trouble) + task() + brief() + toolsHtml(s, n, d, true) + msgsHtml(s, n, false);
@@ -2467,9 +2534,9 @@ function wtsPanel(s) {
   const nm = id => id === 'lead' ? 'lead' : (agents.get(id)?.label || '?');
   // a line per window slot; with several, the agents waiting (for any of them) get their own line
   const slots = winSlots(w), waiting = (win.waiters || []).map(id => esc(nm(id))).join(', ');
-  let h = '<div class="winrows">' + slots.map((x, i) => `<div class="winrow c-${x.held ? slotCol(i) : 'green'}">${icon(x.held ? 'i-lock' : 'i-unlock')}<span class="w">${x.held
+  let h = '<div class="winrows">' + slots.map((x, i) => `<div class="winrow c-${slotLook(x, i)[0]}">${icon(slotLook(x, i)[1])}<span class="w">${x.held
     ? `${slotName(w, i)} held by <b>${esc(shortWho(x.who))}</b> since ${hhmm(x.since, 1)} (${dur(now - (x.since || now))})${x.holder ? ' · ' + esc(nm(x.holder)) : ''}`
-    : `${slotName(w, i)} free`}${waiting && slots.length < 2 ? ' · waiting: ' + waiting : ''}</span></div>`).join('')
+    : `${slotName(w, i)} ${x.reserved ? 'free, kept for your shows' : 'free'}`}${x.held && x.reserved ? ' · reserved for your shows' : ''}${waiting && slots.length < 2 ? ' · waiting: ' + waiting : ''}</span></div>`).join('')
     + (waiting && slots.length > 1 ? `<div class="winrow s-window">${icon('i-window')}<span class="w">Waiting for a window: ${waiting}</span></div>` : '') + '</div>';
   const counts = ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${(w.groups[g] || []).length}</a>`).join('');
   h += `<div class="jump">${counts}</div>`;
@@ -2539,10 +2606,104 @@ const sessAlerts = (m, s) => s ? liveAlerts(m).filter(a => a.session === s.id) :
 // a tab with nothing for this session (no queue, no alerts) is not shown; none chosen, or one that is gone, falls back to
 // the first one shown (WTS when there is a queue)
 function tabsFor(s) {
-  const has = { agent: true, wts: !!s?.wts, alerts: !!S.model && (sessAlerts(S.model, s).length > 0 || (S.alUndo?.sid === s?.id && S.tab === 'alerts')), tokens: !!s?.tokens?.n };
+  const has = { agent: true, events: !!s, wts: !!s?.wts, alerts: !!S.model && (sessAlerts(S.model, s).length > 0 || (S.alUndo?.sid === s?.id && S.tab === 'alerts')), tokens: !!s?.tokens?.n };
   document.querySelectorAll('.tabs button').forEach(b => { b.hidden = !has[b.dataset.tab]; });
-  if (!has[S.tab]) S.tab = has.wts ? 'wts' : 'agent';
+  // a tab gone for a tick (the session missing from one refresh, a queue read that failed) is only stood in for: back
+  // on it as soon as it is there again, unless the user picked another tab meanwhile
+  // (a tab gone for longer, as Alerts once its last alert is fixed, stays left: one coming back much later is news, not a gap)
+  if (S.tabWas && Date.now() - S.tabWas.at > 15000) S.tabWas = null;
+  if (S.tabWas && S.tab === S.tabWas.to && has[S.tabWas.from]) S.tab = S.tabWas.from;
+  if (S.tabWas && S.tab !== S.tabWas.to) S.tabWas = null;
+  if (!has[S.tab]) { const to = has.wts ? 'wts' : 'agent'; S.tabWas = S.tab ? { from: S.tab, to, at: Date.now() } : null; S.tab = to; }
   return has;
+}
+// ---- the Events tab: what happened, newest first. The list comes from /api/feed while the tab is open (fetched again
+// when the session's feed changes); the model carries only each session's recent ids, for the unread count ----
+const FEEDCATS = [['task', 'Tasks'], ['agent', 'Agents'], ['window', 'Windows'], ['alert', 'Alerts'], ['session', 'Session']];
+let feedCats = Object.assign({ task: true, agent: true, window: false, alert: true, session: true }, store.get('ccprobe.feedCats', {}));
+let feedSeen = store.get('ccprobe.feedSeen', {});      // session id -> [server start, newest event id seen on its tab]
+const SEVCOL = { ok: 'green', info: 'cyan', warn: 'amber', bad: 'red', you: 'rose' };
+// the newest event id seen in this session; first sight (or a restarted server, whose ids start over) counts as seen
+function seenId(s) {
+  const st = S.model.server.started, r = feedSeen[s.id];
+  if (r && r[0] === st) return r[1];
+  const top = Math.max(0, ...(s.feed?.recent || []).map(x => x[0]));
+  feedSeen[s.id] = [st, top]; store.set('ccprobe.feedSeen', feedSeen);
+  return top;
+}
+function feedUnread(s) {
+  if (!s?.feed || !S.model) return [];
+  const seen = seenId(s);
+  return s.feed.recent.filter(([id, cat]) => id > seen && feedCats[cat]);
+}
+function fetchFeed(s) {
+  const rev = s.feed?.rev;
+  if (S.feedBusy || (S.feedData?.sid === s.id && S.feedData.rev === rev)) return;
+  if (S.feedFail?.sid === s.id && Date.now() - S.feedFail.at < 5000) return;   // a failed fetch: try again in a while
+  S.feedBusy = true;
+  fetch(`/api/feed?s=${encodeURIComponent(s.id)}`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null).catch(() => null)
+    .then(d => {
+      S.feedBusy = false;
+      if (d) { S.feedData = { sid: s.id, rev, items: d.items || [] }; S.feedFail = null; if (S.tab === 'events' && cur()) renderPanel(); }
+      else S.feedFail = { sid: s.id, at: Date.now() };
+    });
+}
+const dayOf = t => { const d = new Date(t * 1000), n = new Date(S.model.now * 1000), y = new Date(n); y.setDate(n.getDate() - 1);
+  return d.toDateString() === n.toDateString() ? 'Today' : d.toDateString() === y.toDateString() ? 'Yesterday'
+    : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }); };
+// how long it took, in the words of its kind: a window held, an alert open, an agent's run, a task's
+function feedSpan(e, now) {
+  if (e.hold) return e.end ? `${hhmm(e.t)}–${hhmm(e.end)} · ${dur(e.dur)}` : `holding · ${dur(now - e.t)}`;
+  if (e.cat === 'alert') return e.end ? `resolved after ${dur(e.dur)}` : `open · ${dur(now - e.t)}`;
+  if (e.dur == null) return '';
+  return (e.cat === 'task' ? 'took ' : 'ran ') + dur(e.dur);
+}
+function feedItem(e, s, now, unread) {
+  const known = id => id === 'lead' || (s.agents || []).some(a => a.id === id);
+  const name = id => id === 'lead' ? 'Lead' : (s.agents || []).find(a => a.id === id)?.label;
+  const chips = [];
+  if (e.group) chips.push(`<span class="fgrp c-${GROUPCOL[e.group]}">${e.group}</span>`);
+  // the agent: its name in the title is the link to it on the graph; else a link of its own
+  const ag = e.agent && known(e.agent) ? e.agent : null, own = ag && e.title.startsWith(name(ag) + ' ');
+  if (ag && !own) chips.push(`<button class="linkbtn" data-select="${esc(ag)}">${esc(name(ag))}</button>`);
+  if (e.notes) chips.push(`<button class="linkbtn fnotes" data-notes="${e.n}">${icon('i-doc')}notes</button>`);
+  const span = feedSpan(e, now);
+  if (span) chips.push(`<span class="fspan">${esc(span)}</span>`);
+  if (e.model) chips.push(`<span class="fmodel">${esc(modelName(e.model))}</span>`);
+  if (e.runs_on) chips.push(`<span class="fmodel">${esc(e.runs_on)}</span>`);
+  const quote = e.cat === 'agent' && /finished|stopped/.test(e.title) && e.detail;
+  const title = own ? `<button class="linkbtn" data-select="${esc(ag)}">${esc(name(ag))}</button>${esc(e.title.slice(name(ag).length))}` : esc(e.title);
+  return `<div class="fe s-${e.sev} c-${SEVCOL[e.sev] || 'cyan'}${e.end ? ' ended' : ''}${unread ? ' unread' : ''}">${icon(e.icon || 'i-run', 'fi')}<div class="fb">`
+    + `<div class="ft"><span class="fh">${title}</span><span class="tm" data-tip="${esc(new Date(e.t * 1000).toLocaleString('en-GB'))} · ${esc(ago(e.t, now))}">${hhmm(e.t)}</span></div>`
+    + (e.sub ? `<div class="fsub">${esc(e.sub)}</div>` : '')
+    + (e.detail ? `<div class="fd${quote ? ' q' : ''}" data-tip="${esc(e.detail)}">${esc(e.detail)}</div>` : '')
+    + (chips.length ? `<div class="fc">${chips.join('')}</div>` : '') + '</div></div>';
+}
+function eventsPanel(s) {
+  fetchFeed(s);
+  const fd = S.feedData?.sid === s.id ? S.feedData : null;
+  if (!fd) return '<div class="empty-note">Loading the events…</div>';
+  const now = S.model.now, all = fd.items;
+  // what you had seen when you opened the tab: kept while you stay on it
+  if (S.feedMark?.sid !== s.id) S.feedMark = { sid: s.id, id: seenId(s) };
+  const top = Math.max(0, ...all.map(e => e.id), ...(s.feed?.recent || []).map(x => x[0]));
+  if (top > seenId(s)) { feedSeen[s.id] = [S.model.server.started, top]; store.set('ccprobe.feedSeen', feedSeen); }
+  const n = cat => all.filter(e => e.cat === cat).length;
+  // a kind with no events has no chip (unless you turned it off: then it stays, to turn it back on)
+  let h = '<div class="fcats" role="group" aria-label="Show these events">' + FEEDCATS.filter(([c]) => n(c) || !feedCats[c]).map(([c, w]) =>
+    `<button data-fcat="${c}" aria-pressed="${!!feedCats[c]}" class="${feedCats[c] ? 'on' : ''}">${w} <span class="n">${n(c)}</span></button>`).join('') + '</div>';
+  const list = all.filter(e => feedCats[e.cat]).slice(0, 400);
+  if (!all.length) return h + '<div class="empty-note">Nothing yet. Tasks queued, started and done, agents starting and finishing, windows taken and freed, alerts: each shows here as it happens (since the server started; what the queue and the transcripts date is filled in).</div>';
+  if (!list.length) return h + `<div class="empty-note">${all.length} events, all of kinds turned off above.</div>`;
+  // what came since you last had the tab open has a cyan edge (until you leave the tab)
+  let day = null;
+  for (const e of list) {
+    const d = dayOf(e.t);
+    if (d !== day) { h += `<div class="fday">${d}</div>`; day = d; }
+    h += feedItem(e, s, now, e.id > S.feedMark.id);
+  }
+  return h;
 }
 function alertsPanel() {
   const m = S.model, list = sessAlerts(m, cur());
@@ -2602,6 +2763,8 @@ $('panel').addEventListener('click', e => {
     S.open[id + '.' + part] = v; S.foldPref[part] = v; store.set('ccprobe.folds', S.foldPref);
     return renderPanel();
   }
+  const fc = e.target.closest('[data-fcat]');
+  if (fc) { feedCats[fc.dataset.fcat] = !feedCats[fc.dataset.fcat]; store.set('ccprobe.feedCats', feedCats); return render(); }
   const k = e.target.closest('[data-tk],[data-tkall],[data-tktab]');
   if (k) {
     if (k.dataset.tk) { S.tokKind = k.dataset.tk; store.set('ccprobe.tokKind', S.tokKind); }
@@ -2757,6 +2920,7 @@ document.querySelectorAll('input[data-set]').forEach(i => i.addEventListener('ch
 $('resetBtn').addEventListener('click', () => {
   dismissed = {}; store.set('ccprobe.dismissed', dismissed);
   hidden = {}; store.set('ccprobe.hidden', hidden);
+  autoHid = {}; store.set('ccprobe.autoHid', autoHid);
   railOrder = { v: 1, keys: [] }; store.set('ccprobe.railOrder', railOrder); S.railForce = true;
   resetSplitters();
   S.expandFinished = false; S.userPanned = false;
@@ -2769,8 +2933,8 @@ document.addEventListener('keydown', e => {
   if (readerKey(e)) return void e.preventDefault();
   if (e.key === 'Escape') { if (!$('settings').hidden) $('settings').hidden = true; else if (!$('tokPop').hidden) $('tokPop').hidden = true; else select('lead'); }
   else if (e.key === 'f' || e.key === 'F') doFit();
-  else if (e.key.length === 1 && '1234'.includes(e.key)) {   // the shown tabs, in order
-    tabsFor(cur()); const t = [...document.querySelectorAll('.tabs button:not([hidden])')][+e.key - 1]?.dataset.tab; if (t) { S.tab = t; renderPanel(); }
+  else if (e.key.length === 1 && '12345'.includes(e.key)) {   // the shown tabs, in order
+    tabsFor(cur()); const t = [...document.querySelectorAll('.tabs button:not([hidden])')][+e.key - 1]?.dataset.tab; if (t) { S.tab = t; S.tabWas = null; renderPanel(); }
   }
   else if (e.key === '[' || e.key === ']') {
     const ss = [...$('railList').children].map(b => b.dataset.sid); const i = ss.indexOf(S.sid);   // as shown
@@ -2827,6 +2991,6 @@ RAIL.set(settings.railW || RAIL.def, false); SIDE.set(settings.sideW || SIDE.def
 
 applyTheme();
 syncSettingsUi();
-const hashTab = (location.hash.match(/tab=(agent|wts|alerts|tokens)/) || [])[1];
+const hashTab = (location.hash.match(/tab=(agent|events|wts|alerts|tokens)/) || [])[1];
 if (hashTab) S.tab = hashTab;
 if (/\bpoll\b/.test(location.hash)) startPolling(); else connect();   // #poll: plain polling (headless checks, odd proxies)
