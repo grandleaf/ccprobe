@@ -115,25 +115,28 @@ def compute(sessions, now, mem):
                 f"state says \"{sf}\", but the worker has been working for 5 min: {worker['state']['label']}.", s, worker["id"])
 
         win = w.get("window") or {}
-        holder = win.get("holder")
-        if win.get("held"):
-            held_for = now - (win.get("since") or now)
+        slots = win.get("slots") or []
+        for i, sl in enumerate(slots):          # each window slot (two game windows side by side, or the one lock)
+            if not sl.get("held"):
+                continue
+            holder = sl.get("holder")
+            held_for = now - (sl.get("since") or now)
             h = agents.get(holder)
             holder_bad = holder != "lead" and (h is None or h["state"]["key"] in ("ended", "parked", "dead", "stuck"))
             if held_for >= 900 and holder_bad and not w.get("app_running"):
-                add(f"stale-lock:{root}", "red", "Stale window lock?",
-                    f"Held by \"{win.get('who')}\" for {_ago(held_for)}; " +
+                add(f"stale-lock:{root}:{sl['name']}", "red", "Stale window lock?" if len(slots) < 2 else f"Stale lock on window {i + 1}?",
+                    f"{sl['name']} held by \"{sl.get('who')}\" for {_ago(held_for)}; " +
                     (f"{h['label']} is {h['state']['label']}" if h else "no live agent matches it") +
                     (f", and {w.get('app')} is not running." if w.get("app") else "."), s, holder if h else None)
             if h and h.get("group") in ("MP", "LP") and (w.get("modes") or {}).get(h["group"]) in ("desk", "paused"):
                 add(f"mode-breach:{root}:{h['group']}", "amber",
-                    f"{h['label']} holds the window in {h['group']} {w['modes'][h['group']]} mode", f"Lock: {win.get('who')}", s, h["id"])
+                    f"{h['label']} holds the window in {h['group']} {w['modes'][h['group']]} mode", f"Lock: {sl.get('who')}", s, h["id"])
         # waiters that really poll for the lock, in a group allowed to use it, while it sits free
         polling = [x for x in win.get("waiters") or [] if x in agents and agents[x]["state"].get("via") == "loop"
                    and (agents[x].get("group") in (None, "HP") or (w.get("modes") or {}).get(agents[x].get("group")) == "running")]
-        if mem.held_for(f"free:{s['id']}:{root}", bool(polling) and not win.get("held"), now) >= 120:
+        if mem.held_for(f"free:{s['id']}:{root}", bool(polling) and not win.get("full"), now) >= 120:
             add(f"waiting-free:{root}", "amber", f"Window free, {', '.join(name(x) for x in polling)} still waiting",
-                "The lock has been free for 2 min, but their lock loops have not taken it.", s, polling[0])
+                "A window has been free for 2 min, but their lock loops have not taken it.", s, polling[0])
 
         busy = sf.startswith("running") or any(a["state"]["key"] in BUSY for a in agents.values())
         if not w.get("caffeinate") and busy:

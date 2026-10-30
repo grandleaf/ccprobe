@@ -195,7 +195,7 @@ class Collector:
             for pri, rs in w["groups"].items():
                 for r in rs:
                     rows[r["n"]] = dict(r, group=pri)
-        lock_name = os.path.basename(w["lock_path"]) if wok and w.get("lock_path") else None
+        lock_names = tuple(os.path.basename(p) for p in w["lock_paths"]) if wok and w.get("lock_paths") else ()
 
         # every agent file (stat only); the ones in view get tailed
         cands = []
@@ -271,11 +271,14 @@ class Collector:
             if agent_of_row.get(task_of[aid]) != aid:
                 task_of.pop(aid)
 
-        # the window holder: whoever last wrote the literal start of the current `who` text (audit M1)
+        # the window holders, one per held slot: whoever last wrote the literal start of its `who` text (audit M1)
         win = w["window"] if wok else {}
-        holder = None
-        if win.get("held"):
-            holder = _holder(win.get("who") or "", main, trs, task_of, who_names, worker_id)
+        slots = [dict(x, holder=_holder(x["who"] or "", main, trs, task_of, who_names, worker_id) if x["held"] else None)
+                 for x in win.get("slots") or []]
+        held_by = {}            # holder -> the slots it holds (a perf run or a build's swap takes them all)
+        for i, x in enumerate(slots):
+            if x["holder"]:
+                held_by.setdefault(x["holder"], []).append(i)
 
         def resolve(to):
             if not to:
@@ -335,7 +338,7 @@ class Collector:
             nn = n if n in nidx else _task_of_meta(meta, nidx)     # the task whose notes it wrote (its row may be gone)
             row = rows.get(n) if n is not None else None
             row_open = (row["kind"] in wts_mod.OPEN) if row else None
-            st = agent_state(tr, now, alive=s["alive"], lock_name=lock_name, is_holder=holder == aid, row_open=row_open,
+            st = agent_state(tr, now, alive=s["alive"], lock_names=lock_names, is_holder=aid in held_by, row_open=row_open,
                              row_waits_window=bool(row and "waiting for the window" in row["status"]),
                              recently_messaged=bool(tr.bg_pending) or now - talked.get(aid, 0) < 1800)
             stop_t, stopper = stopped.get(aid, (0, None))
@@ -350,8 +353,11 @@ class Collector:
                 else:
                     head = re.sub(r"^[^\w]+", "", row["status"]).split(":")[0].strip() or "on hold"
                     st = {"key": "parked", "label": clip(head, 40), "since": st["since"], "detail": "its row says so", "sub": "hold"}
-            if holder == aid and st["key"] in ("running", "polling", "waiting_window"):
-                st = dict(st, key="running", label="holds the window · " + _dur(now - (win.get("since") or now)))
+            if aid in held_by and st["key"] in ("running", "polling", "waiting_window"):
+                mine = held_by[aid]
+                st = dict(st, key="running", label=_holds(mine, len(slots)) + " · " + _dur(now - min(slots[i]["since"] or now for i in mine)))
+            elif st["key"] == "waiting_window" and len(slots) > 1:
+                st = dict(st, label="waiting for a window")
             role = "worker" if aid in workers else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
             dn = None if meta.get("name") else RE_DESC_NAME.match(meta.get("description") or "")
             label = meta.get("name") or (dn.group(1) if dn else _short_desc(meta.get("description"))) or aid[:7]
@@ -442,10 +448,10 @@ class Collector:
 
         wpub = None
         if w:
-            wpub = {k: v for k, v in w.items() if k != "lock_path"}
-            wpub["lock_name"] = lock_name
+            wpub = {k: v for k, v in w.items() if k != "lock_paths"}
+            wpub["lock_names"] = list(lock_names)
             if wok:
-                wpub["window"] = dict(win, who=redact(win.get("who") or "") or None, holder=holder,
+                wpub["window"] = dict(win, slots=[dict(x, who=redact(x["who"] or "") or None) for x in slots],
                                       waiters=[a["id"] for a in agents if a["state"]["key"] == "waiting_window"])
                 wpub["groups"] = {g: [dict(r, agent=agent_of_row.get(r["n"])) for r in rs] for g, rs in w["groups"].items()}
 
@@ -454,7 +460,7 @@ class Collector:
                 "recent": list(main.recent) if main else [], "last_ts": main.last_ts if main else 0,
                 "compactions": [x[0] for x in main.compactions if now - x[0] <= self.window_s] if main else [],
                 "limit": main.limit if main else None}
-        if holder == "lead" and lead["state"]["key"] in ("waiting_user", "idle", "running", "thinking"):
+        if "lead" in held_by and lead["state"]["key"] in ("waiting_user", "idle", "running", "thinking"):
             lead["holds_window"] = True
 
         tok = self.session_tokens(s, cands, by_id, rows, now)
@@ -647,6 +653,15 @@ def _pane_title(s):
 
 def _is_worker_name(name):
     return name == "worker" or bool(RE_HP_NAME.match(name or ""))
+
+
+def _holds(mine, k):
+    """How an agent's state names the window slots it holds: "the window" when there is one."""
+    if k < 2:
+        return "holds the window"
+    if len(mine) == k:
+        return "holds both windows" if k == 2 else "holds every window"
+    return "holds window " + " and ".join(str(i + 1) for i in mine)
 
 
 def _holder(who, main, trs, task_of, by_name, worker_id=None):

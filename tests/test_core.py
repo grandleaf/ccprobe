@@ -8,7 +8,7 @@ import unittest
 
 from ccprobe import alerts
 from ccprobe.agents import Transcript, agent_state, lead_state
-from ccprobe.model import _holder
+from ccprobe.model import _holder, _holds
 from ccprobe.redact import clip, redact
 from ccprobe.tail import Tailer
 
@@ -130,8 +130,8 @@ class StateTests(Base):
         cmd = "until mkdir .autopilot/app.lock 2>/dev/null; do sleep 30; done; echo \"art-advisor round0 $(date)\" > .autopilot/app.lock/who; capture"
         self.w.add(tool_use(self.now - 60, "b1", "Bash", {"command": cmd}))
         tr = self.tr()
-        self.assertEqual(agent_state(tr, self.now, lock_name="app.lock")["key"], "waiting_window")
-        self.assertEqual(agent_state(tr, self.now, lock_name="app.lock", is_holder=True)["key"], "running")
+        self.assertEqual(agent_state(tr, self.now, lock_names=("app.lock",))["key"], "waiting_window")
+        self.assertEqual(agent_state(tr, self.now, lock_names=("app.lock",), is_holder=True)["key"], "running")
         self.assertEqual(list(tr.who_writes)[-1][1], "art-advisor round0")
 
     def test_background_job_cleared_by_origin_entry(self):  # audit B2
@@ -205,6 +205,11 @@ class StateTests(Base):
 
 
 class HolderTests(Base):
+    def test_holds_names_the_slot(self):
+        self.assertEqual(_holds([0], 1), "holds the window")
+        self.assertEqual(_holds([1], 2), "holds window 2")
+        self.assertEqual(_holds([0, 1], 2), "holds both windows")
+
     def test_holder_by_who_write_then_name(self):
         cmd = 'until mkdir x/app.lock; do sleep 5; done; echo "art-advisor round1 captures $(date)" > x/app.lock/who'
         self.w.add(tool_use(self.now - 30, "b1", "Bash", {"command": cmd}))
@@ -271,6 +276,17 @@ class AlertTests(unittest.TestCase):
         mem, now = alerts.Memory(), time.time()
         alerts.compute([s], now - 300, mem)
         self.assertNotIn("waiting-free", {x["key"].split(":")[0] for x in alerts.compute([s], now, mem)})
+
+    def test_each_window_slot_is_checked(self):   # two game windows: a stale lock names its slot; a free one is no alert
+        now = time.time()
+        slots = [{"name": "app.lock", "held": True, "who": "w capture", "since": now - 60, "holder": "w"},
+                 {"name": "app2.lock", "held": True, "who": "adv capture", "since": now - 1200, "holder": "adv"}]
+        s = session([agent("w", "running", now - 5, role="worker"), agent("adv", "dead", now - 1200)], [],
+                    window={"held": True, "full": True, "slots": slots, "waiters": []})
+        got = [a for a in alerts.compute([s], now, alerts.Memory()) if a["key"].startswith("stale-lock")]
+        self.assertEqual([(a["key"], a["title"]) for a in got], [("stale-lock:/r:app2.lock", "Stale lock on window 2?")])
+        slots[1] = {"name": "app2.lock", "held": False, "who": None, "since": None, "holder": None}
+        self.assertNotIn("stale-lock", self.keys(s, now))
 
     def test_stale_row_only_when_the_write_did_not_land(self):
         now = time.time()

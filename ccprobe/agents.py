@@ -490,13 +490,13 @@ def what_of(cmd, desc=""):
     return None
 
 
-def pending_state(tr, now, lock_name, is_holder):
+def pending_state(tr, now, lock_names, is_holder):
     """The state from the oldest pending tool call, or None when nothing is pending."""
     p = tr.oldest_pending()
     if not p:
         return None
     age = now - p["t"]
-    lock_loop = p["name"] == "Bash" and lock_name and lock_name in p["cmd"] and RE_POLL.search(p["cmd"]) and "mkdir" in p["cmd"]
+    lock_loop = p["name"] == "Bash" and any(n in p["cmd"] for n in lock_names) and RE_POLL.search(p["cmd"]) and "mkdir" in p["cmd"]
     if lock_loop and not is_holder:
         return {"key": "waiting_window", "label": "waiting for the window", "since": p["t"], "detail": p["arg"], "via": "loop"}
     if p["name"] == "Bash" and p.get("timeout") and age > p["timeout"] + 120:
@@ -508,12 +508,12 @@ def pending_state(tr, now, lock_name, is_holder):
     return {"key": "running", "label": f"{w[0] if w else p['name']} · {_dur(age)}", "since": p["t"], "detail": p["arg"], "what": w and w[0]}
 
 
-def agent_state(tr, now, *, alive=True, lock_name=None, is_holder=False, row_open=None, row_waits_window=False,
+def agent_state(tr, now, *, alive=True, lock_names=(), is_holder=False, row_open=None, row_waits_window=False,
                 recently_messaged=False):
     """{key, label, since, detail} for an agent; first rule that matches wins."""
     if not alive:
         return {"key": "dead", "label": "dead", "since": tr.last_ts, "detail": "its session has ended"}
-    st = pending_state(tr, now, lock_name, is_holder)
+    st = pending_state(tr, now, lock_names, is_holder)
     if st:
         return st
     ended = tr.last_kind in ("handback", "end", "turn_end")

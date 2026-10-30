@@ -247,23 +247,30 @@ def read(root):
                             "kind": m.Queue.kind(r) if r else "other", "state": _clip(redact(r["state"]) if r else "", 300),
                             "task": _clip(redact(_plain(r["task"])) if r else "", 600), "notes": nidx.get(int(n))})
             groups[pri] = out
-        lock_rel = q.cfg.get("lock", ".autopilot/run.lock")
-        lock_path = os.path.join(root, lock_rel)
-        who = q.lock_text()
-        since = None
-        if who:
-            try:
-                since = os.path.getmtime(lock_path)
-            except OSError:
-                pass
+        # the window slots: "locks" (a list, two game windows side by side) or the one "lock"; older queue.py has only the one
+        if hasattr(q, "lock_paths"):
+            lock_paths = q.lock_paths()
+        else:
+            lock_paths = [os.path.join(root, q.cfg.get("lock", ".autopilot/run.lock"))]
+        slots = []
+        for path in lock_paths:
+            who = q.one_lock_text(path) if hasattr(q, "one_lock_text") else q.lock_text()
+            since = None
+            if who:
+                try:
+                    since = os.path.getmtime(path)
+                except OSError:
+                    pass
+            slots.append({"name": os.path.basename(path), "held": bool(who), "who": who, "since": since, "holder": None})
         res = {
             "root": root, "error": None, "app": q.cfg.get("app_process") or None,
             "app_running": app_running(q.cfg.get("app_process")),
             "hp_line": m.hp_line(q), "state_file": q.read_state(),
             "modes": {"MP": q.group_mode("MP"), "LP": q.group_mode("LP")},
             "caffeinate": caffeinated(m),
-            "lock_path": lock_path,
-            "window": {"held": bool(who), "who": who, "since": since, "holder": None, "waiters": []},
+            "lock_paths": lock_paths,
+            # held: any slot is; full: every slot is (an agent that needs one waits)
+            "window": {"held": any(x["held"] for x in slots), "full": all(x["held"] for x in slots), "slots": slots, "waiters": []},
             "groups": groups,
             "worker_model": q.cfg.get("worker_model"),
         }

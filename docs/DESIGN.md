@@ -63,7 +63,8 @@ some are P1 later, §13.)
 - `system/informational` includes notices such as "Usage limit reached · continuing automatically at 2:30am".
   `compact_boundary` carries `preTokens/postTokens`.
 - Worker queue: `<root>/.autopilot/worker/{queue.md, state, mp_mode, lp_mode, titles.json, config.json}`. The lock is the
-  dir `<root>/<config.lock>` with a `who` file. `~/.claude/skills/worker/scripts/queue.py` exposes `Queue(root)` (`rows`,
+  dir `<root>/<config.lock>` with a `who` file; a project with several window slots lists them in `config.locks`
+  (queue.py's `lock_paths` and `one_lock_text`), each read as its own slot with its own holder. `~/.claude/skills/worker/scripts/queue.py` exposes `Queue(root)` (`rows`,
   `kind`, `read_state`, `group_mode`, `lock_text`, `pinned`) and the helpers `hp_line`, `short_status`, `title_of`,
   `runs_on` and `table_rows`. `wts` = `window()` + `caffeinate` + per-group `table_rows(q, rows_of_group, False)`.
 
@@ -261,7 +262,8 @@ Browser notifications fire once per new red key (§9.8).
   anchor ±35°, then ±70°, at radius 150.
 - **Parked column (right):** agents whose state is `waiting_window` or whose row is paused/parked, sorted by task
   number. With more than 4, it becomes 2 columns.
-- **Resource row (bottom):** the HP queue card (left) and the window card (under its holder, else centre).
+- **Resource row (bottom):** the HP queue card (left) and a card per window slot, spread evenly about the lead; each
+  holder has a red line to the card of the slot it holds.
 - **Finished** agents (`ended` + done for over 2 min, or `dead`): they dim to 35 % and shrink to 0.7×. After 2 min more
   they collapse into a "✓ N finished" chip under their anchor or the lead; clicking it expands them. The "Show finished"
   setting hides them entirely.
@@ -464,7 +466,7 @@ Times are epoch seconds. The page does all formatting.
 | B1: a hand-back's result and mid-turn text | `agents.py`: only conversational entries move `last_kind`. A result for a call never seen pending is ignored. Text is an end only with `end_turn`. One time ladder, built from entry timestamps plus `api-request` lines, replaces file growth: thinking under 3 min, then "thinking · quiet Nm", then stuck? from 10 min. |
 | B2: `origin` entries | `_user` treats any `user` entry with `origin.kind` as a receipt, the same as `queued_command`. `bg_pending` is cleared from `<tool-use-id>` in either form. |
 | B3: the lead's state | `lead_state` comes from the transcript. `turn_duration`, `end_turn` or a hand-back means `waiting_user`; a pending tool means running ("…or waiting for your approval?" after 60 s); otherwise the ladder. The registry is used only for `shell`, dead and the no-entries fallback. |
-| M1: lock holder and waiters | The holder is the transcript whose Bash last wrote a literal `echo "…" > …/who` prefix that the current `who` starts with. Fallbacks: `lead…`, then a `meta.name` match on the first word, then `MP/LP/HP/task N` → the bound agent. A holder in its lock loop shows as "holds the window · Nm" and is never a waiter. |
+| M1: lock holder and waiters | The holder is the transcript whose Bash last wrote a literal `echo "…" > …/who` prefix that the current `who` starts with. Fallbacks: `lead…`, then a `meta.name` match on the first word, then `MP/LP/HP/task N` → the bound agent. A holder in its lock loop shows as "holds the window · Nm" and is never a waiter. Each window slot gets its own holder this way; with two slots the state says "holds window 2" or "holds both windows", and the stale-lock alert is per slot. |
 | M2: false alerts | Each rule is rewritten as the audit says (`alerts.py`). `orphan-row` checks related live agents and the lead. `stale-row` fires only on failed writes. `usage-limit` is a state, which also suppresses `stuck`. `waiting-free` counts only polling waiters in a running group. `caffeinate` fires only when work is running. `hp-state` drops the deliberate-stop clause and gets grace periods. `stale-lock` is not raised while the app runs. |
 | M3: `__pycache__` | `sys.dont_write_bytecode` during the import, `BaseException` caught, and the previous module kept on a failed reload. |
 | M4: CSP vs inline styles | No `style=` in markup. Colours come from `c-<colour>` classes setting `--c`, and sizes from SVG attributes or CSSOM. |

@@ -37,8 +37,14 @@ What you see:
   time (the placement does not change). Lines run in the channels between rows and down
   the gaps between columns, never across an agent. A chevron travels along a line for every message, pointing from
   sender to receiver. Timeline arcs end in an arrowhead on the receiver's lane.
-- **The shelf** at the bottom holds the HP queue and the window cards, always in the same place. The agent holding the
-  window has a red lock mark, and a red line runs from it to the window card. An older agent whose name a newer one now
+- **The shelf** at the bottom holds the HP queue and a card per window slot, always in the same place. A project
+  can share one window (`lock` in its `config.json`) or several side by side (`locks`, a list: two game windows read
+  "Window 1" and "Window 2"); each card is red while held, with its holder and for how long, else green and "free".
+  The agent holding a window has a red lock mark, and a red line runs from it to that window's card; with several
+  windows each has its own colour throughout (its holder's lock, line, card, header segment and WTS lines): window 1
+  red, window 2 orange, window 3 gold. With several
+  slots the header's window chip has a segment per slot, and an agent waiting reads "waiting for a window" (any
+  slot will do). An older agent whose name a newer one now
   holds reads "lp74 (earlier)" and folds into "N finished · show" (top right) once its turn ends; so do earlier HP agents.
 - **Hiding agents.** "Clear N done" (top right) hides the finished and dead agents drawn on the
   graph (not the ones already folded into "N finished · show"); idle and parked agents are not done, so it leaves them.
@@ -83,8 +89,10 @@ What you see:
   the row's latest State write, and a day that is not today is shown (`24 Oct 15:06`); a done row nothing dates keeps
   its bare time. The State's own words are in the tooltip.
   A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
-  The row whose agent holds the window is red, as on the graph: a red edge and number, and its agent line red with the
-  lock (`agent HP 175: holds the window · 4m`); an agent waiting for the window has its line in amber with the window.
+  Its top has a line per window slot (held by whom, since when, which agent), and with several slots a line naming
+  the agents waiting for one. The row whose agent holds a window is red, as on the graph: a red edge and number, and
+  its agent line red with the lock (`agent HP 175: holds the window · 4m`, or `holds window 2 · 4m` with two slots); an
+  agent waiting for the window has its line in violet with the window.
 - **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock, an HP state that disagrees,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
   severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,

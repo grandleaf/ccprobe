@@ -200,9 +200,13 @@ function renderHeader(m, s) {
   const w = s && s.wts && !s.wts.error ? s.wts : null;
   let h = '';
   if (w) {
-    const win = w.window || {};
-    h += win.held
-      ? `<span class="chip win held c-red" data-tip="${esc('Window held by ' + win.who)}">${icon('i-lock')}<span>Window: ${esc(shortWho(win.who))} · ${dur(m.now - (win.since || m.now))}</span></span>`
+    const win = w.window || {}, slots = winSlots(w), one = slots[0] || {};
+    if (slots.length > 1)   // one segment per slot, each red (held) or green (free); a red edge when none is free
+      h += `<span class="chip win slots${win.full ? ' held' : ''}" data-tip="${esc(slots.map((x, i) => `${slotName(w, i)} (${x.name}): ${x.held ? 'held by ' + x.who : 'free'}`).join('\n'))}">`
+        + slots.map((x, i) => `<span class="slot c-${x.held ? slotCol(i) : 'green'}">${icon(x.held ? 'i-lock' : 'i-unlock')}<span>${i + 1} ${x.held
+          ? esc(briefWho(x.who)) + ' · ' + dur(m.now - (x.since || m.now)) : 'free'}</span></span>`).join('') + '</span>';
+    else h += one.held
+      ? `<span class="chip win held c-red" data-tip="${esc('Window held by ' + one.who)}">${icon('i-lock')}<span>Window: ${esc(shortWho(one.who))} · ${dur(m.now - (one.since || m.now))}</span></span>`
       : `<span class="chip win c-green">${icon('i-unlock')}<span>Window free</span></span>`;
     for (const g of ['HP', 'MP', 'LP']) {
       const { text, tip } = groupHead(w, g), [i, c] = modeLook(text);
@@ -245,6 +249,20 @@ function renderTokPop(m) {
   if ($('tokPop').innerHTML !== h) $('tokPop').innerHTML = h;
 }
 const shortWho = who => String(who || '').replace(/\s+\w{3} \w{3}\s+\d+ [\d:]+ \w{3,4} \d{4}$/, '').replace(/\s+\w{3} \w{3}\s+\d+ /, ' ');
+// without the time it was taken and the pid ("hp184 capture 22:33 pid=45165" → "hp184 capture"): the duration says it
+const briefWho = who => shortWho(who).replace(/\s+pid=\d+$/, '').replace(/\s+\d{1,2}:\d{2}$/, '');
+// the window slots (two game windows side by side, or the one lock): which ones an agent holds, and their names
+const winSlots = w => w?.window?.slots || [];
+const heldBy = (w, id) => winSlots(w).flatMap((x, i) => x.held && x.holder === id ? [i] : []);
+const heldSince = (w, idx) => Math.min(...idx.map(i => winSlots(w)[i].since || Infinity));
+const slotName = (w, i) => winSlots(w).length > 1 ? `Window ${i + 1}` : 'Window';
+const SLOTCOL = ['red', 'win2', 'win3'];   // a held slot's colour: red, orange, gold (then round again)
+const slotCol = i => SLOTCOL[i % SLOTCOL.length];
+const lkClass = i => slotCol(i) === 'red' ? '' : ' lk-' + slotCol(i);
+function holdsText(w, idx) {   // as the model words it
+  const k = winSlots(w).length;
+  return k < 2 ? 'holds the window' : idx.length === k ? (k === 2 ? 'holds both windows' : 'holds every window') : `holds window ${idx.map(i => i + 1).join(' and ')}`;
+}
 
 // ---- rail: the sessions, sorted four ways; in Custom the cards are dragged into place (iOS style) ----
 let railOrder = store.get('ccprobe.railOrder', { v: 1, keys: [] });   // Custom: session keys (cwd) in the user's order
@@ -563,13 +581,13 @@ function buildNodes(s) {
     ctx: lead.ctx, ctx_max: lead.ctx_max, said: lead.said, recent: lead.recent || [], last_ts: lead.last_ts, model: lead.model,
   }];
   const rowOf = rowIndex(s);
-  const win = s.wts && !s.wts.error && s.wts.window || {};
-  nodes[0].holds = !!win.held && win.holder === 'lead';
+  const wq = s.wts && !s.wts.error ? s.wts : null;
+  nodes[0].holds = heldBy(wq, 'lead');
   for (const a of s.agents || []) {
     if (isHidden(a) || a.finished && !settings.showFinished) continue;
     const row = a.task != null ? rowOf.get(a.task) : null;
     nodes.push(Object.assign({}, a, {
-      sub: clip(a.task_title || a.desc || '', 26), rowKind: row ? row.kind : null, holds: !!win.held && win.holder === a.id,
+      sub: clip(a.task_title || a.desc || '', 26), rowKind: row ? row.kind : null, holds: heldBy(wq, a.id),
       collapsed: a.finished && now - (a.state.since || now) > 240 && !S.expandFinished,
     }));
   }
@@ -1173,17 +1191,20 @@ function renderGraph(s) {
   if (w) {
     const hp = (w.groups.HP || []).filter(r => ['queued', 'active', 'paused', 'parked', 'asks', 'other'].includes(r.kind));
     const next = (w.groups.HP || []).find(r => r.kind === 'queued');
+    // the shelf: the queue and a card per window slot side by side at the bottom, always in the same place
+    const slots = winSlots(w), k = 1 + slots.length, gap = k > 2 ? 300 : 330, at = i => LEAD_X + (i - (k - 1) / 2) * gap;
     resSeen.add('_queue');
-    boxes.push(placeRes('_queue', { x: LEAD_X - 165, y: res.y }, ROLECOL.worker, 'i-queue', `HP queue · ${hp.length} open`,
+    boxes.push(placeRes('_queue', { x: at(0), y: res.y }, ROLECOL.worker, 'i-queue', `HP queue · ${hp.length} open`,
       next ? clip(`next ${next.n} · ${next.title}`, 36) : 'nothing queued',
       `MP ${(w.groups.MP || []).filter(r => r.kind !== 'done').length} · LP ${(w.groups.LP || []).filter(r => r.kind !== 'done').length} open`));
-    const win = w.window || {};
-    const waiters = (win.waiters || []).map(id => byId.get(id)?.label).filter(Boolean);
-    resSeen.add('_window');
-    // the shelf: queue and window side by side at the bottom, always in the same place
-    boxes.push(placeRes('_window', { x: LEAD_X + 165, y: res.y }, win.held ? 'red' : 'green', win.held ? 'i-lock' : 'i-unlock',
-      `Window · ${w.lock_name || 'lock'}`, win.held ? clip(`${shortWho(win.who)} · ${dur(now - (win.since || now))}`, 38) : 'free',
-      waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''));
+    const waiters = ((w.window || {}).waiters || []).map(id => byId.get(id)?.label).filter(Boolean);
+    slots.forEach((x, i) => {
+      const id = resId(i);
+      resSeen.add(id);
+      boxes.push(placeRes(id, { x: at(i + 1), y: res.y }, x.held ? slotCol(i) : 'green', x.held ? 'i-lock' : 'i-unlock',
+        `${slotName(w, i)} · ${x.name}`, x.held ? clip(`${shortWho(x.who)} · ${dur(now - (x.since || now))}`, 38) : 'free',
+        waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''));   // they wait for any slot: told on each
+    });
   }
   for (const [id, r] of S.res) if (!resSeen.has(id)) {
     const d = S.disp.get(id);
@@ -1222,7 +1243,9 @@ function renderGraph(s) {
   }
   flowKick();
   const dimRes = id => dimAll && S.sel !== id ? ' dim' : '';
-  if (w && w.window && w.window.held && seen.has(w.window.holder) && S.res.has('_window')) drawEdge('lock', w.window.holder, '_window', 'edge lock' + dimRes(w.window.holder), '', eSeen);
+  winSlots(w).forEach((x, i) => {   // a red line from each holder to the slot it holds
+    if (x.held && seen.has(x.holder) && S.res.has(resId(i))) drawEdge(i ? 'lock' + (i + 1) : 'lock', x.holder, resId(i), `edge lock${lkClass(i)}` + dimRes(x.holder), '', eSeen);
+  });
   if (w && worker && S.res.has('_queue')) drawEdge('queue', worker.id, '_queue', 'edge queue' + dimRes(worker.id), '', eSeen);
   for (const [k, e] of S.edges) if (!eSeen.has(k) && !e.leaving) leave(e, 150, () => { e.g.remove(); S.edges.delete(k); });
   S.lanes = laneMap(eSeen);
@@ -1374,7 +1397,9 @@ function updateNode(p, n, pos, now, nAlerts) {
   } else { p.meta.style.display = 'none'; yy -= 12; }
   p.badge.style.display = nAlerts ? '' : 'none';
   setA(p.badge, { transform: `translate(${(r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` }); setT(p.badgeT, '!');
-  p.lockm.style.display = n.holds ? '' : 'none';   // holds the window (its card is on the shelf, joined by a red line)
+  p.lockm.style.display = n.holds?.length ? '' : 'none';   // holds a window (its card is on the shelf, joined by a red line)
+  if (n.holds?.length) setT(p.lockm.lastChild, holdsText(cur()?.wts, n.holds).replace(/^h/, 'H'));
+  setA(p.lockm, { class: 'lockm' + lkClass(n.holds?.[0] || 0) });   // in its window's colour
   p.notem.style.display = n.notes ? '' : 'none';    // its task has notes: a double-click reads them
   setA(p.notem, { transform: `translate(${(-r * .8).toFixed(1)},${(r * .72).toFixed(1)})` });
   setA(p.lockm, { transform: `translate(${(r * .8).toFixed(1)},${(r * .72).toFixed(1)})` });
@@ -1412,6 +1437,7 @@ function drawRes(id, col, ico, h, s1, s2) {
 }
 
 // a resource card at a fixed place (the shelf): it never moves, so you always know where to look
+const resId = i => i ? '_window' + (i + 1) : '_window';   // a window slot's card on the shelf
 function placeRes(id, p, ...rest) {
   const { w, h } = drawRes(id, ...rest);
   const d = target(id, p.x, p.y, 'res');
@@ -1441,7 +1467,7 @@ function drawEdge(key, a, b, cls, label, seen) {
   }
   unleave(e);
   e.a = a; e.b = b;
-  e.bend = key === 'lock' || key === 'queue' ? 0 : ((hash(key) % 2) ? .07 : -.07);
+  e.bend = key.startsWith('lock') || key === 'queue' ? 0 : ((hash(key) % 2) ? .07 : -.07);
   if (!e.path.classList.contains('flashy')) e.path.setAttribute('class', cls);
   setA(e.path, { 'marker-end': /\btask\b/.test(cls) ? 'url(#arrTask)' : 'none' });
   e.cls = cls;
@@ -1828,12 +1854,14 @@ const pathHtml = p => { const m = midPath(p), i = m.lastIndexOf('/'); return i <
 const shortDesc = (desc, label) => String(desc || '').replace(/^(?:HP|MP|LP|Task|Advisor)\s*#?\d+[a-z]?\s*:\s*/i, '').replace(label + ': ', '');
 
 function nowBlock(s, n, st, d, now, sc) {
-  const p = d?.now, win = s.wts?.window;
+  const p = d?.now;
   let head, body = '';
   if (st.key === 'waiting_window') {
-    const holder = win?.holder ? (win.holder === 'lead' ? 'lead' : (s.agents || []).find(a => a.id === win.holder)?.label) : null;
-    head = `<div class="nowh s-window">${icon('i-window')} Waiting for the shared window</div>`;
-    body = `<div class="nowsub">${holder ? `held by <button class="linkbtn" data-select="${esc(win.holder)}">${esc(holder)}</button>` : 'held elsewhere'}${win?.since ? ' since ' + hhmm(win.since) : ''}</div>`;
+    const slots = winSlots(s.wts), nm = id => id === 'lead' ? 'lead' : (s.agents || []).find(a => a.id === id)?.label;
+    const by = x => (nm(x.holder) ? `held by <button class="linkbtn" data-select="${esc(x.holder)}">${esc(nm(x.holder))}</button>` : 'held elsewhere') + (x.since ? ' since ' + hhmm(x.since) : '');
+    head = `<div class="nowh s-window">${icon('i-window')} Waiting for ${slots.length > 1 ? 'a' : 'the shared'} window</div>`;
+    body = slots.length > 1 ? slots.map((x, i) => `<div class="nowsub">${slotName(s.wts, i)}: ${x.held ? by(x) : 'free'}</div>`).join('')
+      : `<div class="nowsub">${slots[0]?.held ? by(slots[0]) : 'held elsewhere'}</div>`;
   } else if (p) {
     const what = p.tool === 'Bash' ? (p.d ? p.desc : (p.cmd.split('\n')[0] || p.desc)) : `${p.tool}  ${p.file || p.desc}`;
     head = `<div class="nowh">${esc(what)}</div>`;
@@ -2205,7 +2233,7 @@ function agentPanel(s, id) {
   const row = !isLead && n.task != null ? rowIndex(s).get(n.task) : null;
   const label = isLead ? s.project : n.label;
   const nameOf = x => x === 'lead' ? 'lead' : ((s.agents || []).find(a => a.id === x)?.label || x.slice(0, 7));
-  const tk = isLead ? s.lead.tokens : n.tokens;
+  const tk = isLead ? s.lead?.tokens : n.tokens;
   const tipId = isLead ? `pid ${s.pid}` : `${n.role}${n.name ? ' · "' + n.name + '"' : ''} · ${n.id}`;
   let h = `<div class="ptitle c-${col}"><svg class="hx" viewBox="-10 -10 20 20"><polygon points="${hexPts(8.5)}"/></svg><span data-tip="${esc(tipId)}">${esc(label)}</span>
     <span class="s c-${sc}">${icon(si)}${esc(fin ? 'finished ' + hhmm(n.last_ts) : st.label)}</span></div>`;
@@ -2437,9 +2465,12 @@ function wtsPanel(s) {
   const now = S.model.now, win = w.window || {};
   const agents = new Map((s.agents || []).map(a => [a.id, a]));
   const nm = id => id === 'lead' ? 'lead' : (agents.get(id)?.label || '?');
-  let h = `<div class="winrow ${win.held ? 'c-red' : 'c-green'}">${icon(win.held ? 'i-lock' : 'i-unlock')}<span class="w">${win.held
-    ? `Window held by <b>${esc(shortWho(win.who))}</b> since ${hhmm(win.since, 1)} (${dur(now - (win.since || now))})${win.holder ? ' · ' + esc(nm(win.holder)) : ''}`
-    : 'Window free'}${(win.waiters || []).length ? ' · waiting: ' + win.waiters.map(id => esc(nm(id))).join(', ') : ''}</span></div>`;
+  // a line per window slot; with several, the agents waiting (for any of them) get their own line
+  const slots = winSlots(w), waiting = (win.waiters || []).map(id => esc(nm(id))).join(', ');
+  let h = '<div class="winrows">' + slots.map((x, i) => `<div class="winrow c-${x.held ? slotCol(i) : 'green'}">${icon(x.held ? 'i-lock' : 'i-unlock')}<span class="w">${x.held
+    ? `${slotName(w, i)} held by <b>${esc(shortWho(x.who))}</b> since ${hhmm(x.since, 1)} (${dur(now - (x.since || now))})${x.holder ? ' · ' + esc(nm(x.holder)) : ''}`
+    : `${slotName(w, i)} free`}${waiting && slots.length < 2 ? ' · waiting: ' + waiting : ''}</span></div>`).join('')
+    + (waiting && slots.length > 1 ? `<div class="winrow s-window">${icon('i-window')}<span class="w">Waiting for a window: ${waiting}</span></div>` : '') + '</div>';
   const counts = ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${(w.groups[g] || []).length}</a>`).join('');
   h += `<div class="jump">${counts}</div>`;
   const running = new Set(((w.state_file || '').match(/^running((?:\s+\d+)+)/) || ['', ''])[1].split(/\s+/).filter(Boolean).map(Number));
@@ -2452,9 +2483,9 @@ function wtsPanel(s) {
     for (const r of rows) {
       const { ri, rc, html: stHtml, a, run } = rowState(s, r, now);
       const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
-      const holds = !!a && win.held && win.holder === a.id;   // the window's holder: red, as on the graph (lock, line, card)
+      const mine = a ? heldBy(w, a.id) : [], holds = mine.length > 0;   // a window's holder: red, as on the graph (lock, line, card)
       const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
-      h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}${holds ? ' holds' : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(r.task)}">
+      h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(r.task)}">
         <span class="n">${r.n}${nb}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : r.kind === 'done' ? ' pill ring' : ''}" data-tip="${esc(r.status + (['done', 'active'].includes(r.kind) && run?.born ? `\n${a ? 'its agent ' + a.label : 'worked on'}: ${whenHM(run.born, now)}–${run.last_ts ? whenHM(run.last_ts, now) : 'now'}` : ''))}">${icon(ri)}<span>${stHtml}</span></span>`;
       if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
       if (a) {
@@ -2462,8 +2493,8 @@ function wtsPanel(s) {
         const mismatch = (r.kind === 'active' && ['dead', 'stuck'].includes(a.state.key)) ||
           (['paused', 'parked'].includes(r.kind) && a.state.key === 'running' && !/window/.test(a.state.label));
         if (holds) {   // its agent line in the window's colours: red with the lock (holds it), amber with the window (waits)
-          const also = /holds the window/.test(a.state.label) ? '' : ' · ' + a.state.label;
-          h += `<span class="obs win c-red">${icon('i-lock')}agent ${esc(a.label)}: holds the window · ${dur(now - (win.since || now))}${esc(also)}</span>`;
+          const also = /^holds /.test(a.state.label) ? '' : ' · ' + a.state.label;
+          h += `<span class="obs win c-${slotCol(mine[0])}">${icon('i-lock')}agent ${esc(a.label)}: ${holdsText(w, mine)} · ${dur(now - heldSince(w, mine))}${esc(also)}</span>`;
         } else if (a.state.key === 'waiting_window') {
           h += `<span class="obs win s-window">${icon('i-window')}agent ${esc(a.label)}: ${esc(a.state.label)}</span>`;
         } else

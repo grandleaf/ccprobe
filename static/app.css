@@ -7,6 +7,7 @@
   /* the state marks (badge, status line, WTS agent line): each kind of waiting its own colour, far apart on the wheel */
   --b-job: #f272d6; --b-poll: #b8e34f; --b-paused: #ffd84d; --b-done: #6f9bff; --b-blender: #ea7600;
   --cyan: #5cc8ff; --amber: #f4b740; --violet: #b48cff; --green: #5fe0a0; --rose: #ff7a90; --slate: #8592b3; --red: #ff5d5d;
+  --win2: #ff8a3d; --win3: #f2c230;   /* window slots 2 and 3: the holder's lock, line and card (slot 1 is red) */
   --lift-shadow: 0 12px 28px rgb(0 0 0 / .55), 0 0 0 1px var(--cyan);
   --node-fill: rgb(10 15 34 / .94); --sel-tint: 18%; --halo-op: .09; --pulse: #ffffff; --star: #9fb3ff; --star-op: .45;
   --glow: drop-shadow(0 0 6px var(--c)); --card-shadow: 0 6px 24px rgb(0 0 0 / .35);
@@ -20,13 +21,14 @@
   --text: #1b2440; --text-strong: #0b1020; --muted: #55607f; --dim: #8a93ab;
   --b-job: #b0258f; --b-poll: #4f7a00; --b-paused: #a07800; --b-done: #2f5fd0; --b-blender: #ea7600;
   --cyan: #0b74b0; --amber: #9a5f00; --violet: #6a3fc8; --green: #0f7a46; --rose: #c8325a; --slate: #5f6b88; --red: #c02626;
+  --win2: #e0640f; --win3: #a87f00;
   --lift-shadow: 0 8px 24px rgb(20 30 60 / .18), 0 0 0 1px var(--cyan);
   --node-fill: #ffffff; --sel-tint: 10%; --halo-op: .06; --pulse: #ffffff; --star: #b9c3da; --star-op: .7;
   --glow: none; --card-shadow: 0 1px 2px rgb(20 30 60 / .08), 0 4px 12px rgb(20 30 60 / .06);
   --crit-bg: #fdecee; --warn-bg: #fdf4e2; --info-bg: #eaf4fb;
 }
 .c-cyan { --c: var(--cyan); } .c-amber { --c: var(--amber); } .c-violet { --c: var(--violet); } .c-green { --c: var(--green); }
-.c-rose { --c: var(--rose); } .c-slate { --c: var(--slate); } .c-red { --c: var(--red); }
+.c-rose { --c: var(--rose); } .c-slate { --c: var(--slate); } .c-red { --c: var(--red); } .c-win2 { --c: var(--win2); } .c-win3 { --c: var(--win3); }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -56,6 +58,10 @@ svg use { pointer-events: none; }
 .chip svg { width: 12px; height: 12px; flex: none; color: var(--c, var(--muted)); }
 .chip.win { flex-shrink: 1; overflow: hidden; } .chip.win span { overflow: hidden; text-overflow: ellipsis; }
 .chip.held { border-color: color-mix(in srgb, var(--red) 45%, var(--line2)); }
+/* two window slots: a segment each, its icon red (held) or green (free) */
+.chip.slots { padding: 0; gap: 0; }
+.chip .slot { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; min-width: 0; }
+.chip .slot + .slot { border-left: 1px solid var(--line2); }
 .iconbtn { position: relative; width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); flex: none; }
 .iconbtn:hover { background: var(--surface); color: var(--text); }
 .iconbtn svg { width: 16px; height: 16px; }
@@ -200,13 +206,14 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .edge.spawn { stroke-width: 1.6; stroke-dasharray: 3 5; opacity: .8; }   /* spawned by: plain slate, but it must read on the dark ground */
 .edge.hot { opacity: .9; }                         /* its dashes flow: flowStep in app.js eases them in and out */
 :root[data-motion="full"] .edge { transition: opacity .8s; }   /* a line going faint fades, it does not snap */
-.edge.lock { stroke: var(--red); stroke-dasharray: none; stroke-width: 1.6; opacity: .8; }   /* routed through the gaps to the shelf */
+.edge.lock { stroke: var(--lk, var(--red)); stroke-dasharray: none; stroke-width: 1.6; opacity: .8; }   /* routed through the gaps to the shelf */
 .edge.flashy { stroke-width: 3; opacity: 1; }
 .edge.queue { stroke: var(--rose); stroke-dasharray: 2 5; opacity: .45; }
 .edge.faint { opacity: .3; }                       /* a message line that is no longer hot */
 .edge.dim, .edge.hot.dim { opacity: .12; }         /* an agent is selected: lines that are not its own step back */
-.node .lockm circle { fill: var(--bg); stroke: var(--red); stroke-width: 1.6; }
-.node .lockm use { color: var(--red); }
+.node .lockm circle { fill: var(--bg); stroke: var(--lk, var(--red)); stroke-width: 1.6; }
+.node .lockm use { color: var(--lk, var(--red)); }
+.lk-win2 { --lk: var(--win2); } .lk-win3 { --lk: var(--win3); }   /* on a holder's lock mark, line and WTS row */
 .node .notem { cursor: pointer; }
 .node .notem .nm { transform-box: fill-box; transform-origin: center; transition: transform .15s ease-out; }
 .node .notem { --c: var(--green); }   /* notes: green, outlined like the other badges (not the agent's colour) */
@@ -270,8 +277,10 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .panel .empty-note { color: var(--muted); }
 
 /* WTS */
+.winrows { display: flex; flex-direction: column; gap: 6px; }
 .winrow { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
 .winrow svg { width: 13px; height: 13px; color: var(--c); flex: none; }
+.winrow.s-window svg { color: var(--s); }
 .winrow .w { overflow-wrap: anywhere; }
 .jump { position: sticky; top: -14px; background: var(--panel); padding: 8px 0; display: flex; gap: 12px; z-index: 1; }
 .jump a { color: var(--c, var(--cyan)); text-decoration: none; cursor: pointer; font-weight: 600; padding: 1px 8px; border-radius: 6px;
@@ -302,7 +311,7 @@ body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-pl
 .wrow .obs { grid-column: 2 / 4; color: var(--muted); font-size: 11px; display: flex; gap: 6px; align-items: center; }
 .wrow .obs.mismatch { color: var(--amber); }
 /* the window: its holder's row has a red edge and number, its agent line red with the lock; a waiter's line is amber */
-.wrow.holds { box-shadow: inset 3px 0 0 var(--red); } .wrow.holds .n { color: var(--red); }
+.wrow.holds { box-shadow: inset 3px 0 0 var(--lk, var(--red)); } .wrow.holds .n { color: var(--lk, var(--red)); }
 .wrow .obs.win { color: var(--c); font-weight: 600; } .wrow .obs.win.s-window { color: var(--s); }
 .obs .mk { color: var(--s); } .wrow .obs.win svg { width: 11px; height: 11px; flex: none; }
 .wrow .ro { grid-column: 2 / 4; color: var(--dim); font-size: 11px; }
