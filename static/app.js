@@ -584,7 +584,7 @@ function rowIndex(s) {
 const isParked = n => n.state.key === 'waiting_window' || n.state.key === 'parked' || (n.rowKind === 'paused' || n.rowKind === 'parked') && !['running', 'thinking', 'polling'].includes(n.state.key);
 const radius = n => {
   const c = settings.compact;
-  return n.role === 'lead' ? (c ? 40 : 52) : n.role === 'worker' ? (c ? 32 : 42) : (n.finished ? 22 : c ? 22 : 30);
+  return n.role === 'lead' ? (c ? 40 : 52) : ['worker', 'mp', 'lp'].includes(n.role) ? (c ? 32 : 42) : (n.finished ? 22 : c ? 22 : 30);
 };
 
 // ---- layout: rows by role (lead · agents · helpers · finished · shelf), every agent in a sticky column ----
