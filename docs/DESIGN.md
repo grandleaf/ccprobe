@@ -351,6 +351,9 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   - one spinning arc per `running`/`thinking` node;
   - a dash flow only on hot edges;
   - no blinking, and no breathing dots.
+  - The arcs and the dash flow step together on one clock, 30 times a second (`FLOW_FPS`), not on every refresh. Each
+    step makes Firefox redraw the graph on the CPU (in its GPU process); on a 6K screen at 120 Hz or more that took 1-2.4
+    cores; at 30 steps a second the motion looks the same.
 - There are no blur filters on animated elements. All pulses share one rAF loop.
 - **Hidden tab:** `body.paused` stops CSS animation and the rAF loop, while SSE keeps updating the state. On return the
   ticker shows "+N events while away" and the missed pulses are not replayed.
@@ -579,7 +582,7 @@ Verified with scripted checks (scratchpad `layout_test.py`, `stress_test.py`, `c
   centred fit, or to the fit around the cards too when they would stick out of that one. A card going away never
   shifts the view back by itself. `placeCards` tries the candidate spots inside the current view first.
 - **Line flow.** The CSS loop (28 px per 1.2 s) jumped 4 px each loop on the violet lines (dash period 12) and stopped
-  dead 60 s after a message. Now `flowStep` (rAF, only while a line flows) moves `stroke-dashoffset` itself: 23 px/s
+  dead 60 s after a message. Now `flowStep` (30 steps a second, only while a line flows or an arc turns) moves `stroke-dashoffset` itself: 23 px/s
   for a busy task line and for a message line in its first minute, easing linearly to 0 at 5 minutes; the speed eases
   toward its target with a 0.7 s time constant, and the offset wraps at 5040 (a multiple of every dash period). Line
   opacity changes (hot → faint, dimming) fade over 0.8 s. Full motion only.

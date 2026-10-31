@@ -180,7 +180,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .s-paused { --s: var(--b-paused); } .s-window, .s-hold { --s: var(--violet); } .s-stuck, .s-dead { --s: var(--red); }
 .s-done { --s: var(--b-done); } .s-ask { --s: var(--rose); }
 .node .stb circle { fill: var(--bg); stroke: var(--s); stroke-width: 1.6; } .node .stb use { color: var(--s); }
-.node .arc { fill: none; stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; transform-box: fill-box; transform-origin: center; animation: spin 2.6s linear infinite; }
+.node .arc { fill: none; stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; }   /* spun by flowStep in app.js */
 .node .flash { fill: none; stroke: var(--c); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center; }
 .node .flash.go { animation: flash .6s ease-out; }
 .node .lbl { fill: var(--text-strong); font-size: 14.5px; text-anchor: middle; font-family: var(--mono); }
@@ -248,14 +248,12 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .card.tool text { fill: var(--c); }
 .tether { stroke: var(--c); stroke-width: 1; opacity: .55; }
 
-@keyframes spin { to { transform: rotate(360deg); } }
 @keyframes blink { 50% { opacity: .35; } }
 @keyframes flash { from { opacity: .9; transform: scale(1); } to { opacity: 0; transform: scale(1.45); } }
 
-:root[data-motion="reduced"] .node .arc, :root[data-motion="off"] .node .arc { animation: none; }
 :root[data-motion="off"] *, :root[data-motion="off"] *::before { animation: none !important; transition: none !important; }
 /* a hidden tab stops the looping animations only (a one-shot pop frozen on its first frame would leave a card invisible) */
-body.paused .node .arc, body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
+body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 
 /* side panel */
 .tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }

@@ -1330,6 +1330,7 @@ function makeNode(id) {
   p.halo = el('circle', { class: 'halo' }, g);
   p.flash = el('polygon', { class: 'flash' }, g);
   p.arc = el('circle', { class: 'arc' }, g);
+  p.phase = hash(id) % 1000 / 1000;   // busy arcs do not turn in step
   p.hex = el('polygon', { class: 'hex' }, g);
   p.word = el('text', { class: 'word' }, g);   // in the hex: who it is, "HP" over "197", "adv" over "184d", "Lead"
   p.num = el('text', { class: 'num' }, g);
@@ -1416,6 +1417,7 @@ function updateNode(p, n, pos, now, nAlerts) {
   setA(p.flash, { points: hexPts(r + 3) });
   setA(p.arc, { r: r + 10, 'stroke-dasharray': `${(r * .9).toFixed(0)} ${(r * 7).toFixed(0)}` });
   p.arc.style.display = active ? '' : 'none';
+  p.spin = active && settings.motion === 'full';
   // in the hex, who it is: a small line over a big one ("HP" over "184e"), both in the hex's colour; one line when the
   // hex is small or the name has no number. Each is shrunk to fit the hex's width.
   const [top, main] = hexWords(n), two = !!top && r >= 26, fit = (t, f) => Math.min(f, r * 1.3 / Math.max(1, t.length * .62));
@@ -1539,7 +1541,10 @@ function drawEdge(key, a, b, cls, label, seen) {
   setT(e.lbl, label);
 }
 // ---- line flow: dashes travel along a line that is in use. The speed eases in and out (a message line slows to a stop
-// over minutes, not at once), and the offset is kept here, so there is no loop seam and no restart ----
+// over minutes, not at once), and the offset is kept here, so there is no loop seam and no restart. The busy arcs turn on
+// the same clock. It steps FLOW_FPS times a second, not on every refresh: Firefox repaints the graph on the CPU at each
+// step, and a 120-165 Hz screen made that more than a core's work ----
+const FLOW_FPS = 30, SPIN_MS = 2600;   // 30 steps a second are smooth at these speeds; an arc turns once in 2.6 s
 const FLOW = 23;          // px/s at full speed (the old CSS loop: 28 px per 1.2 s)
 const FLOW_FULL = 60, FLOW_GONE = 300;   // a message line: full speed for a minute after a message, still by 5 minutes
 function flowOf(e, kind, now) {
@@ -1563,7 +1568,13 @@ function flowStep(t) {
     e.path.setAttribute('stroke-dashoffset', e.off.toFixed(2));
     live = live || e.fv > 0 || want > 0;
   }
-  flowRaf = live && !document.hidden ? requestAnimationFrame(flowStep) : 0;
+  for (const p of S.nodes.values()) {
+    if (!p.spin) continue;
+    p.arc.setAttribute('transform', `rotate(${((t / SPIN_MS + p.phase) % 1 * 360).toFixed(1)})`);
+    live = true;
+  }
+  // the timer stands in for the refreshes between steps; the frame request keeps each step on a refresh
+  flowRaf = live && !document.hidden ? setTimeout(() => { flowRaf = requestAnimationFrame(flowStep); }, 1000 / FLOW_FPS - 8) : 0;
 }
 document.addEventListener('visibilitychange', flowKick);
 function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
