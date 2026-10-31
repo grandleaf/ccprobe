@@ -89,7 +89,7 @@ svg use { pointer-events: none; }
 .chk input:checked { background: var(--cyan); }
 .chk input:checked::before { transform: translateX(13px); }
 .chk input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
-@media (prefers-reduced-motion: no-preference) { .chk input, .chk input::before { transition: background .15s, transform .15s; } }
+:root[data-motion="full"] .chk input, :root[data-motion="full"] .chk input::before { transition: background .15s, transform .15s; }
 .pop-sep { border-top: 1px solid var(--line); margin: 10px 0 8px; }
 .linkbtn { color: var(--cyan); }
 .pop-foot { color: var(--muted); font-size: 11px; margin-top: 8px; }

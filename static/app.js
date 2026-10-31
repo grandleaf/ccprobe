@@ -1554,7 +1554,7 @@ function flowOf(e, kind, now) {
   const age = now - e.last;
   return age <= FLOW_FULL ? FLOW : age >= FLOW_GONE ? 0 : FLOW * (1 - (age - FLOW_FULL) / (FLOW_GONE - FLOW_FULL));
 }
-let flowRaf = 0, flowAt = 0;
+let flowRaf = 0, flowAt = 0;   // the pending step: a timer id, then a frame id (never cancelled, only tested)
 function flowKick() { if (!flowRaf && !document.hidden) { flowAt = performance.now(); flowRaf = requestAnimationFrame(flowStep); } }
 function flowStep(t) {
   const dt = Math.min(.1, (t - flowAt) / 1000), k = 1 - Math.exp(-dt / .7);   // ~2 s to reach a new speed

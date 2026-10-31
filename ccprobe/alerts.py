@@ -91,7 +91,6 @@ def compute(sessions, now, mem):
 
         # the HP state file is not checked against the queue or the worker: the user found both noise (the queue and
         # the Events tab show what runs)
-        sf = (w.get("state_file") or "").strip()
 
         win = w.get("window") or {}
         slots = win.get("slots") or []
@@ -117,7 +116,8 @@ def compute(sessions, now, mem):
             add(f"waiting-free:{root}", "amber", f"Window free, {', '.join(name(x) for x in polling)} still waiting",
                 "A window has been free for 2 min, but their lock loops have not taken it.", s, polling[0])
 
-        busy = sf.startswith("running") or any(a["state"]["key"] in BUSY for a in agents.values())
+        busy = ((w.get("state_file") or "").strip().startswith("running")
+                or any(a["state"]["key"] in BUSY for a in agents.values()))
         if not w.get("caffeinate") and busy:
             add(f"caffeinate:{root}", "amber", "caffeinate is off while work is running",
                 "The Mac may sleep and stop the agents.", s)
