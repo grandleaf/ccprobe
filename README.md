@@ -122,7 +122,8 @@ What you see:
   are no longer running); click it for each session's share. Counting reads each transcript once, on its own thread
   (several GB take a few seconds), then only what it gains.
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
-  auto-hide done agents, compact nodes, notifications.
+  auto-hide done agents, show all relationships, compact nodes, notifications. A first visit starts dark, with
+  auto-hide and all relationships on, motion Full (Reduced when the OS asks for less motion), timeline 45m.
 - **Keys:** `1`…`5` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · double-click an agent with a page mark: its notes · `Esc` closes the notes, else deselects · wheel zooms and
   dragging pans.
 - **Panel widths:** drag the splitter on either side of the graph (or focus one and use ← →) to resize the sessions list

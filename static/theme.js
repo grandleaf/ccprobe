@@ -3,7 +3,7 @@
   var s = {};
   try { s = JSON.parse(localStorage.getItem('ccprobe.settings') || '{}') || {}; } catch (e) { s = {}; }
   var root = document.documentElement;
-  var t = s.theme || 'system';
+  var t = s.theme || 'dark';
   if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   root.setAttribute('data-theme', t);
   var m = s.motion || (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'reduced' : 'full');

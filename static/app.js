@@ -43,7 +43,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private window: settings last for this visit */ } },
 };
 const reducedOS = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const settings = Object.assign({ v: 1, theme: 'system', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, autoHide: false, compact: false, notify: false, railSort: 'attn', hideUnseen: false, allEdges: false },
+const settings = Object.assign({ v: 1, theme: 'dark', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, autoHide: true, compact: false, notify: false, railSort: 'attn', hideUnseen: false, allEdges: true },
   store.get('ccprobe.settings', {}));
 const saveSettings = () => store.set('ccprobe.settings', settings);
 let dismissed = store.get('ccprobe.dismissed', {});    // alert key|sig -> until (epoch s; 1e12 dismissed, 2e12 cleared)

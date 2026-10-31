@@ -253,8 +253,8 @@ is no longer checked against the queue or the worker: the Events tab and the que
 - Every colour is a CSS token on `:root`. These come from ui.md §1: the dark "observatory" set, and the light "daylight
   blueprint" set with darker accents, a dot grid instead of stars, and halos instead of blur.
 - JS uses only `var(--x)` strings, never hex values.
-- `theme.js` is loaded synchronously in `<head>` and sets `data-theme` from settings or `prefers-color-scheme` before the
-  first paint. `System` follows OS changes live.
+- `theme.js` is loaded synchronously in `<head>` and sets `data-theme` from settings (dark until one is chosen) before
+  the first paint. `System` follows `prefers-color-scheme`, live.
 - Contrast: `--muted ≥ 4.5:1` (`#7d8ab0` dark), and `--dim` is used for decoration only.
 
 ### 9.2 Layout
@@ -397,6 +397,8 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   - Motion (Full / Reduced / Off)
   - Timeline (15m / 45m / 2h / 6h)
   - Show finished agents
+  - Auto-hide done agents (on by default)
+  - Show all relationships (on by default)
   - Compact nodes
   - Desktop notifications, which requests permission when switched on and fires on a new red alert or a new `asks`
     while the tab is hidden
