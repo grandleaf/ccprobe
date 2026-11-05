@@ -383,7 +383,9 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   - The title shows `(N) ccprobe`.
 - **Timeline:**
   - one lane per node in graph order; finished nodes are dimmed and folded under "finished (n)";
-  - dots coloured by tool, with dense bursts binned into bars;
+  - dots coloured by tool, with dense bursts binned into bars. The bins are 3 px of time cut from the epoch, not 3 px of
+    screen, so a call keeps its company as the timeline slides. Screen bins split and rejoined close pairs on every
+    refresh. Bin centres are rounded to device pixels, and they all move together;
   - message arcs at 0.25 opacity, or 0.9 when they touch the selected node;
   - compaction markers;
   - a fixed "now" line at the right;

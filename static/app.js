@@ -2810,6 +2810,11 @@ function renderTimeline(s) {
   const LH = 15, rows = Math.min(lanes.length + (fin.length ? 1 : 0), 14), H = rows * LH + 22;
   const x = t => X0 + (t - t0) / span * (W - X0 - 14);
   const step = span <= 900 ? 180 : span <= 2700 ? 300 : span <= 7200 ? 900 : 3600;
+  // calls within 3 px share a mark. The slots are cut in time, not on the screen, so a call keeps its company as the
+  // timeline slides (screen slots split and rejoined close pairs on every refresh). Every slot's centre has the same
+  // fraction of a pixel, so rounding them to device pixels moves all marks together and keeps their spacing exact.
+  const BIN = 3 * span / (W - X0 - 14), dpr = devicePixelRatio || 1;
+  const binX = b => Math.round(x((b + 0.5) * BIN) * dpr) / dpr;
   let h = '';
   for (let t = Math.ceil(t0 / step) * step; t <= now; t += step) h += `<line class="gridl" x1="${x(t)}" x2="${x(t)}" y1="2" y2="${H - 16}"/><text x="${x(t)}" y="${H - 3}" text-anchor="middle">${hhmm(t)}</text>`;
   const laneY = new Map();
@@ -2820,14 +2825,14 @@ function renderTimeline(s) {
     const bins = new Map();
     for (const id of ids) for (const [t, tool] of (s.events || {})[id] || []) {
       if (t < t0) continue;
-      const b = Math.floor(x(t) / 3);
+      const b = Math.floor(t / BIN);
       const v = bins.get(b) || { n: 0, tool, t };
       v.n++; v.tool = tool; v.t = t; bins.set(b, v);
     }
     for (const [b, v] of bins) {
-      const cl = `ev-${toolCls(v.tool)}${cls ? ' ' + cls : ''}`;
-      h += v.n > 1 ? `<rect class="${cl}" x="${b * 3}" y="${y - 4}" width="3" height="8" rx="1"><title>${v.n} calls · ${hhmm(v.t, 1)}</title></rect>`
-        : `<circle class="${cl}" cx="${b * 3 + 1.5}" cy="${y}" r="2.8"><title>${hhmm(v.t, 1)} ${esc(v.tool)}</title></circle>`;
+      const cl = `ev-${toolCls(v.tool)}${cls ? ' ' + cls : ''}`, cx = binX(b);
+      h += v.n > 1 ? `<rect class="${cl}" x="${cx - 1.5}" y="${y - 4}" width="3" height="8" rx="1"><title>${v.n} calls · ${hhmm(v.t, 1)}</title></rect>`
+        : `<circle class="${cl}" cx="${cx}" cy="${y}" r="2.8"><title>${hhmm(v.t, 1)} ${esc(v.tool)}</title></circle>`;
     }
     for (const id of ids) {
       const n = id === 'lead' ? s.lead : agents.get(id);
