@@ -118,6 +118,7 @@ What you see:
   one to pick the metric the rest of the tab shows: the split by role, a per-minute chart over the timeline's span, each
   agent (click one to select it on the graph) and each WTS task (its agents plus the helpers they spawned). Exact
   values are in the tooltips. The selected agent's own figures sit under its Context bar; click them to open the tab.
+  Hovering over a hex shows its tokens so far: out, in (input + cache write) and cache read, and its reply count.
   The **chip at the top** shows today's output across all sessions since 00:00 (including transcripts of sessions that
   are no longer running); click it for each session's share. Counting reads each transcript once, on its own thread
   (several GB take a few seconds), then only what it gains.

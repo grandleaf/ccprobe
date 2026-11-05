@@ -1859,9 +1859,11 @@ function nodeById(s, id) { return id === 'lead' ? Object.assign({ id: 'lead', ro
 function nodeTip(id) {
   const s = cur(); if (!s) return '';
   const n = nodeById(s, id); if (!n) return '';
-  const st = n.state || {};
+  const st = n.state || {}, tk = n.tokens, v = tk?.v;
+  // its tokens so far, named as on the Tokens tab: in = fresh input (input + cache writes)
+  const tok = tk && tk.n ? `tokens: ${tfmt(v[3])} out · ${tfmt(v[0] + v[1])} in · ${tfmt(v[2])} cache read\n  in = ${tfmt(v[0])} input + ${tfmt(v[1])} cache write · ${exact(tk.n)} replies` : '';
   return [n.label || s.project, st.label, n.task ? `task ${n.task}: ${n.task_title || ''}` : '', n.ctx ? `context ${kfmt(n.ctx)} / ${kfmt(n.ctx_max)}` : '',
-    st.detail ? 'now: ' + st.detail : '', 'last active ' + ago(n.last_ts, S.model.now), n.notes ? `double-click: task ${n.notes.n}'s notes` : ''].filter(Boolean).join('\n');
+    tok, st.detail ? 'now: ' + st.detail : '', 'last active ' + ago(n.last_ts, S.model.now), n.notes ? `double-click: task ${n.notes.n}'s notes` : ''].filter(Boolean).join('\n');
 }
 
 document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) { S.tab = b.dataset.tab; S.tabWas = null; renderPanel(); } });
