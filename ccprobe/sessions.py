@@ -7,7 +7,7 @@ import subprocess
 import time
 
 CLAUDE = os.path.expanduser("~/.claude")
-KEEP = ("pid", "sessionId", "cwd", "name", "version", "status", "statusUpdatedAt", "startedAt", "kind")
+KEEP = ("pid", "sessionId", "cwd", "name", "version", "status", "statusUpdatedAt", "startedAt", "kind", "waitingFor")
 
 
 def project_dir(cwd):

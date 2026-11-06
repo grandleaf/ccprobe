@@ -137,7 +137,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .hostrow .hd.down { background: var(--red); }
 .sess .b.alert { color: #fff; background: var(--red); border-color: var(--red); }
 .st { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--slate); }
-.st.busy { background: var(--green); } .st.idle { background: var(--amber); } .st.dead { background: var(--red); } .st.shell { background: var(--cyan); }
+.st.busy { background: var(--green); } .st.idle { background: var(--amber); } .st.dead { background: var(--red); } .st.shell { background: var(--cyan); } .st.waiting { background: var(--rose); }
 
 /* stage */
 .stage { position: relative; min-width: 0; min-height: 0; overflow: hidden;

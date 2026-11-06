@@ -26,6 +26,9 @@ STUCK_S = 600          # → "stuck?" after this long
 
 
 ASK_TOOLS = ("AskUserQuestion", "ExitPlanMode")   # tools that leave the lead waiting on the user
+# the registry's status "waiting" and what it is held on (Claude Code's own words, put plainly)
+WAITING_FOR = {"input needed": "an approval or answer in its terminal", "dialog open": "a dialog open in its terminal",
+               "sandbox request": "a sandbox request to approve", "goal proposal": "a goal for you to approve"}
 
 def ts_of(d):
     t = d.get("timestamp")
@@ -551,6 +554,9 @@ def lead_state(tr, session, now):
     if asks:                                   # a question or a plan left open for the user: really waiting for you
         what = "a plan for you to approve" if asks["name"] == "ExitPlanMode" else "a question for you"
         return {"key": "waiting_user", "label": "waiting for you", "since": asks["t"], "detail": what}
+    if session.get("status") == "waiting":     # Claude Code itself says it is held on you: a permission prompt, a dialog
+        return {"key": "waiting_user", "label": "waiting for you", "since": (session.get("statusUpdatedAt") or 0) / 1000,
+                "detail": WAITING_FOR.get(session.get("waitingFor"), "") or str(session.get("waitingFor") or "")[:60]}
     if p and reg_idle:
         return {"key": "idle", "label": "idle", "since": (session.get("statusUpdatedAt") or 0) / 1000, "detail": f"{p['name']} was cut short"}
     if p:

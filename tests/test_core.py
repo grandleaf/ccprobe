@@ -171,6 +171,12 @@ class StateTests(Base):
         st = lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now)
         self.assertEqual((st["key"], st["detail"]), ("waiting_user", "a question for you"))
 
+    def test_registry_waiting_is_waiting_for_you(self):   # a permission prompt leaves nothing in the transcript but a pending call
+        self.w.add(tool_use(self.now - 20, "toolu_b1", "Bash", {"command": "ls"}))
+        st = lead_state(self.tr(), {"alive": True, "status": "waiting", "waitingFor": "input needed",
+                                    "statusUpdatedAt": (self.now - 19) * 1000}, self.now)
+        self.assertEqual((st["key"], st["detail"], st["since"]), ("waiting_user", "an approval or answer in its terminal", self.now - 19))
+
     def test_registry_idle_wins_over_an_unanswered_prompt(self):
         self.w.add({"type": "user", "timestamp": iso(self.now - 900), "message": {"content": "exit"}})
         tr = self.tr()
