@@ -8,6 +8,7 @@ import sys
 import time
 
 from .redact import redact
+from .sessions import alive
 
 QUEUE_PY = os.path.expanduser("~/.claude/skills/worker/scripts/queue.py")
 PRIS = ("HP", "MP", "LP")
@@ -53,6 +54,77 @@ def _cached(key, ttl, fn):
     v = fn()
     _proc_cache[key] = (time.time(), v)
     return v
+
+
+# The waiting line for the window: a script that waits for a window slot may leave a ticket there while it waits, a
+# file named "<unix time>.<pid>" holding the same who text it writes into the lock it then takes ("hp294 capture").
+WINDOW_QUEUE = ".autopilot/winq"
+RE_TICKET = re.compile(r"(\d+(?:\.\d+)?)\.(\d+)")
+
+
+def waiting_line(root, rel):
+    """The tickets in the waiting line, oldest first: [{who, since}]. A ticket whose process is gone is not waiting."""
+    out = []
+    if not isinstance(rel, str):
+        return out
+    d = os.path.realpath(os.path.join(root, rel))
+    if not _inside(root, d):          # only inside the project, whatever config.json says
+        return out
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return out
+    for nm in names:
+        m = RE_TICKET.fullmatch(nm)
+        p = os.path.join(d, nm)
+        if not m or not alive(int(m.group(2))) or not os.path.isfile(p):    # a regular file: never block on a FIFO
+            continue
+        try:
+            with open(p) as f:
+                who = f.read(200).strip()
+        except OSError:
+            continue
+        if who:
+            out.append({"who": who, "since": float(m.group(1))})
+    return sorted(out, key=lambda x: x["since"])[:20]
+
+
+def apply_limits(cfg, groups):
+    """Each table's most tasks at once (config.json "hp_parallel", "mp_parallel", "lp_parallel"; the lead keeps to them)
+    beside how many are in hand: {HP: {max, running}, …}, max None when the config sets none. A table whose max is 0
+    starts nothing new (the running ones finish): its queued rows are marked held, so none reads as next."""
+    out = {}
+    for g, rows in groups.items():
+        v = cfg.get(f"{g.lower()}_parallel")
+        mx = v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+        out[g] = {"max": mx, "running": sum(1 for r in rows if r["kind"] == "active")}
+        for r in rows:
+            r["held"] = mx == 0 and r["kind"] == "queued"
+    return out
+
+
+def build_lock(root, rel):
+    """A build lock named in config.json ("build_lock"): a build beside the app holds it, not the window.
+    None when there is none; else {held, who, since}."""
+    if not rel or not isinstance(rel, str):
+        return None
+    path = os.path.realpath(os.path.join(root, rel))
+    if not _inside(root, path):       # only inside the project, whatever config.json says
+        return None
+    if not os.path.isdir(path):
+        return {"held": False, "who": None, "since": None}
+    try:
+        if not os.path.isfile(os.path.join(path, "who")):     # a regular file: never block on a FIFO
+            raise OSError
+        with open(os.path.join(path, "who")) as f:
+            who = f.read(300).strip() or "someone"
+    except OSError:
+        who = "someone who left no name"
+    try:
+        since = os.path.getmtime(path)
+    except OSError:
+        since = None
+    return {"held": True, "who": who, "since": since}
 
 
 def caffeinated(m):
@@ -234,6 +306,7 @@ def read(root):
             return prev[1]           # read during a rewrite: show the last good table this tick
         pinned = q.pinned()
         nidx = notes_index(root)
+        state = q.read_state()
         groups = {}
         for pri in PRIS:
             mine = [r for r in rows if r["pri"] == pri and r["n"] not in pinned]
@@ -247,6 +320,7 @@ def read(root):
                             "kind": m.Queue.kind(r) if r else "other", "state": _clip(redact(r["state"]) if r else "", 300),
                             "task": _clip(redact(_plain(r["task"])) if r else "", 600), "notes": nidx.get(int(n))})
             groups[pri] = out
+        limits = apply_limits(q.cfg, groups)
         # the window slots: "locks" (a list, two game windows side by side) or the one "lock"; older queue.py has only the one
         if hasattr(q, "lock_paths"):
             lock_paths = q.lock_paths()
@@ -265,16 +339,18 @@ def read(root):
             slots.append({"name": os.path.basename(path), "held": bool(who), "who": who, "since": since, "holder": None,
                           "reserved": os.path.isfile(path + ".reserved")})
         res = {
+            "build": build_lock(root, q.cfg.get("build_lock")),
             "root": root, "error": None, "app": q.cfg.get("app_process") or None,
             "app_running": app_running(q.cfg.get("app_process")),
-            "hp_line": m.hp_line(q), "state_file": q.read_state(),
+            "hp_line": m.hp_line(q), "state_file": state,
             "modes": {"MP": q.group_mode("MP"), "LP": q.group_mode("LP")},
             "caffeinate": caffeinated(m),
             "lock_paths": lock_paths,
             # held: any slot is; full: none is free for a worker (each held or reserved), so an agent that needs one waits
             "window": {"held": any(x["held"] for x in slots), "full": all(x["held"] or x["reserved"] for x in slots),
-                       "slots": slots, "waiters": []},
-            "groups": groups,
+                       "slots": slots, "waiters": [],
+                       "line": waiting_line(root, q.cfg.get("window_queue") or WINDOW_QUEUE)},
+            "groups": groups, "limits": limits,
             "worker_model": q.cfg.get("worker_model"),
         }
         _last_good[root] = (len(rows), res)

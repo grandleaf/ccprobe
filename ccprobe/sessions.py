@@ -16,12 +16,14 @@ def project_dir(cwd):
 
 
 def alive(pid):
+    if isinstance(pid, int) and pid <= 0:     # 0 and -1 signal process groups, never one process
+        return False
     try:
         os.kill(pid, 0)
         return True
     except PermissionError:
         return True
-    except (OSError, TypeError):
+    except (OSError, TypeError, ValueError, OverflowError):
         return False
 
 
@@ -37,7 +39,16 @@ def read_registry():
         except (OSError, ValueError):
             continue
         if isinstance(d, dict) and d.get("pid") and d.get("cwd"):
-            out.append({k: d.get(k) for k in KEEP})
+            e = {k: d.get(k) for k in KEEP}
+            if not isinstance(e["statusUpdatedAt"], (int, float)) or e["statusUpdatedAt"] <= 0:
+                # no time for the status (every state counts "since" from it): when the file was last written, the
+                # nearest thing ("waiting for you · 3m", never "· 56 years")
+                u = d.get("updatedAt")
+                try:
+                    e["statusUpdatedAt"] = u if isinstance(u, (int, float)) and u > 0 else os.path.getmtime(path) * 1000
+                except OSError:
+                    e["statusUpdatedAt"] = None
+            out.append(e)
     return out
 
 

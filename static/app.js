@@ -213,9 +213,13 @@ function renderHeader(m, s) {
       ? `<span class="chip win held c-red" data-tip="${esc('Window held by ' + one.who)}">${icon('i-lock')}<span>Window: ${esc(shortWho(one.who))} · ${dur(m.now - (one.since || m.now))}</span></span>`
       : one.reserved ? `<span class="chip win held c-slate" data-tip="Kept free for your shows: no worker takes it">${icon('i-lock')}<span>Window reserved</span></span>`
       : `<span class="chip win c-green">${icon('i-unlock')}<span>Window free</span></span>`;
+    if (w.build)   // a build beside the app holds its own lock, not the window (config "build_lock")
+      h += w.build.held
+        ? `<span class="chip win held c-amber" data-tip="${esc('Build lock held by ' + w.build.who)}">${icon('i-build')}<span>Build: ${esc(briefWho(w.build.who))} · ${dur(m.now - (w.build.since || m.now))}</span></span>`
+        : `<span class="chip c-green" data-tip="No build is running (the build lock is free)">${icon('i-build')}<span>Build free</span></span>`;
     for (const g of ['HP', 'MP', 'LP']) {
-      const { text, tip } = groupHead(w, g), [i, c] = modeLook(text);
-      h += `<span class="chip c-${c}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(i)}${g} ${esc(text)}</span>`;
+      const { text, tip } = groupHead(w, g), [i, c] = modeLook(text), lt = limitTag(w, g), tips = [tip, lt?.tip].filter(Boolean).join('\n');
+      h += `<span class="chip c-${c}"${tips ? ` data-tip="${esc(tips)}"` : ''}>${icon(i)}${g} ${esc(text)}${lt ? `<span class="lim">${esc(lt.text)}</span>` : ''}</span>`;
     }
     h += `<span class="chip c-${w.caffeinate ? 'green' : 'amber'}" data-tip="caffeinate keeps the Mac awake">${icon('i-cup')}${w.caffeinate ? 'awake' : 'may sleep'}</span>`;
   }
@@ -1264,12 +1268,13 @@ function renderGraph(s) {
   const worker = nodes.find(n => n.role === 'worker' && seen.has(n.id));
   if (w) {
     const hp = (w.groups.HP || []).filter(r => ['queued', 'active', 'paused', 'parked', 'asks', 'other'].includes(r.kind));
-    const next = (w.groups.HP || []).find(r => r.kind === 'queued');
+    const next = (w.groups.HP || []).find(r => r.kind === 'queued' && !r.held), held = (w.groups.HP || []).filter(r => r.held).length;   // held: HP's max is 0
+    const lim = w.limits?.HP, full = lim && lim.max > 0 && lim.running >= lim.max;
     // the shelf: the queue and a card per window slot side by side at the bottom, always in the same place
     const slots = winSlots(w), k = 1 + slots.length, gap = k > 2 ? 300 : 330, at = i => LEAD_X + (i - (k - 1) / 2) * gap;
     resSeen.add('_queue');
     boxes.push(placeRes('_queue', { x: at(0), y: res.y }, ROLECOL.worker, 'i-queue', `HP queue · ${hp.length} open`,
-      next ? clip(`next ${next.n} · ${next.title}`, 36) : 'nothing queued',
+      next ? clip(full ? `next ${next.n} when one finishes` : `next ${next.n} · ${next.title}`, 36) : held ? `${held} held: HP max is 0` : 'nothing queued',
       `MP ${(w.groups.MP || []).filter(r => r.kind !== 'done').length} · LP ${(w.groups.LP || []).filter(r => r.kind !== 'done').length} open`));
     const waiters = ((w.window || {}).waiters || []).map(id => byId.get(id)?.label).filter(Boolean);
     slots.forEach((x, i) => {
@@ -2496,6 +2501,8 @@ function taskRun(s, n, a, kind) {
   return (wr.last_ts ?? wr.born) > own.last_ts ? wr : own;   // writes after the agent's last step: a later stretch
 }
 function rowStatus(r, now, run, wrote) {   // wrote: when the row's State was last written, if known
+  // a queued row in a table whose max is 0 (config.json): held like a paused one, not next in line
+  if (r.held) return { ri: ROWKIND.paused[0], rc: ROWKIND.paused[1], html: '<span class="sr">queued, </span>held · max 0' };
   const [ri, rc] = r.kind === 'parked' && /waiting for the window/i.test(r.status) ? STATUS.waiting_window : ROWKIND[r.kind] || ROWKIND.other;
   const [head, ...extra] = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '').split(' · ');
   const RE_HM = /\b([01]?\d|2[0-3]):[0-5]\d\b/, tail = extra.length ? ' · ' + extra.join(' · ') : '';
@@ -2540,6 +2547,15 @@ const modeLook = t => /idle/i.test(t) ? ['i-idle', 'slate'] : /running/i.test(t)
 // done rows wait only for the user, paused ones for a resume). A paused HP worker or MP/LP group with paused rows
 // stays paused: that is the user's own stop. The tip keeps the mode the file says.
 const CANRUN = ['active', 'queued', 'other', 'parked', 'asks'];
+// a table's most tasks at once (config.json hp_/mp_/lp_parallel), beside how many are in hand: "3/5"; "max 0" when
+// it starts nothing new; null when the config sets none
+function limitTag(w, g) {
+  const l = w.limits?.[g];
+  if (!l || l.max == null) return null;
+  const key = g.toLowerCase() + '_parallel';
+  if (l.max === 0) return { text: 'max 0', tip: `${g} starts nothing new: ${key} is 0 in config.json${l.running ? ` (the ${l.running} in hand finish)` : ''}` };
+  return { text: `${l.running}/${l.max}`, tip: `${l.running} in hand, at most ${l.max} at once (${key} in config.json)${l.running >= l.max ? ': full, the next waits for one to finish' : ''}` };
+}
 function groupHead(w, g) {
   const rows = (w.groups || {})[g] || [], mode = g === 'HP' ? (w.hp_line || '').replace(/^[^\w]+/, '') : (w.modes || {})[g] || 'running';
   const label = mode === 'desk' ? 'desk-only' : mode, paused = /paus/i.test(mode);
@@ -2560,7 +2576,10 @@ function wtsPanel(s) {
   let h = '<div class="winrows">' + slots.map((x, i) => `<div class="winrow c-${slotLook(x, i)[0]}">${icon(slotLook(x, i)[1])}<span class="w">${x.held
     ? `${slotName(w, i)} held by <b>${esc(shortWho(x.who))}</b> since ${hhmm(x.since, 1)} (${dur(now - (x.since || now))})${x.holder ? ' · ' + esc(nm(x.holder)) : ''}`
     : `${slotName(w, i)} ${x.reserved ? 'free, kept for your shows' : 'free'}`}${x.held && x.reserved ? ' · reserved for your shows' : ''}${waiting && slots.length < 2 ? ' · waiting: ' + waiting : ''}</span></div>`).join('')
-    + (waiting && slots.length > 1 ? `<div class="winrow s-window">${icon('i-window')}<span class="w">Waiting for a window: ${waiting}</span></div>` : '') + '</div>';
+    + (waiting && slots.length > 1 ? `<div class="winrow s-window">${icon('i-window')}<span class="w">Waiting for a window: ${waiting}</span></div>` : '')
+    + (w.build ? `<div class="winrow c-${w.build.held ? 'amber' : 'green'}">${icon('i-build')}<span class="w">${w.build.held
+      ? `Build held by <b>${esc(shortWho(w.build.who))}</b> since ${hhmm(w.build.since, 1)} (${dur(now - (w.build.since || now))})`
+      : 'Build free'}</span></div>` : '') + '</div>';
   const counts = ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${(w.groups[g] || []).length}</a>`).join('');
   h += `<div class="jump">${counts}</div>`;
   const running = new Set(((w.state_file || '').match(/^running((?:\s+\d+)+)/) || ['', ''])[1].split(/\s+/).filter(Boolean).map(Number));
@@ -2568,7 +2587,8 @@ function wtsPanel(s) {
     const rows = w.groups[g] || [];
     const runs = [...new Set(rows.map(r => r.runs_on))];
     const { text: head, tip } = groupHead(w, g), [mi, mc] = modeLook(head);
-    h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(mi)}${esc(head || '—')}</span>${runs.length === 1 ? `<span class="gm">${esc(runs[0])}</span>` : ''}</div>`;
+    const lt = limitTag(w, g);
+    h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(mi)}${esc(head || '—')}</span>${lt ? `<span class="lim" data-tip="${esc(lt.tip)}">${esc(lt.text)}</span>` : ''}${runs.length === 1 ? `<span class="gm">${esc(runs[0])}</span>` : ''}</div>`;
     if (!rows.length) h += '<div class="empty-note">empty</div>';
     for (const r of rows) {
       const { ri, rc, html: stHtml, a, run } = rowState(s, r, now);

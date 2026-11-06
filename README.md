@@ -112,7 +112,10 @@ What you see:
   Its top has a line per window slot (held by whom, since when, which agent), and with several slots a line naming
   the agents waiting for one. The row whose agent holds a window is red, as on the graph: a red edge and number, and
   its agent line red with the lock (`agent HP 175: holds the window · 4m`, or `holds win1 · 4m` with two slots); an
-  agent waiting for the window has its line in violet with the window.
+  agent waiting for the window has its line in violet with the window. A project whose worker config names a build lock
+  gets a line for it too, and a header chip (who builds, for how long). An agent waiting in the project's waiting line
+  for a window (a ticket in `.autopilot/winq`) shows as waiting, not busy. Each table's heading shows its limit from the
+  worker config (`3/5` in hand of at most 5, or `max 0`: nothing new starts, and its queued rows show as held).
 - **Alerts tab** (only while the session has alerts; the bell at the top counts every session's and opens the worst). Needs-you rows, usage limits, orphaned or stale rows, a stale lock,
   stuck agents, caffeinate off while work runs. Each alert can be dismissed or snoozed. The header counts them by
   severity, and **Clear N** hides this session's amber and info alerts until they change (red ones, which need you,

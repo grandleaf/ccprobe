@@ -279,7 +279,7 @@ class Hub:
 
     def __init__(self, local, remotes):
         self.local, self.remotes = local, remotes
-        self.owner = {}            # session id -> its Remote
+        self.owner = {}            # a remote session's page id ("ubuntu:<id>") -> (its Remote, the id over there)
         self.lock = threading.Lock()
         self._key, self._lm, self._model, self._digest, self._json, self._json_for = None, None, None, None, None, None
 
@@ -329,26 +329,27 @@ class Hub:
             return self._json
 
     def _route(self, sid):
+        """(the Remote, its own id for the session) for a remote session's page id ("ubuntu:<id>"), else (None, sid)."""
         with self.lock:
-            return self.owner.get(sid)
+            return self.owner.get(sid) or (None, sid)
 
     def agent_detail(self, sid, aid):
-        r = self._route(sid)
-        return r.ask("agent", sid, aid) if r else self.local.agent_detail(sid, aid)
+        r, rid = self._route(sid)
+        return r.ask("agent", rid, aid) if r else self.local.agent_detail(sid, aid)
 
     def feed_for(self, sid):
-        r = self._route(sid)
-        return r.ask("feed", sid) if r else self.local.feed_for(sid)
+        r, rid = self._route(sid)
+        return r.ask("feed", rid) if r else self.local.feed_for(sid)
 
     def notes(self, sid, n):
-        r = self._route(sid)
-        return r.ask("notes", sid, n) if r else self.local.notes(sid, n)
+        r, rid = self._route(sid)
+        return r.ask("notes", rid, n) if r else self.local.notes(sid, n)
 
     def notes_pic(self, sid, n, i):
-        r = self._route(sid)
+        r, rid = self._route(sid)
         if not r:
             return self.local.notes_pic(sid, n, i)
-        d = r.ask("pic", sid, n, i)
+        d = r.ask("pic", rid, n, i)
         try:
             return (d["type"], base64.b64decode(d["b64"])) if d and d.get("type") in PIC_TYPES else None
         except (ValueError, TypeError, KeyError):
@@ -359,7 +360,9 @@ PIC_TYPES = set(wts_mod.PIC_TYPES.values())
 
 
 def merge(local, shown):
-    """The local model with each remote's sessions (tagged with its host), alerts and today's tokens added."""
+    """The local model with each remote's sessions (tagged with its host), alerts and today's tokens added.
+    A remote session's id is prefixed with its machine's name ("ubuntu:<id>"), so it never matches a local one (a
+    session with no sessionId is known by its pid, and two machines can share a pid); owner maps it back."""
     m = dict(local)
     sessions, alerts, owner = list(local.get("sessions") or []), list(local.get("alerts") or []), {}
     tt = dict(local.get("tokens_today") or {"v": [0, 0, 0, 0], "n": 0, "ready": True})
@@ -368,12 +371,17 @@ def merge(local, shown):
         if not rm:
             continue
         for s in rm.get("sessions") or []:
-            sessions.append(dict(s, host=r.name, ssh=r.dest))
-            owner[s.get("id")] = r
+            pid = f"{r.name}:{s.get('id')}"
+            sessions.append(dict(s, id=pid, host=r.name, ssh=r.dest))
+            owner[pid] = (r, s.get("id"))
         for a in rm.get("alerts") or []:
             alerts.append(dict(a, key=f"{r.name}:{a.get('key')}", host=r.name,
+                               session=f"{r.name}:{a['session']}" if a.get("session") is not None else None,
                                project=f"{a.get('project') or ''} @{r.name}"))
         rt = rm.get("tokens_today") or {}
+        # today's tokens: only a machine whose day is this one's (one in another time zone may be on another day)
+        if rt.get("day") and tt.get("day") and rt["day"] != tt["day"]:
+            continue
         for i, x in enumerate((rt.get("v") or [])[:4]):
             tt["v"][i] += x or 0
         tt["n"] = (tt.get("n") or 0) + (rt.get("n") or 0)

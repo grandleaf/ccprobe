@@ -291,6 +291,9 @@ class Collector:
         for i, x in enumerate(slots):
             if x["holder"]:
                 held_by.setdefault(x["holder"], []).append(i)
+        # the waiting line: a run waiting for a slot inside a script (its Bash call just looks busy) left a ticket
+        line = [dict(x, holder=_holder(x["who"], main, trs, task_of, who_names, worker_id)) for x in win.get("line") or []]
+        in_line = {x["holder"]: x for x in reversed(line) if x["holder"]}      # the oldest ticket per agent
 
         def resolve(to):
             if not to:
@@ -353,6 +356,10 @@ class Collector:
             st = agent_state(tr, now, alive=s["alive"], lock_names=lock_names, is_holder=aid in held_by, row_open=row_open,
                              row_waits_window=bool(row and "waiting for the window" in row["status"]),
                              recently_messaged=bool(tr.bg_pending) or now - talked.get(aid, 0) < 1800)
+            if aid in in_line and aid not in held_by and st["key"] in ("running", "polling", "thinking", "stuck", "ended_bg"):
+                st = {"key": "waiting_window", "label": "waiting for the window", "since": in_line[aid]["since"],
+                      "detail": "its background job is in the waiting line" if st["key"] == "ended_bg" else "in the waiting line",
+                      "via": "line"}
             stop_t, stopper = stopped.get(aid, (0, None))
             if stop_t and tr.last_ts <= stop_t + 5 and st["key"] != "dead":   # nothing since the stop: it was not woken again
                 by = "the lead" if stopper == "lead" else (names.get(stopper) or "another agent")
@@ -462,8 +469,11 @@ class Collector:
         if w:
             wpub = {k: v for k, v in w.items() if k != "lock_paths"}
             wpub["lock_names"] = list(lock_names)
+            if w.get("build"):
+                wpub["build"] = dict(w["build"], who=redact(w["build"]["who"] or "") or None)
             if wok:
                 wpub["window"] = dict(win, slots=[dict(x, who=redact(x["who"] or "") or None) for x in slots],
+                                      line=[dict(x, who=redact(x["who"])) for x in line],
                                       waiters=[a["id"] for a in agents if a["state"]["key"] == "waiting_window"])
                 wpub["groups"] = {g: [dict(r, agent=agent_of_row.get(r["n"])) for r in rs] for g, rs in w["groups"].items()}
 

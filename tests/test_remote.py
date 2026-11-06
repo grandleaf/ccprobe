@@ -74,14 +74,31 @@ class MergeTests(unittest.TestCase):
                "tokens_today": {"v": [10, 20, 30, 40], "n": 50, "ready": False}}
         r = FakeRemote("ubuntu", far)
         m, owner = remote.merge(local, [(r, far)])
-        self.assertEqual([(s["id"], s.get("host")) for s in m["sessions"]], [("L1", None), ("R1", "ubuntu")])
-        self.assertIs(owner["R1"], r)
+        self.assertEqual([(s["id"], s.get("host")) for s in m["sessions"]], [("L1", None), ("ubuntu:R1", "ubuntu")])
+        self.assertEqual(owner["ubuntu:R1"], (r, "R1"))          # the page's id, and the far side's own
         self.assertNotIn("L1", owner)
         self.assertEqual([a["key"] for a in m["alerts"]], ["stuck:L1", "ubuntu:stuck:R1"])
+        self.assertEqual(m["alerts"][1]["session"], "ubuntu:R1")
         self.assertEqual(m["alerts"][1]["project"], "there @ubuntu")
         self.assertEqual(m["tokens_today"], {"day": "d", "v": [11, 22, 33, 44], "n": 55, "ready": False})
         self.assertEqual(m["server"]["remotes"][0]["name"], "ubuntu")
         self.assertEqual(local["tokens_today"]["v"], [1, 2, 3, 4])      # the local model itself is untouched
+
+    def test_a_shared_id_stays_two_sessions(self):   # no sessionId: both known by pid 4123
+        local = {"sessions": [{"id": "4123"}], "alerts": [], "tokens_today": {"v": [0, 0, 0, 0], "n": 0, "ready": True}}
+        r = FakeRemote("ubuntu", {"sessions": [{"id": "4123"}]})
+        m, owner = remote.merge(local, [(r, r.m)])
+        self.assertEqual([s["id"] for s in m["sessions"]], ["4123", "ubuntu:4123"])
+        hub = remote.Hub(None, [])
+        hub.owner = owner
+        self.assertEqual(hub._route("ubuntu:4123"), (r, "4123"))
+        self.assertEqual(hub._route("4123"), (None, "4123"))
+
+    def test_another_day_is_not_added_to_today(self):
+        local = {"sessions": [], "alerts": [], "tokens_today": {"day": "2026-11-05", "v": [1, 1, 1, 1], "n": 1, "ready": True}}
+        far = {"sessions": [], "tokens_today": {"day": "2026-11-06", "v": [9, 9, 9, 9], "n": 9, "ready": True}}
+        m, _ = remote.merge(local, [(FakeRemote("ubuntu", far), far)])
+        self.assertEqual((m["tokens_today"]["v"], m["tokens_today"]["n"]), ([1, 1, 1, 1], 1))
 
     def test_a_lost_link_adds_nothing(self):
         local = {"sessions": [], "alerts": [], "tokens_today": {"v": [0, 0, 0, 0], "n": 0, "ready": True}}

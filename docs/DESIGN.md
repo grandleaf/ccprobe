@@ -687,9 +687,11 @@ task they say what was done far better than the transcript, so ccprobe shows the
 - **This side:** a `Remote` per host keeps the SSH child, the latest model and the questions in flight. A link silent
   for 30 s is killed. A lost one is retried after 3 s, doubling up to 60 s, and its sessions stay on screen for 30 s, so
   a blip does not empty the rail. The `Hub` gives the server the collector's interface. Its snapshot is the local model
-  plus each remote's sessions (tagged `host`), alerts (keys prefixed with the host, `project` given `@host`) and today's
-  tokens (summed), with `server.remotes` holding each link's state. Panel questions go to the machine that owns the
-  session, and panel questions for a dead link get no answer (404).
+  plus each remote's sessions (tagged `host` and `ssh`, the destination; ids prefixed `host:`, since a session with no
+  sessionId is known by its pid and two machines can share one), alerts (keys and `session` prefixed with the host,
+  `project` given `@host`) and today's tokens (summed, only from a machine on the same day), with `server.remotes`
+  holding each link's state. Panel questions go to the machine that owns the session, with its own id, and panel
+  questions for a dead link get no answer (404).
 - **The page:** a chip after the session's name on its rail card, a globe icon and the host (its tooltip says it runs
   on another machine), `project @host` in the timeline title, the tokens popover and
   alerts, the host before the tmux pane in the lead's panel, `ssh -t HOST tmux attach …` in the hint for an unseen
@@ -697,3 +699,23 @@ task they say what was done far better than the transcript, so ccprobe shows the
   the error). A live link shows no line. Rail keys are `host:cwd` for remote sessions, so the same directory on two machines stays two cards.
 - Timestamps are used as they come: the machines keep their clocks in step (NTP). On 2026-11-05 the Linux box was
   0.3 s ahead.
+
+## 23. Build lock, waiting line, each table's limit (2026-11-05)
+- **Build lock:** a `build_lock` in the worker's `config.json` names a lock a build beside the app holds instead of the
+  window. The header has a chip for it (amber with its holder and age while held, green "Build free"), and the WTS tab
+  a line under the window lines. No `build_lock`, no chip.
+- **The waiting line:** a script that waits for a window slot inside one Bash call looks busy in the transcript. A
+  project's window script may leave a ticket while it waits: a file in `.autopilot/winq` (or config `window_queue`)
+  named `<unix time>.<pid>`, holding the who text it will write into the lock. Tickets whose process is gone are
+  ignored. Each ticket is matched to its agent as a lock holder is; that agent, holding no slot and otherwise busy (or
+  idle with a background job, whose job it is), shows "waiting for the window" from the ticket's time, and is named
+  among the waiters.
+- **Each table's limit:** `hp_parallel`, `mp_parallel` and `lp_parallel` in `config.json` are the most tasks the lead
+  runs at once in that table. The header's HP, MP and LP chips and the WTS tab's table headings carry a small badge:
+  in hand over the limit (`3/5`; the tooltip says when it is full), or `max 0` when the table starts nothing new (the
+  user's way to hold a table: the tasks in hand finish). With `max 0` the table's queued rows are held (⏸ "held · max
+  0", not next in line) and the HP queue card says how many are held; with the limit reached it says "next N when one
+  finishes". No limit in the config, no badge.
+- Both paths from `config.json` are read only inside the project.
+- **The registry's status time:** a registry entry with no `statusUpdatedAt` takes its `updatedAt`, else the file's
+  own time, so no state reads "since 1970".
