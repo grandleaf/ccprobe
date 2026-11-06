@@ -59,7 +59,7 @@ class FarSideTests(unittest.TestCase):
 
 class FakeRemote:
     def __init__(self, name, m):
-        self.name, self.m = name, m
+        self.name, self.dest, self.m = name, name, m
 
     def status(self):
         return {"name": self.name, "state": "live", "error": None, "since": 0, "sessions": len(self.m["sessions"])}

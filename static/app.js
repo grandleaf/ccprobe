@@ -380,7 +380,7 @@ function renderRail(m) {
     if (b._html !== h) { b.innerHTML = h; b._html = h; }
     b.dataset.sid = s.id; b.classList.toggle('on', s.id === S.sid); b.classList.toggle('unseen', unseen(s));
     b.setAttribute('aria-label', `${pname(s)}, ${s.lead?.state?.label || s.status}${unseen(s) ? ', no terminal open' : ''}`);
-    if (unseen(s)) b.dataset.tip = `No terminal shows this tmux session (its window was closed). It still runs; to see it: ${s.host ? `ssh -t ${s.host} ` : ''}tmux attach -t ${s.tmux.session}`;
+    if (unseen(s)) b.dataset.tip = `No terminal shows this tmux session (its window was closed). It still runs; to see it: ${s.host ? `ssh -t ${s.ssh || s.host} ` : ''}tmux attach -t ${s.tmux.session}`;
     else delete b.dataset.tip;
   }
   if (S.railDrag) { S.railDirty = true; return; }   // never reorder under a card being dragged

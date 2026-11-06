@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 
+from . import wts as wts_mod
 from .redact import redact
 
 PKG = os.path.dirname(os.path.abspath(__file__))
@@ -133,14 +134,14 @@ class Remote:
         self.name = name if dest else name.split("@")[-1]
         self.opts, self.wake = opts, wake
         self.state, self.error, self.since = "connecting", None, time.time()
-        self.model, self.digest, self.seen, self.until = None, None, 0.0, 0.0
+        self.latest, self.seen, self.until = (None, None), 0.0, 0.0   # (model, digest): one read, never a torn pair
         self.proc, self.lock, self.pending, self.next_id = None, threading.Lock(), {}, 0
         self.stopping = False
 
     def command(self):
         ssh = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3"]
-        return ssh + [self.dest, " ".join(shlex.quote(a) for a in boot_args(self.opts))]
+        return ssh + ["--", self.dest, " ".join(shlex.quote(a) for a in boot_args(self.opts))]
 
     def start(self):
         threading.Thread(target=self._run, name=f"remote-{self.name}", daemon=True).start()
@@ -179,8 +180,10 @@ class Remote:
                         msg = json.loads(raw)
                     except ValueError:
                         continue
+                    if not isinstance(msg, dict):          # a stray line from the far shell ("42", "null")
+                        continue
                     if msg.get("t") == "model":
-                        self.model, self.digest, self.until = msg.get("model"), msg.get("digest"), 0.0
+                        self.latest, self.until = (msg.get("model"), msg.get("digest")), 0.0
                         wait = 3
                         self._set("live")
                         self.wake()
@@ -222,11 +225,14 @@ class Remote:
             if self.state == "live" and p and p.poll() is None and time.time() - self.seen > DEAD_S:
                 p.kill()            # silent for too long: _run starts it again
 
-    def shown(self):
-        """The model to show: the live one, or a lost link's last one for a short while."""
+    def view(self):
+        """(model, digest) to show: the live one, or a lost link's last one for a short while; (None, None) otherwise."""
         if self.state == "live" or time.time() < self.until:
-            return self.model
-        return None
+            return self.latest
+        return None, None
+
+    def shown(self):
+        return self.view()[0]
 
     def ask(self, op, *args):
         """Ask the far side; None when the link is down or the answer is late."""
@@ -261,7 +267,7 @@ class Hub:
         self.local, self.remotes = local, remotes
         self.owner = {}            # session id -> its Remote
         self.lock = threading.Lock()
-        self._key, self._model, self._digest, self._json, self._json_for = None, None, None, None, None
+        self._key, self._lm, self._model, self._digest, self._json, self._json_for = None, None, None, None, None, None
 
     # the server waits on these
     @property
@@ -285,13 +291,18 @@ class Hub:
         lm, ld = self.local.snapshot()
         if lm is None:
             return None, None
-        shown = [(r, r.shown()) for r in self.remotes]
-        key = (ld,) + tuple((r.name, r.digest if m is not None else None, r.state, r.error) for r, m in shown)
+        views = [(r,) + r.view() for r in self.remotes]
+        shown = [(r, m) for r, m, _ in views]
+        key = (ld,) + tuple((r.name, d if m is not None else None, r.state, r.error) for r, m, d in views)
         with self.lock:
-            if key == self._key:
+            # the digest follows the key (an idle system pushes nothing), but the model is rebuilt with each local tick
+            # so its clock, today's tokens and the server's figures stay as fresh as the local model's
+            if key == self._key and self._lm is lm:
                 return self._model, self._digest
             self._model, self.owner = merge(lm, shown)
-            self._digest, self._key = hashlib.sha1(json.dumps(key).encode()).hexdigest(), key
+            self._lm = lm
+            if key != self._key:
+                self._digest, self._key = hashlib.sha1(json.dumps(key).encode()).hexdigest(), key
             return self._model, self._digest
 
     def snapshot_json(self):
@@ -330,7 +341,7 @@ class Hub:
             return None
 
 
-PIC_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+PIC_TYPES = set(wts_mod.PIC_TYPES.values())
 
 
 def merge(local, shown):
@@ -343,7 +354,7 @@ def merge(local, shown):
         if not rm:
             continue
         for s in rm.get("sessions") or []:
-            sessions.append(dict(s, host=r.name))
+            sessions.append(dict(s, host=r.name, ssh=r.dest))
             owner[s.get("id")] = r
         for a in rm.get("alerts") or []:
             alerts.append(dict(a, key=f"{r.name}:{a.get('key')}", host=r.name,
