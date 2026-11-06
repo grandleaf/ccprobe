@@ -1,14 +1,23 @@
 # ccprobe
 
 A live, read-only dashboard of every Claude Code session on this Mac (in tmux or not), the agents they spawn, and the
-background-worker queue (WTS). It needs only Python 3.10+, with no installs.
+background-worker queue (WTS). It can also show the sessions of other machines you reach by SSH. It needs only Python
+3.10+, with no installs.
 
 ```
 python3 ccprobe.py --open        # serve on http://127.0.0.1:8787 and open it (the URL carries the access token)
 python3 ccprobe.py --url         # print the URL with its token again
 python3 ccprobe.py --once        # one collection as JSON (debugging)
-python3 ccprobe.py --help        # --port, --window 6h, --ctx-max, --interval, --no-token
+python3 ccprobe.py --remote ubuntu   # also show another machine's sessions, over SSH (repeatable)
+python3 ccprobe.py --help        # --port, --window 6h, --ctx-max, --interval, --no-token, --no-remotes
 ```
+
+**Other machines.** With `--remote HOST` (or one SSH destination per line in `~/.config/ccprobe/remotes`, used when no
+`--remote` is given), the page shows that machine's sessions too, each with a globe icon and the machine's name after its own. If a link is
+lost, a line under the session list says so. The machine needs Python 3 and an SSH key login (`BatchMode`: no
+password prompt). Nothing is installed or written there, and nothing listens there: ccprobe sends its own code down
+the SSH connection, runs the same read-only collector there in memory, and reads the results back. The far side
+exits when the link closes. A lost link is retried, from 3 s up to once a minute.
 
 What you see:
 - **Graph.** Each hexagon says who it is, in its own colour: `HP` over `184e` (task 184, its round e), `adv` over
@@ -137,6 +146,7 @@ Safety:
 - The page runs under a strict CSP, and no URL can name a file.
 - Secrets are masked before they leave the server.
 - ccprobe never writes to `~/.claude` or to any project.
+- A remote machine is reached only over SSH, as you. Nothing is installed, written or opened to the network there.
 
 Tests: `python3 -m unittest discover -s tests` (unit) · `python3 tests/smoke_live.py` (read-only check against this Mac).
 

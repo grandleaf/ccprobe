@@ -249,7 +249,7 @@ function renderTokPop(m) {
   for (const s of ss) {
     const v = s.tokens.today;
     v.forEach((x, i) => { known[i] += x; });
-    h += `<button data-tksid="${esc(s.id)}">${esc(s.project)}</button><span>${tfmt(v[3])}</span><span>${tfmt(v[0] + v[1])}</span><span>${tfmt(v[2])}</span>`;
+    h += `<button data-tksid="${esc(s.id)}">${esc(pname(s))}</button><span>${tfmt(v[3])}</span><span>${tfmt(v[0] + v[1])}</span><span>${tfmt(v[2])}</span>`;
   }
   const rest = tt.v.map((x, i) => x - known[i]);
   if (rest.some(x => x > 0)) h += `<span class="pmeta" data-tip="Transcripts written today by sessions that are no longer running">other</span><span>${tfmt(rest[3])}</span><span>${tfmt(rest[0] + rest[1])}</span><span>${tfmt(rest[2])}</span>`;
@@ -257,6 +257,8 @@ function renderTokPop(m) {
   h += `<div class="pop-foot">out: what the models wrote (thinking included) · in: input + cache writes · read: cache reads</div>`;
   if ($('tokPop').innerHTML !== h) $('tokPop').innerHTML = h;
 }
+// a session's name, with the machine it runs on when that is not this one
+const pname = s => s.project + (s.host ? ' @' + s.host : '');
 const shortWho = who => String(who || '').replace(/\s+\w{3} \w{3}\s+\d+ [\d:]+ \w{3,4} \d{4}$/, '').replace(/\s+\w{3} \w{3}\s+\d+ /, ' ');
 // without the time it was taken and the pid ("hp184 capture 22:33 pid=45165" → "hp184 capture"): the duration says it
 const briefWho = who => shortWho(who).replace(/\s+pid=\d+$/, '').replace(/\s+\d{1,2}:\d{2}$/, '');
@@ -289,8 +291,9 @@ const activity = s => Math.max(s.lead?.last_ts || 0, s.status_since || 0, ...(s.
 function railEntries(ss) {
   const seen = new Map();
   return ss.slice().sort((a, b) => (a.started || 0) - (b.started || 0)).map(s => {
-    const n = (seen.get(s.cwd) || 0) + 1; seen.set(s.cwd, n);
-    return { s, key: n > 1 ? `${s.cwd}#${n}` : (s.cwd || s.id) };
+    const dir = (s.host ? s.host + ':' : '') + (s.cwd || s.id);   // another machine's directory is its own
+    const n = (seen.get(dir) || 0) + 1; seen.set(dir, n);
+    return { s, key: n > 1 ? `${dir}#${n}` : dir };
   });
 }
 function sortRail(list, m, alerts) {
@@ -343,7 +346,7 @@ function cardHtml(s, alerts, now) {
   const na = (s.agents || []).filter(a => !a.finished).length;
   const nal = alerts.filter(a => a.session === s.id && a.sev !== 'info').length;
   const st = s.alive ? s.status : 'dead';
-  return `<div class="n"><span class="st ${esc(st)}"></span><span class="nm">${esc(s.project)}</span>${nal ? `<span class="b alert">${nal}</span>` : na ? `<span class="b">${na} agent${na > 1 ? 's' : ''}</span>` : ''}</div>
+  return `<div class="n"><span class="st ${esc(st)}"></span><span class="nm">${esc(s.project)}</span>${s.host ? `<span class="host" data-tip="${esc(`Runs on ${s.host}, another machine (over SSH)`)}">${icon('i-remote', 'ico10')}${esc(s.host)}</span>` : ''}${nal ? `<span class="b alert">${nal}</span>` : na ? `<span class="b">${na} agent${na > 1 ? 's' : ''}</span>` : ''}</div>
       <div class="m">${esc(s.lead?.state?.label || st)} · ${ago(s.lead?.state?.since || s.status_since, now)}</div>
       <div class="m">${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) + (unseen(s) ? ' · no terminal' : '') : 'not in tmux'} · v${esc(s.version)}</div>`;
 }
@@ -362,6 +365,13 @@ function renderRail(m) {
   setT($('railCount'), ss.length < all.length ? shown : `${shown} session${all.length === 1 ? '' : 's'}`);   // "2 of 4": short enough for a narrow rail
   $('railCount').dataset.tip = `${shown} session${all.length === 1 ? '' : 's'} · ${nt} in tmux${all.length > ss.length ? ` · ${all.length - ss.length} with no terminal hidden` : ''}`;
   $('rail').classList.toggle('custom', settings.railSort === 'custom');
+  // another machine gets a line only while its link is not live, so a lost link never passes for a quiet machine
+  const hh = (m?.server?.remotes || []).filter(r => r.state !== 'live').map(r => {
+    const what = r.state === 'down' ? 'not reachable' : 'connecting…';
+    const tip = `${r.name}, over SSH · ${r.state} since ${hhmm(r.since)}${r.error ? '\n' + r.error : ''}`;
+    return `<div class="hostrow" data-tip="${esc(tip)}"><span class="hd ${esc(r.state)}"></span>${esc(r.name)} · ${what}</div>`;
+  }).join('');
+  if ($('hosts').innerHTML !== hh) $('hosts').innerHTML = hh;
   const list = railEntries(ss);
   for (const { s, key } of list) {          // contents: every tick, each card only when its text changed
     let b = railCards.get(key);
@@ -369,8 +379,8 @@ function renderRail(m) {
     const h = cardHtml(s, alerts, m.now);
     if (b._html !== h) { b.innerHTML = h; b._html = h; }
     b.dataset.sid = s.id; b.classList.toggle('on', s.id === S.sid); b.classList.toggle('unseen', unseen(s));
-    b.setAttribute('aria-label', `${s.project}, ${s.lead?.state?.label || s.status}${unseen(s) ? ', no terminal open' : ''}`);
-    if (unseen(s)) b.dataset.tip = `No terminal shows this tmux session (its window was closed). It still runs; to see it: tmux attach -t ${s.tmux.session}`;
+    b.setAttribute('aria-label', `${pname(s)}, ${s.lead?.state?.label || s.status}${unseen(s) ? ', no terminal open' : ''}`);
+    if (unseen(s)) b.dataset.tip = `No terminal shows this tmux session (its window was closed). It still runs; to see it: ${s.host ? `ssh -t ${s.host} ` : ''}tmux attach -t ${s.tmux.session}`;
     else delete b.dataset.tip;
   }
   if (S.railDrag) { S.railDirty = true; return; }   // never reorder under a card being dragged
@@ -2326,7 +2336,7 @@ function agentPanel(s, id) {
              : `<div class="pmeta">${from}${t0 ? ' · started ' + hhmm(t0) : ''} · active ${ago(n.last_ts, now)}</div>`;
   } else {
     h += `<div class="kv"><span>Session</span><span>${esc(s.status)} since ${hhmm(s.status_since)} · active ${ago(n.last_ts, now)}</span>`;
-    h += `<span>Pane</span><span>${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) : 'not in tmux'}</span>`;
+    h += `<span>Pane</span><span>${s.host ? esc(s.host) + ' · ' : ''}${s.tmux ? 'tmux ' + esc(s.tmux.session) + ':' + esc(s.tmux.pane) : 'not in tmux'}</span>`;
     h += `<span>Perms</span><span>${s.perm_mode ? esc(s.perm_mode) + ' · ' : ''}v${esc(s.version)} · pid ${s.pid}</span></div>`;
   }
   const context = () => secH('ctx', 'Context') + pbar(pct, lvl)
@@ -2856,7 +2866,7 @@ function renderTimeline(s) {
   svg.removeAttribute('viewBox'); svg.style.height = H + 'px';
   svg.innerHTML = '<defs><marker id="tlArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto"><path class="tl-ah" d="M0,0L10,5L0,10z"/></marker></defs>' + h;
   const nEv = lanes.concat(fin).reduce((k, id) => k + ((s.events || {})[id] || []).filter(e => e[0] >= t0).length, 0);
-  setT($('tlTitle'), `${s.project} · last ${dur(span)} · ${nEv} tool calls · ${(s.messages || []).filter(m => m.t >= t0).length} messages`);
+  setT($('tlTitle'), `${pname(s)} · last ${dur(span)} · ${nEv} tool calls · ${(s.messages || []).filter(m => m.t >= t0).length} messages`);
 }
 $('tl').addEventListener('click', e => { const l = e.target.closest('[data-lane]'); if (l && l.dataset.lane !== 'fin') select(l.dataset.lane); });
 new ResizeObserver(() => { if (S.model) renderTimeline(cur()); }).observe($('tl'));

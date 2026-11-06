@@ -129,6 +129,12 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .sess .n .nm { overflow: hidden; text-overflow: ellipsis; }
 .sess .m { color: var(--muted); font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sess .b { margin-left: auto; font-size: 10px; font-weight: 500; color: var(--muted); border: 1px solid var(--line2); border-radius: 9px; padding: 0 6px; }
+.sess .host { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 500; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 45%, transparent); border-radius: 9px; padding: 0 6px; }
+.sess .host .ico10 { width: 10px; height: 10px; flex: none; }
+.hosts:empty { display: none; }
+.hostrow { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; padding: 2px 4px; white-space: nowrap; }
+.hostrow .hd { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--amber); }
+.hostrow .hd.down { background: var(--red); }
 .sess .b.alert { color: #fff; background: var(--red); border-color: var(--red); }
 .st { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--slate); }
 .st.busy { background: var(--green); } .st.idle { background: var(--amber); } .st.dead { background: var(--red); } .st.shell { background: var(--cyan); }

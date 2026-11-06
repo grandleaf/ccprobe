@@ -5,15 +5,29 @@
     python3 ccprobe.py --open     ... and open it in the browser
     python3 ccprobe.py --url      print the URL with the token and exit
     python3 ccprobe.py --once     run one collection and print the model as JSON (for debugging)
+    python3 ccprobe.py --remote ubuntu    ... and show the sessions of another machine too, over SSH (repeatable; with
+                                  no --remote, the hosts listed in ~/.config/ccprobe/remotes, one per line)
 """
 import argparse
 import ipaddress
 import json
+import os
 import re
 import subprocess
 import sys
 
-from ccprobe import model, server
+from ccprobe import model, remote, server
+
+REMOTES_FILE = os.path.expanduser("~/.config/ccprobe/remotes")
+
+
+def remotes_listed():
+    """The hosts in ~/.config/ccprobe/remotes: one SSH destination (or name=destination) per line, # for comments."""
+    try:
+        with open(REMOTES_FILE) as f:
+            return [x.split("#")[0].strip() for x in f if x.split("#")[0].strip()]
+    except OSError:
+        return []
 
 
 def duration(s):
@@ -36,6 +50,9 @@ def main():
     ap.add_argument("--open", action="store_true", help="open the dashboard in the default browser")
     ap.add_argument("--url", action="store_true", help="print the dashboard URL with its token and exit")
     ap.add_argument("--once", action="store_true", help="collect once, print the model as JSON, exit")
+    ap.add_argument("--remote", action="append", metavar="HOST",
+                    help="also show this machine's sessions, over SSH (key login; nothing is installed there)")
+    ap.add_argument("--no-remotes", action="store_true", help=f"ignore {REMOTES_FILE}")
     a = ap.parse_args()
 
     try:
@@ -61,9 +78,15 @@ def main():
         print(json.dumps(col.tick(), indent=1, default=str))
         return
 
-    httpd = server.Server((a.host, a.port), server.make_handler(col, token, a.port, use_token=not a.no_token, host=a.host))
+    specs = a.remote or ([] if a.no_remotes else remotes_listed())
+    opts = {"window": a.window, "ctx_max": a.ctx_max, "interval": a.interval}
+    hub = remote.Hub(col, [])
+    hub.remotes = [remote.Remote(x, opts, hub.wake) for x in dict.fromkeys(specs)]
+    httpd = server.Server((a.host, a.port), server.make_handler(hub, token, a.port, use_token=not a.no_token, host=a.host))
     server.run_collector(col, a.interval)
-    print(f"ccprobe {model.VERSION} · read-only · {url}", flush=True)
+    for r in hub.remotes:
+        r.start()
+    print(f"ccprobe {model.VERSION} · read-only · {url}" + (f" · also {', '.join(r.name for r in hub.remotes)}" if hub.remotes else ""), flush=True)
     if a.open:
         subprocess.run(["open", url], check=False)
     try:
@@ -72,6 +95,7 @@ def main():
         pass
     finally:
         col.stopping = True
+        hub.stop()
         httpd.server_close()
 
 

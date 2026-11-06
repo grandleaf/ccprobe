@@ -672,3 +672,26 @@ task they say what was done far better than the transcript, so ccprobe shows the
   file. The model carries only the notes' time (each WTS row's `notes`, each agent's `notes: {n, t}`), so the page
   fetches a document again only when it changes.
 
+## 22. Other machines over SSH (2026-11-05)
+- `--remote HOST` (repeatable; else `~/.config/ccprobe/remotes`, one SSH destination or `name=destination` per line)
+  adds another machine's sessions to the page. The first was a Linux box with its own Claude Code sessions.
+- **The far side** (`remote.py`): `ssh -T -o BatchMode=yes HOST python3 -u -c <boot> <options>`. The boot code is a
+  base64 string, so there is no shell quoting to get wrong. It reads this package's source from stdin's first line,
+  imports it through a meta-path finder, and runs `serve_stdio`. That runs the ordinary `Collector` on the far machine's
+  own `~/.claude` and writes JSON lines to stdout: `model` when the digest changes, `ping` every 5 s otherwise. It reads
+  questions from stdin (`agent`, `feed`, `notes`, `pic`) and answers each with a `reply` carrying its id. On stdin EOF
+  it exits. It installs nothing, writes nothing (no bytecode, no token) and listens on no port. A test runs it from the
+  pipe with an empty home and checks that no file appears.
+- **This side:** a `Remote` per host keeps the SSH child, the latest model and the questions in flight. A link silent
+  for 30 s is killed. A lost one is retried after 3 s, doubling up to 60 s, and its sessions stay on screen for 30 s, so
+  a blip does not empty the rail. The `Hub` gives the server the collector's interface. Its snapshot is the local model
+  plus each remote's sessions (tagged `host`), alerts (keys prefixed with the host, `project` given `@host`) and today's
+  tokens (summed), with `server.remotes` holding each link's state. Panel questions go to the machine that owns the
+  session, and panel questions for a dead link get no answer (404).
+- **The page:** a chip after the session's name on its rail card, a globe icon and the host (its tooltip says it runs
+  on another machine), `project @host` in the timeline title, the tokens popover and
+  alerts, the host before the tmux pane in the lead's panel, `ssh -t HOST tmux attach …` in the hint for an unseen
+  session, and a line under the session list for a link that is not live (amber connecting, red down; the tooltip holds
+  the error). A live link shows no line. Rail keys are `host:cwd` for remote sessions, so the same directory on two machines stays two cards.
+- Timestamps are used as they come: the machines keep their clocks in step (NTP). On 2026-11-05 the Linux box was
+  0.3 s ahead.
