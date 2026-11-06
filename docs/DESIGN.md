@@ -674,7 +674,9 @@ task they say what was done far better than the transcript, so ccprobe shows the
 
 ## 22. Other machines over SSH (2026-11-05)
 - `--remote HOST` (repeatable; else `~/.config/ccprobe/remotes`, one SSH destination or `name=destination` per line)
-  adds another machine's sessions to the page. The first was a Linux box with its own Claude Code sessions.
+  adds another machine's sessions to the page. The first was a Linux box with its own Claude Code sessions. Two
+  remotes that come to the same name are refused at startup, since the name keys a machine's cards, alerts and status
+  line.
 - **The far side** (`remote.py`): `ssh -T -o BatchMode=yes HOST python3 -u -c <boot> <options>`. The boot code is a
   base64 string, so there is no shell quoting to get wrong. It reads this package's source from stdin's first line,
   imports it through a meta-path finder, and runs `serve_stdio`. That runs the ordinary `Collector` on the far machine's

@@ -81,7 +81,10 @@ def main():
     specs = a.remote or ([] if a.no_remotes else remotes_listed())
     opts = {"window": a.window, "ctx_max": a.ctx_max, "interval": a.interval}
     hub = remote.Hub(col, [])
-    hub.remotes = [remote.Remote(x, opts, hub.wake) for x in dict.fromkeys(specs)]
+    try:
+        hub.remotes = remote.remotes_for(specs, opts, hub.wake)
+    except ValueError as e:
+        sys.exit(f"ccprobe: {e}")
     httpd = server.Server((a.host, a.port), server.make_handler(hub, token, a.port, use_token=not a.no_token, host=a.host))
     server.run_collector(col, a.interval)
     for r in hub.remotes:

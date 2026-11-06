@@ -125,6 +125,20 @@ def serve_stdio(opts):
 
 
 # ---- this side -------------------------------------------------------------------------------------------------------
+def remotes_for(specs, opts, wake):
+    """One Remote per spec (a repeated spec counts once). Two specs that come to the same name are refused: the name
+    keys a machine's cards, alerts and status line, so they would collide."""
+    out, by_name = [], {}
+    for spec in dict.fromkeys(specs):
+        r = Remote(spec, opts, wake)
+        if r.name in by_name:
+            raise ValueError(f'"{spec}" and "{by_name[r.name]}" are both named "{r.name}": '
+                             f'give one another name, as in "{r.name}2={r.dest}"')
+        by_name[r.name] = spec
+        out.append(r)
+    return out
+
+
 class Remote:
     """One machine reached over SSH: its latest model, the link's state, and the questions waiting for answers."""
 

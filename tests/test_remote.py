@@ -95,6 +95,14 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(r.command()[-2], "me@192.0.2.9")
         self.assertEqual(remote.Remote("ubuntu", {}, lambda: None).name, "ubuntu")
 
+    def test_two_specs_with_one_name_are_refused(self):
+        rs = remote.remotes_for(["ubuntu", "ubuntu", "box=me@192.0.2.9"], {}, lambda: None)
+        self.assertEqual([r.name for r in rs], ["ubuntu", "box"])          # a repeated spec counts once
+        with self.assertRaisesRegex(ValueError, 'both named "ubuntu"'):
+            remote.remotes_for(["ubuntu", "me@ubuntu"], {}, lambda: None)
+        with self.assertRaisesRegex(ValueError, 'both named "box"'):
+            remote.remotes_for(["box=me@192.0.2.9", "box=me@192.0.2.10"], {}, lambda: None)
+
 
 if __name__ == "__main__":
     unittest.main()
