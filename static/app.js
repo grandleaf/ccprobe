@@ -219,7 +219,7 @@ function renderHeader(m, s) {
         : `<span class="chip c-green" data-tip="No build is running (the build lock is free)">${icon('i-build')}<span>Build free</span></span>`;
     for (const g of ['HP', 'MP', 'LP']) {
       const { text, tip } = groupHead(w, g), [i, c] = modeLook(text), lt = limitTag(w, g), tips = [tip, lt?.tip].filter(Boolean).join('\n');
-      h += `<span class="chip c-${c}"${tips ? ` data-tip="${esc(tips)}"` : ''}>${icon(i)}${g} ${esc(text)}${lt ? `<span class="lim">${esc(lt.text)}</span>` : ''}</span>`;
+      h += `<span class="chip c-${c}"${tips ? ` data-tip="${esc(tips)}"` : ''}>${icon(i)}${g} ${esc(text)}${lt ? `<span class="lim c-${lt.col}">${esc(lt.text)}</span>` : ''}</span>`;
     }
     h += `<span class="chip c-${w.caffeinate ? 'green' : 'amber'}" data-tip="caffeinate keeps the Mac awake">${icon('i-cup')}${w.caffeinate ? 'awake' : 'may sleep'}</span>`;
   }
@@ -2553,8 +2553,8 @@ function limitTag(w, g) {
   const l = w.limits?.[g];
   if (!l || l.max == null) return null;
   const key = g.toLowerCase() + '_parallel';
-  if (l.max === 0) return { text: 'max 0', tip: `${g} starts nothing new: ${key} is 0 in config.json${l.running ? ` (the ${l.running} in hand finish)` : ''}` };
-  return { text: `${l.running}/${l.max}`, tip: `${l.running} in hand, at most ${l.max} at once (${key} in config.json)${l.running >= l.max ? ': full, the next waits for one to finish' : ''}` };
+  if (l.max === 0) return { text: 'max 0', col: 'amber', tip: `${g} starts nothing new: ${key} is 0 in config.json${l.running ? ` (the ${l.running} in hand finish)` : ''}` };
+  return { text: `${l.running}/${l.max}`, col: 'green', tip: `${l.running} in hand, at most ${l.max} at once (${key} in config.json)${l.running >= l.max ? ': full, the next waits for one to finish' : ''}` };
 }
 function groupHead(w, g) {
   const rows = (w.groups || {})[g] || [], mode = g === 'HP' ? (w.hp_line || '').replace(/^[^\w]+/, '') : (w.modes || {})[g] || 'running';
@@ -2588,7 +2588,7 @@ function wtsPanel(s) {
     const runs = [...new Set(rows.map(r => r.runs_on))];
     const { text: head, tip } = groupHead(w, g), [mi, mc] = modeLook(head);
     const lt = limitTag(w, g);
-    h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(mi)}${esc(head || '—')}</span>${lt ? `<span class="lim" data-tip="${esc(lt.tip)}">${esc(lt.text)}</span>` : ''}${runs.length === 1 ? `<span class="gm">${esc(runs[0])}</span>` : ''}</div>`;
+    h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(mi)}${esc(head || '—')}</span>${lt ? `<span class="lim c-${lt.col}" data-tip="${esc(lt.tip)}">${esc(lt.text)}</span>` : ''}${runs.length === 1 ? `<span class="gm">${esc(runs[0])}</span>` : ''}</div>`;
     if (!rows.length) h += '<div class="empty-note">empty</div>';
     for (const r of rows) {
       const { ri, rc, html: stHtml, a, run } = rowState(s, r, now);
