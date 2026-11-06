@@ -133,6 +133,14 @@ class TaskPatternTests(unittest.TestCase):
         self.assertIsNone(_hp_of_desc({"description": "hp178b: x", "name": "adv178"}, rows))   # a name says who it is
         self.assertIsNone(_hp_of_desc({"description": "hp178b: x", "spawnDepth": 2}, rows))   # a helper's helper
 
+    def test_notes_only_once_written(self):   # an unnamed "HP 282: …" worker before its first note crashed the session
+        from ccprobe.model import _notes_of
+        meta = {"description": "HP 282: fix the thing"}
+        self.assertIsNone(_notes_of(None, meta, {}))
+        self.assertIsNone(_notes_of(282, meta, {281: 5.0}))
+        self.assertEqual(_notes_of(None, meta, {282: 5.0}), {"n": 282, "t": 5.0})
+        self.assertEqual(_notes_of(281, meta, {281: 4.0, 282: 5.0}), {"n": 281, "t": 4.0})   # its row's task first
+
     def test_a_helper_described_by_its_name(self):
         from ccprobe.model import _task_of_meta
         rows = {191: {"group": "HP"}}

@@ -347,7 +347,7 @@ class Collector:
         for c in in_view:
             aid, meta, tr = c["id"], c["meta"], trs[c["id"]]
             n = task_of.get(aid)
-            nn = n if n in nidx else _task_of_meta(meta, nidx)     # the task whose notes it wrote (its row may be gone)
+            notes = _notes_of(n, meta, nidx)
             row = rows.get(n) if n is not None else None
             row_open = (row["kind"] in wts_mod.OPEN) if row else None
             st = agent_state(tr, now, alive=s["alive"], lock_names=lock_names, is_holder=aid in held_by, row_open=row_open,
@@ -397,7 +397,7 @@ class Collector:
                 "state": st, "ctx": tr.ctx, "ctx_max": self.ctx_max, "said": tr.said, "recent": list(tr.recent),
                 "last_ts": tr.last_ts, "born": c["birth"], "finished": finished,
                 "qstate": list(tr.qstate)[-3:], "compactions": [x[0] for x in tr.compactions if now - x[0] <= self.window_s],
-                "talked": talked.get(aid, 0), "anchor": None, "helps": n if n is not None else _task_of_meta(meta, rows), "notes": {"n": nn, "t": nidx[nn]} if nn is not None else None,
+                "talked": talked.get(aid, 0), "anchor": None, "helps": n if n is not None else _task_of_meta(meta, rows), "notes": notes,
             })
         by_id = {a["id"]: a for a in agents}
 
@@ -601,6 +601,13 @@ def _hp_of_desc(meta, rows):
     m = RE_HP_DESC_NAME.match(d)
     r = rows.get(int(m.group(1))) if m else None
     return int(m.group(1)) if isinstance(r, dict) and r.get("group") == "HP" else None
+
+
+def _notes_of(n, meta, nidx):
+    """The notes an agent wrote: its task's, or (its row may be gone) the task its name or description names. Only a
+    notes file that exists: an unnamed "HP 282: …" worker has none until it writes its first note."""
+    nn = n if n in nidx else _task_of_meta(meta, nidx)
+    return {"n": nn, "t": nidx[nn]} if nn in nidx else None
 
 
 def _task_of_meta(meta, rows, primary=False):
