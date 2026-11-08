@@ -101,6 +101,17 @@ class StateTests(Base):
         st = agent_state(self.tr(), self.now, row_open=True)
         self.assertEqual((st["key"], st["sub"]), ("ended", "waiting"))
 
+    def test_a_call_beside_the_handback_answers_after_it(self):
+        # one message: write the state file, then hand back; the write's result lands after the hand-back
+        t = self.now - 1600
+        self.w.add(tool_use(t, "b1", "Bash", {"command": "echo done > state"}), tool_use(t + 15, "h1", "SubagentHandback", {"message": "done"}),
+                   result(t + 16, "b1"), result(t + 16, "h1"))
+        st = agent_state(self.tr(), self.now, row_open=False)
+        self.assertEqual((st["key"], st["sub"]), ("ended", "done"))      # not "stuck? silent 26m"
+        # a new call after it is new work again
+        self.w.add(tool_use(self.now - 10, "b2", "Read", {"file_path": "a"}), result(self.now - 9, "b2"))
+        self.assertEqual(agent_state(self.tr(), self.now)["key"], "thinking")
+
     def test_midturn_text_is_not_an_end(self):  # audit B1
         self.w.add(text(self.now - 5, "Let me check."))
         self.assertEqual(agent_state(self.tr(), self.now)["key"], "thinking")

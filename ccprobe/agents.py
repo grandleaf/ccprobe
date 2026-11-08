@@ -112,6 +112,7 @@ class Transcript:
         self.tail = Tailer(path, backfill, since=since, max_backfill=max_backfill)
         self.pending = {}                      # tool_use_id -> {name, arg, cmd, t, timeout}
         self.handbacks = set()                 # tool_use ids of SubagentHandback calls (their results are not news)
+        self.handed_back = False               # it has handed back and made no call since: a late result is not new work
         self.bg_pending = {}                   # background Bash tool_use_id -> start time
         self.last_ts = 0.0                     # newest conversational entry's own timestamp
         self.last_activity = 0.0               # newest conversational entry or model call (api-request)
@@ -243,7 +244,9 @@ class Transcript:
             self.messages.append({"t": t, "kind": "handback", "to": None, "to_id": None,
                                   "summary": first_line(inp.get("message", ""), 140), "tid": tid})
             self.last_kind = "handback"
+            self.handed_back = True
             return
+        self.handed_back = False
         cmd = str(inp.get("command") or "") if name == "Bash" else ""
         bg = name == "Bash" and inp.get("run_in_background") in (True, "true")
         if tid and not bg:
@@ -308,6 +311,7 @@ class Transcript:
                     self.last_kind = "turn_end"  # a local slash command (/compact, /model …) is done: back to the user
                     return
                 self._touch(t)
+                self.handed_back = False
                 self.last_kind = "user"          # a prompt typed into this session
         known = [i for i in ids if i in self.pending]
         res = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
@@ -345,7 +349,8 @@ class Transcript:
         # a result for a call we never saw pending (a hand-back's, or one from before the backfill) is not news
         if known:
             self._touch(t)
-            self.last_kind = "result"
+            # a call made beside the hand-back (both in one message) can answer after it: the agent is still done
+            self.last_kind = "handback" if self.handed_back and not self.pending else "result"
 
     def _received(self, origin, text, t):
         kind = origin.get("kind")
@@ -353,6 +358,7 @@ class Transcript:
             self.bg_pending.pop(tid, None)
             self.bg_desc.pop(tid, None)
             self.bg_cmd.pop(tid, None)
+        self.handed_back = False
         self.received.append({"t": t, "kind": kind, "from": origin.get("from"), "sender": origin.get("senderTaskId"),
                               "handback": bool(origin.get("handback"))})
         self.last_kind = "received"
