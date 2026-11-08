@@ -724,3 +724,33 @@ task they say what was done far better than the transcript, so ccprobe shows the
 - Both paths from `config.json` are read only inside the project.
 - **The registry's status time:** a registry entry with no `statusUpdatedAt` takes its `updatedAt`, else the file's
   own time, so no state reads "since 1970".
+
+
+## 24. Plan limits (2026-11-08)
+
+- **Source.** Claude Code passes `rate_limits` (`five_hour`, `seven_day`, sometimes a model's own `seven_day_<model>`,
+  each `{used_percentage, resets_at}` in Unix seconds) only to the status line command on its stdin; no file under
+  `~/.claude` keeps it, and the plan-usage endpoint needs the login token, which ccprobe never touches. So the status
+  line saves the object to `~/.cache/ccprobe/rate-limits.json` (`$XDG_CACHE_HOME` honoured) and `ccprobe/plan.py` reads
+  it: a regular file of at most 64 KB, parsed again only when its time or size changes, never served as it is. The
+  file's time is the reading's time (`seen`).
+- **Stale sessions.** Every session draws its status line (here once a second), and an idle one keeps the figure from
+  its last reply: 23% from two days back beside a busy session's 70% made the file flip each second. The writer keeps
+  per window the later `resets_at` and, for the same one, the higher figure (use only grows inside a window), drops
+  windows whose reset has passed, and writes only on a change or once a minute.
+- **Model.** `plan`: `{seen, windows: [{key, label, span, used, resets_at}]}` (5-hour first, then the week, then any
+  model's own week); used capped to 0–100; milliseconds and ISO times read as times. A remote's own reading is not
+  merged: the local one stands.
+- **Header.** The tokens chip and the plan chip moved out of `#chips` into `#acct`, after a divider: account-wide, never
+  squeezed when the session's chips run out of room. The plan chip: gauge icon, `week`, an SVG bar (the CSP allows no
+  inline style) filled to the used share with a tick at the even pace `(now − (resets_at − span)) / span`, and `N% used`.
+  Colour: red from 90%, amber from 75% or when the linear pace since the window's start reaches 100% before the reset
+  (forecast only after 4% of the window has gone by), else green; slate once the window reset after the reading.
+  Other windows at 80%+ get a badge. Dimmed after 15 minutes with no new reading.
+- **Room in the header.** The account chips never shrink; they shorten by width instead: at 1700 px and under "out"
+  and "used" go (`983k today`, `week ▬ 71%`), at 1440 px and under the bar goes too. Of the session's chips only the
+  window chip (flex-shrink 8: its holder text first) and the calm ones, "Build free" and "awake" (`.soft`), shrink, down
+  to their icons (34 px, 70 px for two slots); a group chip (HP, MP, LP) keeps its whole text and limit badge.
+- **Popover.** Clicking either account chip opens one popover: "Plan limits" (each window's bar, figure, reset and
+  pace) above "Tokens today".
+

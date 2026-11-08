@@ -137,6 +137,29 @@ What you see:
   The **chip at the top** shows today's output across all sessions since 00:00 (including transcripts of sessions that
   are no longer running); click it for each session's share. Counting reads each transcript once, on its own thread
   (several GB take a few seconds), then only what it gains.
+- **Plan limits** (top right, beside today's tokens, apart from the session's own chips: every session shares them). The
+  chip shows the weekly limit as the status line's `week 61%` does, with a bar filled to what is used and a tick where
+  an even pace would be by now. It is amber once 75% is used or when this pace runs out before the reset, red from
+  90%. Any other limit at 80% or more gets a badge (`5h 88%`, or a model's own weekly limit, `Opus 91%`). The tooltip
+  says what is left, when it resets and where this pace leads ("runs out around Mon 16:40", or "about 52% by the
+  reset"); click it for each window. Claude Code gives these figures only to the status line command, so the status
+  line has to save them: after it reads its JSON input `d` (Python), add
+
+  ```python
+  import json, os
+  rl = d.get("rate_limits")          # {"five_hour": {...}, "seven_day": {"used_percentage": 61, "resets_at": ...}}
+  if rl:
+      p = os.path.expanduser("~/.cache/ccprobe/rate-limits.json")
+      os.makedirs(os.path.dirname(p), exist_ok=True)
+      with open(p + ".tmp", "w") as f:
+          json.dump({"rate_limits": rl}, f)
+      os.replace(p + ".tmp", p)
+  ```
+
+  Without the file there is no chip. An idle session keeps passing on the figure from its last reply, so a status line
+  that runs in several sessions should keep, per window, the later `resets_at` and for the same one the higher figure
+  (the worker skill's `statusline.sh` does, and writes only on a change or once a minute). The chip dims when nothing
+  was saved for 15 minutes, and says when a window has reset since the reading.
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
   auto-hide done agents, show all relationships, compact nodes, notifications. A first visit starts dark, with
   auto-hide and all relationships on, motion Full (Reduced when the OS asks for less motion), timeline 45m.

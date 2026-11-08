@@ -9,6 +9,7 @@ import time
 
 from . import alerts as alerts_mod
 from . import feed as feed_mod
+from . import plan as plan_mod
 from . import sessions as sessions_mod
 from . import tokens as tokens_mod
 from . import wts as wts_mod
@@ -106,7 +107,7 @@ class Collector:
             "v": 1, "now": now,
             "server": {"version": VERSION, "started": self.started, "tick_ms": 0, "window_s": self.window_s,
                        "history_s": HISTORY_S, "error": self.last_error, "parser": dict(stats, unknown_types=unknown)},
-            "sessions": out, "alerts": alerts, "tokens_today": self.books.today(),
+            "sessions": out, "alerts": alerts, "tokens_today": self.books.today(), "plan": plan_mod.read(),
         }
         # the change hash leaves out the clock, so an idle system pushes nothing new (audit minor 7)
         body = json.dumps({"s": out, "a": alerts}, sort_keys=True, default=str)

@@ -216,19 +216,23 @@ function renderHeader(m, s) {
     if (w.build)   // a build beside the app holds its own lock, not the window (config "build_lock")
       h += w.build.held
         ? `<span class="chip win held c-amber" data-tip="${esc('Build lock held by ' + w.build.who)}">${icon('i-build')}<span>Build: ${esc(briefWho(w.build.who))} · ${dur(m.now - (w.build.since || m.now))}</span></span>`
-        : `<span class="chip c-green" data-tip="No build is running (the build lock is free)">${icon('i-build')}<span>Build free</span></span>`;
+        : `<span class="chip soft c-green" data-tip="No build is running (the build lock is free)">${icon('i-build')}<span>Build free</span></span>`;
     for (const g of ['HP', 'MP', 'LP']) {
       const { text, tip } = groupHead(w, g), [i, c] = modeLook(text), lt = limitTag(w, g), tips = [tip, lt?.tip].filter(Boolean).join('\n');
       h += `<span class="chip c-${c}"${tips ? ` data-tip="${esc(tips)}"` : ''}>${icon(i)}${g} ${esc(text)}${lt ? `<span class="lim c-${lt.col}">${esc(lt.text)}</span>` : ''}</span>`;
     }
-    h += `<span class="chip c-${w.caffeinate ? 'green' : 'amber'}" data-tip="caffeinate keeps the Mac awake">${icon('i-cup')}${w.caffeinate ? 'awake' : 'may sleep'}</span>`;
+    h += `<span class="chip soft c-${w.caffeinate ? 'green' : 'amber'}" data-tip="caffeinate keeps the Mac awake">${icon('i-cup')}<span>${w.caffeinate ? 'awake' : 'may sleep'}</span></span>`;
   }
+  if ($('chips').innerHTML !== h) $('chips').innerHTML = h;
+  // the account's own, beside this session's: today's tokens and the plan's limits (every session shares them)
+  h = '';
   const tt = m?.tokens_today;
   if (tt && tt.n) {
     const v = tt.v;
-    h += `<button class="chip tok" id="tokChip" aria-haspopup="true" data-tip="${esc(`Today since 00:00 · all sessions${tt.ready ? '' : ' (still counting)'}\nOutput ${exact(v[3])} · fresh in ${tfmt(v[0] + v[1])} · cache read ${tfmt(v[2])}\n${exact(tt.n)} replies · click for each session`)}">${icon('i-tokens')}${tfmt(v[3])} out today</button>`;
+    h += `<button class="chip tok" id="tokChip" aria-haspopup="true" data-tip="${esc(`Today since 00:00 · all sessions${tt.ready ? '' : ' (still counting)'}\nOutput ${exact(v[3])} · fresh in ${tfmt(v[0] + v[1])} · cache read ${tfmt(v[2])}\n${exact(tt.n)} replies · click for each session`)}">${icon('i-tokens')}${tfmt(v[3])}<span class="wide"> out</span> today</button>`;
   }
-  if ($('chips').innerHTML !== h) $('chips').innerHTML = h;
+  h += planChip(m);
+  if ($('acct').innerHTML !== h) $('acct').innerHTML = h;
   if (!$('tokPop').hidden) renderTokPop(m);
   const live = liveAlerts(m);
   const n = live.length;
@@ -244,12 +248,12 @@ function renderHeader(m, s) {
 }
 // today's tokens per session (the chip's popover); clicking one opens its Tokens tab
 function renderTokPop(m) {
-  const tt = m?.tokens_today;
-  if (!tt) return;
+  const tt = m?.tokens_today, pl = planPop(m);
+  if (!tt || !tt.n) { if (pl && $('tokPop').innerHTML !== pl) $('tokPop').innerHTML = pl; return; }
   const ss = (m.sessions || []).filter(s => s.tokens && s.tokens.today && s.tokens.today.some(Boolean))
     .sort((a, b) => b.tokens.today[3] - a.tokens.today[3]);
   const known = [0, 0, 0, 0];
-  let h = `<div class="pop-h">Tokens today <span class="pmeta">since 00:00</span></div><div class="tkpop"><span></span><span>out</span><span>in</span><span>read</span>`;
+  let h = pl + `<div class="pop-h">Tokens today <span class="pmeta">since 00:00</span></div><div class="tkpop"><span></span><span>out</span><span>in</span><span>read</span>`;
   for (const s of ss) {
     const v = s.tokens.today;
     v.forEach((x, i) => { known[i] += x; });
@@ -260,6 +264,65 @@ function renderTokPop(m) {
   h += `<b>all</b><b>${tfmt(tt.v[3])}</b><b>${tfmt(tt.v[0] + tt.v[1])}</b><b>${tfmt(tt.v[2])}</b></div>`;
   h += `<div class="pop-foot">out: what the models wrote (thinking included) · in: input + cache writes · read: cache reads</div>`;
   if ($('tokPop').innerHTML !== h) $('tokPop').innerHTML = h;
+}
+// ---- the plan's limits: the 5-hour and weekly windows, as a Claude Code status line last saw them (ccprobe/plan.py) ----
+const PLAN_OLD = 900;    // no status line has saved a reading for 15 min: no session is drawing one (the figure is "as of")
+const dayHm = t => new Date(t * 1000).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const durDh = s => s >= 86400 ? `${Math.floor(s / 86400)}d ${Math.floor(s % 86400 / 3600)}h` : dur(s);   // "3d 22h", not dur's "3d"
+// one window as of now: has it reset since the reading; where an even pace would be by now (%); where this pace leads:
+// `out`, when it runs out before the reset, else `atReset`, about how much by the reset (only once a little of the
+// window has gone by, so an early burst does not read as a forecast)
+function planWin(x, now) {
+  const reset = !!x.resets_at && x.resets_at <= now;
+  const start = x.resets_at ? x.resets_at - x.span : null, gone = start != null ? Math.min(1, Math.max(0, (now - start) / x.span)) : null;
+  let out = null, atReset = null;
+  if (!reset && gone > 0.04 && x.used > 0 && x.used < 100) {
+    const t100 = start + (now - start) * 100 / x.used;            // the same rate from the window's start to 100%
+    if (t100 < x.resets_at) out = t100; else atReset = Math.min(100, x.used / gone);
+  }
+  const col = reset ? 'slate' : x.used >= 90 ? 'red' : x.used >= 75 || out ? 'amber' : 'green';
+  return { ...x, reset, even: gone == null ? null : gone * 100, out, atReset, col };
+}
+const planWins = m => (m?.plan?.windows || []).map(x => planWin(x, m.now));
+const planName = x => x.key === 'seven_day' ? 'Weekly limit' : x.key === 'five_hour' ? '5-hour limit' : x.label.replace(/^week/, 'Weekly limit').replace(/^5-hour/, '5-hour limit');
+// the bar: filled to what is used, a tick where an even pace would be by now (SVG attributes: the page allows no inline style)
+const planBar = x => `<svg class="meter c-${x.col}" aria-hidden="true"><rect class="bg" y="2" width="100%" height="6" rx="3"/>`
+  + `<rect class="fg" y="2" width="${x.reset ? 0 : x.used.toFixed(1)}%" height="6" rx="3"/>`
+  + (x.even != null && !x.reset ? `<rect class="tick" x="${Math.min(x.even, 99).toFixed(1)}%" width="2" height="10" rx="1"/>` : '') + '</svg>';
+function planLines(x, now) {
+  if (x.reset) return [`It reset at ${dayHm(x.resets_at)}, after this reading: the next status line gives the new figure`];
+  const l = [`${Math.round(x.used)}% used, ${Math.round(100 - x.used)}% left`];
+  if (x.resets_at) l.push(`Resets ${dayHm(x.resets_at)} (in ${durDh(x.resets_at - now)})`);
+  if (x.out) l.push(`At this pace it runs out around ${dayHm(x.out)}, ${durDh(x.resets_at - x.out)} before the reset`);
+  else if (x.atReset != null) l.push(`At this pace about ${Math.round(x.atReset)}% by the reset`);
+  if (x.even != null) l.push(`An even pace would be ${Math.round(x.even)}% by now (the tick)`);
+  return l;
+}
+// the header chip: the weekly limit (as the status line's "week 61%"), and beside it any other limit once it is 80% used
+// (the 5-hour one: "5h 88%"; a model's own weekly one: "Opus 91%")
+function planChip(m) {
+  const ws = planWins(m);
+  if (!ws.length) return '';
+  const main = ws.find(x => x.key === 'seven_day') || ws.find(x => x.span >= 86400) || ws[0];
+  const near = ws.filter(x => x !== main && !x.reset && x.used >= 80), old = m.now - m.plan.seen > PLAN_OLD;
+  const tip = [planName(main) + ': ' + planLines(main, m.now).join('\n')];
+  for (const x of ws) if (x !== main) tip.push(`${planName(x)}: ${x.reset ? 'reset since' : Math.round(x.used) + '% used'}${x.resets_at && !x.reset ? ' · resets ' + dayHm(x.resets_at) : ''}`);
+  tip.push(`As of ${hhmm(m.plan.seen)}${old ? ' (no session has drawn its status line since)' : ''}, from a Claude session's status line · click for details`);
+  return `<button class="chip plan c-${main.col}${old ? ' old' : ''}" id="planChip" aria-haspopup="true" data-tip="${esc(tip.join('\n'))}">${icon('i-gauge')}<span>${esc(main.label)}</span>${planBar(main)}<span>${main.reset ? 'reset' : Math.round(main.used) + '%<span class="wide"> used</span>'}</span>`
+    + near.map(x => `<span class="lim c-${x.col}">${esc(x.key === 'five_hour' ? '5h' : x.label.replace(/^(week|5-hour) · /, ''))} ${Math.round(x.used)}%</span>`).join('') + '</button>';
+}
+// the popover's first part: each window with its bar, when it resets and where this pace leads
+function planPop(m) {
+  const ws = planWins(m);
+  if (!ws.length) return '';
+  const old = m.now - m.plan.seen > PLAN_OLD;
+  let h = `<div class="pop-h">Plan limits <span class="pmeta">as of ${hhmm(m.plan.seen)}${old ? ' · no session drawing' : ''}</span></div><div class="plpop">`;
+  for (const x of ws) {
+    const [, ...more] = planLines(x, m.now);
+    h += `<span class="pl-n">${esc(x.label)}</span>${planBar(x)}<span class="pl-v c-${x.col}">${x.reset ? 'reset' : Math.round(x.used) + '%'}</span>`
+      + `<span class="pl-d">${esc(x.reset ? planLines(x, m.now)[0] : more.filter(t => !/^An even pace/.test(t)).join(' · '))}</span>`;
+  }
+  return h + `</div><div class="pop-foot">The bar is what is used; the tick, an even pace. Saved by the status line (README: "Plan limits").</div><div class="pop-sep"></div>`;
 }
 // a session's name, with the machine it runs on when that is not this one
 const pname = s => s.project + (s.host ? ' @' + s.host : '');
@@ -2914,7 +2977,7 @@ function showTip(anchor, text) {
 function hideTip() { clearTimeout(tipTimer); $('tip').hidden = true; S.tipAnchor = null; }
 document.addEventListener('mouseover', e => {
   const t = e.target.closest('[data-tip]');
-  if (t && !t.closest('#graph') && !(t.id === 'tokChip' && !$('tokPop').hidden)) showTip(t, t.dataset.tip);   // no tip over its own popover
+  if (t && !t.closest('#graph') && !((t.id === 'tokChip' || t.id === 'planChip') && !$('tokPop').hidden)) showTip(t, t.dataset.tip);   // no tip over its own popover
 });
 document.addEventListener('mouseout', e => { if (e.target.closest('[data-tip]')) hideTip(); });
 
@@ -2949,7 +3012,7 @@ document.addEventListener('click', e => {
     return;
   }
   const tp = $('tokPop');
-  if (e.target.closest('#tokChip')) { tp.hidden = !tp.hidden; hideTip(); renderTokPop(S.model); return; }
+  if (e.target.closest('#tokChip, #planChip')) { tp.hidden = !tp.hidden; hideTip(); renderTokPop(S.model); return; }
   const ts = e.target.closest('[data-tksid]');
   if (ts) { tp.hidden = true; selectSession(ts.dataset.tksid); S.tab = 'tokens'; renderPanel(); return; }
   if (!tp.hidden && !e.target.closest('#tokPop')) tp.hidden = true;

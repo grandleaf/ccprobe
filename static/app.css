@@ -56,12 +56,38 @@ svg use { pointer-events: none; }
 .chips { display: flex; gap: 8px; min-width: 0; overflow: hidden; flex: 1; justify-content: flex-end; }
 .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line2); border-radius: 6px; padding: 2px 9px; background: var(--surface); white-space: nowrap; min-width: 0; }
 .chip svg { width: 12px; height: 12px; flex: none; color: var(--c, var(--muted)); }
-.chip.win { flex-shrink: 1; overflow: hidden; } .chip.win span { overflow: hidden; text-overflow: ellipsis; }
+.chip.win { flex-shrink: 8; overflow: hidden; } .chip.win span { overflow: hidden; text-overflow: ellipsis; }
+/* short of room, the window chip (its holder text ends in …) and the calm ones ("Build free", "awake") give way, down to
+   their icons; a group chip never loses its limit badge */
+.chips > .chip:not(.win):not(.soft) { flex-shrink: 0; }
+.chip.win, .chip .slot, .chip.soft { min-width: 34px; }
+.chip.slots { min-width: 70px; }   /* two slots: both lock icons stay */
+.chip.soft { flex-shrink: 1; overflow: hidden; } .chip.soft > span { overflow: hidden; text-overflow: ellipsis; }
 .chip.held { border-color: color-mix(in srgb, var(--red) 45%, var(--line2)); }
 /* two window slots: a segment each, its icon red (held) or green (free) */
 .chip.slots { padding: 0; gap: 0; }
 .chip .slot { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; min-width: 0; }
 .chip .slot + .slot { border-left: 1px solid var(--line2); }
+/* the account's own, apart from this session's chips: today's tokens and the plan's limits (never squeezed) */
+.acct { display: flex; gap: 8px; flex: none; padding-left: 14px; border-left: 1px solid var(--line); }
+.acct:empty { display: none; }
+/* a plan limit's bar: filled to what is used, a tick where an even pace would be by now */
+.meter { display: block; width: 46px; height: 10px; flex: none; overflow: visible; }
+.chip svg.meter { width: 46px; height: 10px; }
+.meter .bg { fill: color-mix(in srgb, var(--c, var(--muted)) 20%, transparent); }
+.meter .fg { fill: var(--c, var(--muted)); }
+.meter .tick { fill: var(--text); opacity: .8; }
+.chip.plan { color: var(--text); }
+.chip.plan > span:last-of-type:not(.lim) { color: var(--c); font-weight: 600; }
+.chip.plan.old { opacity: .7; }
+/* a narrower window: the account chips give up the bar and the extra words first, so the session's chips keep room */
+@media (max-width: 1700px) { .acct .chip .wide { display: none; } }
+@media (max-width: 1440px) { .chip.plan .meter { display: none; } .acct { gap: 6px; padding-left: 10px; } }
+.plpop { display: grid; grid-template-columns: auto 1fr auto; gap: 3px 10px; align-items: center; font-variant-numeric: tabular-nums; }
+.plpop .meter { width: 100%; }
+.pl-n { color: var(--text-strong); }
+.pl-v { color: var(--c); font-weight: 700; text-align: right; }
+.pl-d { grid-column: 1 / -1; color: var(--muted); font-size: 11.5px; margin-bottom: 6px; }
 .iconbtn { position: relative; width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); flex: none; }
 .iconbtn:hover { background: var(--surface); color: var(--text); }
 .iconbtn svg { width: 16px; height: 16px; }
