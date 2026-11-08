@@ -50,11 +50,33 @@ class LockTests(unittest.TestCase):
         def rows(*kinds):
             return [{"n": i, "kind": k} for i, k in enumerate(kinds)]
         groups = {"HP": rows("active", "active", "queued", "done"), "MP": rows("active", "queued"), "LP": rows("queued")}
-        lim = wts.apply_limits({"hp_parallel": 5, "mp_parallel": 0, "lp_parallel": True}, groups)
-        self.assertEqual(lim, {"HP": {"max": 5, "running": 2}, "MP": {"max": 0, "running": 1}, "LP": {"max": None, "running": 0}})
-        self.assertEqual([r["held"] for r in groups["HP"]], [False] * 4)        # room left: nothing held
-        self.assertEqual([r["held"] for r in groups["MP"]], [False, True])      # max 0: the running one goes on, none starts
-        self.assertEqual([r["held"] for r in groups["LP"]], [False])            # no max set (true is not a number)
+        d = wts.limit_defaults({"hp_parallel": 5, "mp_parallel": 0, "lp_parallel": True})
+        self.assertEqual(d, {"HP": 5, "MP": 0, "LP": None})                     # true is not a number: no limit
+        self.assertEqual(wts.limit_defaults({})["HP"], 1)                       # queue.py's default for a session
+        self.assertEqual(wts.limit_defaults({}, per_session=False)["HP"], None)  # an older queue.py: none
+        lim = wts.apply_limits(d, groups)
+        self.assertEqual(lim, {"HP": {"max": 5, "running": 2, "src": "default"}, "MP": {"max": 0, "running": 1, "src": "default"},
+                               "LP": {"max": None, "running": 0, "src": "default"}})
+        self.assertEqual(wts.held_rows(lim, groups), {1})                         # MP max 0: the running one goes on, none starts
+        self.assertNotIn("held", groups["MP"][1])                                 # the shared rows are not changed
+
+    def test_a_sessions_own_limits(self):
+        groups = {"HP": [{"n": 7, "kind": "active"}, {"n": 8, "kind": "active"}, {"n": 9, "kind": "queued"}],
+                  "MP": [{"n": 20, "kind": "queued"}], "LP": [{"n": 30, "kind": "queued"}]}
+        defaults = {"HP": 0, "MP": 0, "LP": 0}
+        folder = os.path.join(self.root, wts.SESSIONS)
+        os.makedirs(folder)
+        with open(os.path.join(folder, "abc-1.json"), "w") as f:
+            json.dump({"limits": {"HP": 2, "MP": None}, "hp": "running 7"}, f)
+        own = wts.read_session(self.root, "abc-1")
+        lim = wts.apply_limits(defaults, groups, own)
+        self.assertEqual(lim["HP"], {"max": 2, "running": 1, "src": "session"})   # its own running list (8 is another's)
+        self.assertEqual(lim["MP"], {"max": None, "running": 0, "src": "session"})  # null: no limit for this session
+        self.assertEqual(lim["LP"], {"max": 0, "running": 0, "src": "default"})
+        self.assertEqual(wts.held_rows(lim, groups), {30})
+        self.assertEqual(wts.read_session(self.root, "nobody"), {})
+        self.assertEqual(wts.read_session(self.root, ""), {})
+        self.assertEqual(wts.session_file(self.root, "../x"), os.path.join(folder, "___x.json"))   # never outside
 
 
 class RegistryTests(unittest.TestCase):

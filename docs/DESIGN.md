@@ -710,12 +710,17 @@ task they say what was done far better than the transcript, so ccprobe shows the
   ignored. Each ticket is matched to its agent as a lock holder is; that agent, holding no slot and otherwise busy (or
   idle with a background job, whose job it is), shows "waiting for the window" from the ticket's time, and is named
   among the waiters.
-- **Each table's limit:** `hp_parallel`, `mp_parallel` and `lp_parallel` in `config.json` are the most tasks the lead
-  runs at once in that table. The header's HP, MP and LP chips and the WTS tab's table headings carry a small badge:
+- **Each table's limit:** the most tasks the lead runs at once in that table. Since 2026-11-07 the worker skill keeps
+  them per Claude session: `.autopilot/worker/sessions/<session id>.json` (`limits`: `{"HP": 2, "MP": null}`, null
+  meaning no limit; `hp`: that session's own `running 12 15`). `hp_parallel`, `mp_parallel` and `lp_parallel` in
+  `config.json` are only the defaults for a session that set none (HP 1 when absent). Each lead's page reads its own
+  file (by the registry's `sessionId`; a regular file inside the project, at most 64 KB, read never written, though
+  queue.py itself prunes old ones); HP's in hand count is the session's own running list when it has one, else every
+  active HP row. With an older queue.py (no per-session limits) config.json is the limit, as before. The header's HP, MP and LP chips and the WTS tab's table headings carry a small badge:
   in hand over the limit (`3/5`; the tooltip says when it is full), or `max 0` when the table starts nothing new (the
   user's way to hold a table: the tasks in hand finish). With `max 0` the table's queued rows are held (⏸ "held · max
   0", not next in line) and the HP queue card says how many are held; with the limit reached it says "next N when one
-  finishes". No limit in the config, no badge.
+  finishes". No limit, no badge.
 - Both paths from `config.json` are read only inside the project.
 - **The registry's status time:** a registry entry with no `statusUpdatedAt` takes its `updatedAt`, else the file's
   own time, so no state reads "since 1970".

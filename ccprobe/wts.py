@@ -1,5 +1,6 @@
 """Read-only bridge to the worker skill's queue.py, so ccprobe's WTS and `queue.py wts` can never disagree."""
 import importlib.util
+import json
 import os
 import re
 import stat
@@ -89,18 +90,77 @@ def waiting_line(root, rel):
     return sorted(out, key=lambda x: x["since"])[:20]
 
 
-def apply_limits(cfg, groups):
-    """Each table's most tasks at once (config.json "hp_parallel", "mp_parallel", "lp_parallel"; the lead keeps to them)
-    beside how many are in hand: {HP: {max, running}, …}, max None when the config sets none. A table whose max is 0
-    starts nothing new (the running ones finish): its queued rows are marked held, so none reads as next."""
+LIMIT_KEYS = {"HP": "hp_parallel", "MP": "mp_parallel", "LP": "lp_parallel"}
+SESSIONS = os.path.join(".autopilot", "worker", "sessions")
+
+
+def _count(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
+def limit_defaults(cfg, per_session=True):
+    """Each table's limit for a session that has set none: config.json's hp_/mp_/lp_parallel. Since the per-session
+    limits (worker skill, 2026-11-07) an absent HP key means 1, as queue.py's default_limit says; before them, none."""
+    out = {}
+    for g, key in LIMIT_KEYS.items():
+        v = cfg.get(key)
+        out[g] = 1 if v is None and g == "HP" and per_session else _count(v)
+    return out
+
+
+def session_file(root, sid):
+    """<root>/.autopilot/worker/sessions/<sid>.json, the name made safe as queue.py makes it."""
+    return os.path.join(root, SESSIONS, re.sub(r"[^A-Za-z0-9_-]", "_", sid) + ".json")
+
+
+def read_session(root, sid):
+    """One Claude session's own settings in this project ({} when it has none): a regular file inside the project,
+    at most 64 KB. Read only, never written (queue.py also drops old files; ccprobe never does)."""
+    if not sid:
+        return {}
+    path = session_file(root, sid)
+    if not _inside(root, path):
+        return {}
+
+    def load():
+        try:
+            st = os.stat(path)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > 65536:
+                return {}
+            with open(path) as f:
+                d = json.load(f)
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+    return _cached(("session", path), 2, load)
+
+
+def apply_limits(defaults, groups, session=None):
+    """Each table's most tasks at once beside how many are in hand: {HP: {max, running, src}, …}. The limit is the
+    session's own (sessions/<id>.json "limits", src "session"; null there means no limit), else the default
+    (src "default"); max None: no limit. HP's in hand are the session's own ("hp": "running 12 15") when it says, else
+    every active HP row. Rows are not changed: `held_rows` says which ones a max of 0 holds."""
+    session = session or {}
+    own = session.get("limits") if isinstance(session.get("limits"), dict) else {}
+    hp = session.get("hp") if isinstance(session.get("hp"), str) else ""
     out = {}
     for g, rows in groups.items():
-        v = cfg.get(f"{g.lower()}_parallel")
-        mx = v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
-        out[g] = {"max": mx, "running": sum(1 for r in rows if r["kind"] == "active")}
-        for r in rows:
-            r["held"] = mx == 0 and r["kind"] == "queued"
+        if g in own:
+            mx, src = _count(own[g]), "session"
+        else:
+            mx, src = defaults.get(g), "default"
+        running = sum(1 for r in rows if r["kind"] == "active")
+        if g == "HP" and hp.startswith("running"):
+            running = len(hp.split()[1:])
+        out[g] = {"max": mx, "running": running, "src": src}
     return out
+
+
+def held_rows(limits, groups):
+    """The queued rows of a table whose max is 0: it starts nothing new (the running ones finish), so none reads as
+    next."""
+    return {r["n"] for g, rows in groups.items() if (limits.get(g) or {}).get("max") == 0
+            for r in rows if r["kind"] == "queued"}
 
 
 def build_lock(root, rel):
@@ -320,7 +380,8 @@ def read(root):
                             "kind": m.Queue.kind(r) if r else "other", "state": _clip(redact(r["state"]) if r else "", 300),
                             "task": _clip(redact(_plain(r["task"])) if r else "", 600), "notes": nidx.get(int(n))})
             groups[pri] = out
-        limits = apply_limits(q.cfg, groups)
+        per_session = hasattr(q, "read_session")
+        defaults = limit_defaults(q.cfg, per_session)
         # the window slots: "locks" (a list, two game windows side by side) or the one "lock"; older queue.py has only the one
         if hasattr(q, "lock_paths"):
             lock_paths = q.lock_paths()
@@ -350,7 +411,8 @@ def read(root):
             "window": {"held": any(x["held"] for x in slots), "full": all(x["held"] or x["reserved"] for x in slots),
                        "slots": slots, "waiters": [],
                        "line": waiting_line(root, q.cfg.get("window_queue") or WINDOW_QUEUE)},
-            "groups": groups, "limits": limits,
+            "groups": groups, "limit_defaults": defaults, "per_session": per_session,
+            "limits": apply_limits(defaults, groups),    # a lead's own limits replace these (model: session_limits)
             "worker_model": q.cfg.get("worker_model"),
         }
         _last_good[root] = (len(rows), res)

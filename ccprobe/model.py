@@ -467,7 +467,7 @@ class Collector:
 
         wpub = None
         if w:
-            wpub = {k: v for k, v in w.items() if k != "lock_paths"}
+            wpub = {k: v for k, v in w.items() if k not in ("lock_paths", "limit_defaults", "per_session")}
             wpub["lock_names"] = list(lock_names)
             if w.get("build"):
                 wpub["build"] = dict(w["build"], who=redact(w["build"]["who"] or "") or None)
@@ -475,7 +475,12 @@ class Collector:
                 wpub["window"] = dict(win, slots=[dict(x, who=redact(x["who"] or "") or None) for x in slots],
                                       line=[dict(x, who=redact(x["who"])) for x in line],
                                       waiters=[a["id"] for a in agents if a["state"]["key"] == "waiting_window"])
-                wpub["groups"] = {g: [dict(r, agent=agent_of_row.get(r["n"])) for r in rs] for g, rs in w["groups"].items()}
+                # each table's limit is this lead's own (the worker skill keeps one per Claude session since 2026-11-07)
+                own = wts_mod.read_session(w["root"], s.get("sessionId") or "") if w.get("per_session") else {}
+                wpub["limits"] = wts_mod.apply_limits(w["limit_defaults"], w["groups"], own)
+                held = wts_mod.held_rows(wpub["limits"], w["groups"])
+                wpub["groups"] = {g: [dict(r, agent=agent_of_row.get(r["n"]), held=r["n"] in held) for r in rs]
+                                  for g, rs in w["groups"].items()}
 
         lead = {"state": lead_state(main, s, now), "ctx": main.ctx if main else 0, "ctx_max": self.ctx_max,
                 "model": main.model if main else None, "said": main.said if main else "",

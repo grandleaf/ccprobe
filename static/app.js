@@ -2501,7 +2501,7 @@ function taskRun(s, n, a, kind) {
   return (wr.last_ts ?? wr.born) > own.last_ts ? wr : own;   // writes after the agent's last step: a later stretch
 }
 function rowStatus(r, now, run, wrote) {   // wrote: when the row's State was last written, if known
-  // a queued row in a table whose max is 0 (config.json): held like a paused one, not next in line
+  // a queued row in a table whose max is 0 (this session's limit): held like a paused one, not next in line
   if (r.held) return { ri: ROWKIND.paused[0], rc: ROWKIND.paused[1], html: '<span class="sr">queued, </span>held · max 0' };
   const [ri, rc] = r.kind === 'parked' && /waiting for the window/i.test(r.status) ? STATUS.waiting_window : ROWKIND[r.kind] || ROWKIND.other;
   const [head, ...extra] = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '').split(' · ');
@@ -2547,14 +2547,14 @@ const modeLook = t => /idle/i.test(t) ? ['i-idle', 'slate'] : /running/i.test(t)
 // done rows wait only for the user, paused ones for a resume). A paused HP worker or MP/LP group with paused rows
 // stays paused: that is the user's own stop. The tip keeps the mode the file says.
 const CANRUN = ['active', 'queued', 'other', 'parked', 'asks'];
-// a table's most tasks at once (config.json hp_/mp_/lp_parallel), beside how many are in hand: "3/5"; "max 0" when
-// it starts nothing new; null when the config sets none
+// a table's most tasks at once, beside how many are in hand: "3/5"; "max 0" when it starts nothing new; null with no
+// limit. The limit is this lead session's own (`queue.py limit hp 2`), else config.json's hp_/mp_/lp_parallel default
 function limitTag(w, g) {
   const l = w.limits?.[g];
   if (!l || l.max == null) return null;
-  const key = g.toLowerCase() + '_parallel';
-  if (l.max === 0) return { text: 'max 0', col: 'amber', tip: `${g} starts nothing new: ${key} is 0 in config.json${l.running ? ` (the ${l.running} in hand finish)` : ''}` };
-  return { text: `${l.running}/${l.max}`, col: 'green', tip: `${l.running} in hand, at most ${l.max} at once (${key} in config.json)${l.running >= l.max ? ': full, the next waits for one to finish' : ''}` };
+  const from = l.src === 'session' ? 'set for this session' : `the default: ${g.toLowerCase()}_parallel in config.json`;
+  if (l.max === 0) return { text: 'max 0', col: 'amber', tip: `${g} starts nothing new: its max is 0 (${from})${l.running ? ` · the ${l.running} in hand finish` : ''}` };
+  return { text: `${l.running}/${l.max}`, col: 'green', tip: `${l.running} in hand, at most ${l.max} at once (${from})${l.running >= l.max ? ': full, the next waits for one to finish' : ''}` };
 }
 function groupHead(w, g) {
   const rows = (w.groups || {})[g] || [], mode = g === 'HP' ? (w.hp_line || '').replace(/^[^\w]+/, '') : (w.modes || {})[g] || 'running';
@@ -2598,18 +2598,22 @@ function wtsPanel(s) {
       h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(r.task)}">
         <span class="n">${r.n}${nb}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : r.kind === 'done' ? ' pill ring' : ''}" data-tip="${esc(r.status + (['done', 'active'].includes(r.kind) && run?.born ? `\n${a ? 'its agent ' + a.label : 'worked on'}: ${whenHM(run.born, now)}–${run.last_ts ? whenHM(run.last_ts, now) : 'now'}` : ''))}">${icon(ri)}<span>${stHtml}</span></span>`;
       if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
-      if (a) {
+      // the row's agent, on a line of its own: what it is doing now. Named only when it is not the row's own agent
+      // ("HP 296" under row 296 says nothing new); none for an agent that is done under a done row (the row says so)
+      const quiet = a && a.state.key === 'ended' && a.state.sub === 'done' && ['done', 'closed'].includes(r.kind);
+      if (a && !quiet) {
         const [ai, ac] = stLook(a.state), am = markOf(a);
         const mismatch = (r.kind === 'active' && ['dead', 'stuck'].includes(a.state.key)) ||
           (['paused', 'parked'].includes(r.kind) && a.state.key === 'running' && !/window/.test(a.state.label));
+        const who = a.label === `${g} ${r.n}` ? '' : esc(a.label) + ': ', tip = ` data-tip="${esc('Its agent: ' + a.label)}"`;
         if (holds) {   // its agent line in the window's colours: red with the lock (holds it), amber with the window (waits)
           const also = /^holds /.test(a.state.label) ? '' : ' · ' + a.state.label;
-          h += `<span class="obs win c-${slotCol(mine[0])}">${icon('i-lock')}agent ${esc(a.label)}: ${holdsText(w, mine)} · ${dur(now - heldSince(w, mine))}${esc(also)}</span>`;
+          h += `<span class="obs win c-${slotCol(mine[0])}"${tip}>${icon('i-lock')}${who}${holdsText(w, mine)} · ${dur(now - heldSince(w, mine))}${esc(also)}</span>`;
         } else if (a.state.key === 'waiting_window') {
-          h += `<span class="obs win s-window">${icon('i-window')}agent ${esc(a.label)}: ${esc(a.state.label)}</span>`;
+          h += `<span class="obs win s-window"${tip}>${icon('i-window')}${who}${esc(a.state.label)}</span>`;
         } else
-        h += `<span class="obs${mismatch ? ' mismatch' : ''}">agent ${esc(a.label)}: <span class="${am ? 'mk s-' + am : 'c-' + ac}">${icon(am ? MARK[am] : ai)}</span>${esc(a.state.label)}${mismatch ? ' · does not match the row' : ''}</span>`;
-      } else if (r.kind === 'active') {
+        h += `<span class="obs${mismatch ? ' mismatch' : ''}"${tip}>${who}<span class="${am ? 'mk s-' + am : 'c-' + ac}">${icon(am ? MARK[am] : ai)}</span>${esc(a.state.label)}${mismatch ? ' · does not match the row' : ''}</span>`;
+      } else if (!a && r.kind === 'active') {
         h += `<span class="obs">no agent seen for this row</span>`;
       }
       h += '</div>';
