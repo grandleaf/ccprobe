@@ -367,11 +367,14 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
 - **Agent tab** (revised 2026-10-24, §19): title and status; description · model; from <parent> · started · active;
   Now; task cell with the Brief fold; context; Report; files changed; recent tools; messages.
 - **WTS tab:**
-  - the window line as a neutral row (holder · since hh:mm:ss · waiters);
   - group headers `HP · ⏵ running 152 · Worker (Opus 5.5)`, `MP · desk-only`, `LP · desk-only`;
     a group none of whose rows can run (only done rows, or paused ones under a running mode, or none) reads `idle`
     (moon), here and in the header chips; the tip keeps the mode its file says;
-  - a sticky jump bar `HP 17 · MP 6 · LP 3`;
+  - a sticky bar: the jumps `HP 17 · MP 6 · LP 3` on the left, the window slots, the waiters and the build lock
+    on the right (2026-11-08: they had a line each, three lines for `win0 free`, `win1 free`, `Build free`). A free one
+    is its name by a green open lock, no box (`win0 win1 build` fits a 380 px panel beside the jumps); a held
+    one is a pill in its colour, `win0 · hp202 capture · 5m`, the tip saying since when and which agent; the
+    waiters a violet pill. When they do not fit beside the jumps they take a line of their own, still on the right;
   - icon rows. The current row is expanded, and queued rows are one line that expands on click.
   - Clicking a row with an agent selects it in the graph and flashes the node.
   - Next to a bound row's State it shows that agent's **observed** state, e.g. `in progress 17:04 · agent: running
@@ -703,7 +706,7 @@ task they say what was done far better than the transcript, so ccprobe shows the
 ## 23. Build lock, waiting line, each table's limit (2026-11-05)
 - **Build lock:** a `build_lock` in the worker's `config.json` names a lock a build beside the app holds instead of the
   window. The header has a chip for it (amber with its holder and age while held, green "Build free"), and the WTS tab
-  a line under the window lines. No `build_lock`, no chip.
+  a pill after the window slots. No `build_lock`, no chip.
 - **The waiting line:** a script that waits for a window slot inside one Bash call looks busy in the transcript. A
   project's window script may leave a ticket while it waits: a file in `.autopilot/winq` (or config `window_queue`)
   named `<unix time>.<pid>`, holding the who text it will write into the lock. Tickets whose process is gone are

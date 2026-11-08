@@ -317,13 +317,22 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 .panel .empty-note { color: var(--muted); }
 
 /* WTS */
-.winrows { display: flex; flex-direction: column; gap: 6px; }
-.winrow { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); }
-.winrow svg { width: 13px; height: 13px; color: var(--c); flex: none; }
-.winrow.s-window svg { color: var(--s); }
-.winrow .w { overflow-wrap: anywhere; }
-.jump { position: sticky; top: -14px; background: var(--panel); padding: 8px 0; display: flex; gap: 12px; z-index: 1; }
-.jump a { color: var(--c, var(--cyan)); text-decoration: none; cursor: pointer; font-weight: 600; padding: 1px 8px; border-radius: 6px;
+/* the bar at the top of the tab: the jumps to each table on the left, the window slots, the waiters and the build lock
+   on the right (free: a name by a green icon, no box; held or waiting: a pill filled in its colour). When the locks
+   do not fit beside the jumps they take a line of their own, still on the right */
+.jump { position: sticky; top: -14px; background: var(--panel); padding: 8px 0; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 8px 5px; z-index: 1; }
+.wpills { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; min-width: 0; margin-left: auto;
+  padding-left: 12px; }
+.wpill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 11px;
+  line-height: 18px; white-space: nowrap; color: var(--muted); border: 1px solid transparent; }
+.wpill:not(.held) { padding-inline: 0; }
+.wpill svg { width: 11px; height: 11px; flex: none; color: var(--c); }
+.wpill.held { color: var(--c); font-weight: 600; background: color-mix(in srgb, var(--c) 14%, transparent);
+  border-color: color-mix(in srgb, var(--c) 55%, transparent); }
+.wpill.s-window { --c: var(--s); }
+.wpill b { font-weight: 700; }
+.jump a { color: var(--c, var(--cyan)); text-decoration: none; cursor: pointer; font-weight: 600; padding: 1px 7px; border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--c, var(--cyan)) 50%, transparent); }
 .jump a:hover { background: color-mix(in srgb, var(--c, var(--cyan)) 16%, transparent); }
 .gh { display: flex; align-items: center; gap: 8px; margin: 18px 0 4px; padding-bottom: 6px; color: var(--text-strong);

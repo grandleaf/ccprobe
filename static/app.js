@@ -2634,17 +2634,25 @@ function wtsPanel(s) {
   const now = S.model.now, win = w.window || {};
   const agents = new Map((s.agents || []).map(a => [a.id, a]));
   const nm = id => id === 'lead' ? 'lead' : (agents.get(id)?.label || '?');
-  // a line per window slot; with several, the agents waiting (for any of them) get their own line
-  const slots = winSlots(w), waiting = (win.waiters || []).map(id => esc(nm(id))).join(', ');
-  let h = '<div class="winrows">' + slots.map((x, i) => `<div class="winrow c-${slotLook(x, i)[0]}">${icon(slotLook(x, i)[1])}<span class="w">${x.held
-    ? `${slotName(w, i)} held by <b>${esc(shortWho(x.who))}</b> since ${hhmm(x.since, 1)} (${dur(now - (x.since || now))})${x.holder ? ' · ' + esc(nm(x.holder)) : ''}`
-    : `${slotName(w, i)} ${x.reserved ? 'free, kept for your shows' : 'free'}`}${x.held && x.reserved ? ' · reserved for your shows' : ''}${waiting && slots.length < 2 ? ' · waiting: ' + waiting : ''}</span></div>`).join('')
-    + (waiting && slots.length > 1 ? `<div class="winrow s-window">${icon('i-window')}<span class="w">Waiting for a window: ${waiting}</span></div>` : '')
-    + (w.build ? `<div class="winrow c-${w.build.held ? 'amber' : 'green'}">${icon('i-build')}<span class="w">${w.build.held
-      ? `Build held by <b>${esc(shortWho(w.build.who))}</b> since ${hhmm(w.build.since, 1)} (${dur(now - (w.build.since || now))})`
-      : 'Build free'}</span></div>` : '') + '</div>';
-  const counts = ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${(w.groups[g] || []).length}</a>`).join('');
-  h += `<div class="jump">${counts}</div>`;
+  // one bar: the jumps to each table, then the window slots, the waiters and the build lock (the user, 2026-11-08: "win0
+  // free, win1 free and build free took 3 lines ... compact it into one line"). A free one is just its name by a green
+  // open lock (slate: kept for your shows); a held one a pill in its colour with who and how long; the tip has the rest.
+  // The jumps on the left, the locks on the right (the user, 2026-11-08). It stays at the top while the tables scroll
+  const slots = winSlots(w), waiters = (win.waiters || []).map(nm);
+  const since = (t, who, x) => `held by ${shortWho(who)} since ${hhmm(t, 1)} (${dur(now - (t || now))})${x ? ' · its agent ' + x : ''}`;
+  const pill = (col, ic, text, tip, held) => `<span class="wpill c-${col}${held ? ' held' : ''}" data-tip="${esc(tip)}">${icon(ic)}<span>${text}</span></span>`;
+  let h = '<div class="jump">' + ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${(w.groups[g] || []).length}</a>`).join('')
+    + '<span class="wpills">' + slots.map((x, i) => {
+      const [col, ic] = slotLook(x, i), name = slotName(w, i);
+      if (!x.held) return pill(col, ic, name, `${name}${x.name ? ' (' + x.name + ')' : ''}: free${x.reserved ? ', kept for your shows: no worker takes it' : ''}`);
+      return pill(col, ic, `${name} · <b>${esc(briefWho(x.who))}</b> · ${dur(now - (x.since || now))}`,
+        `${name}${x.name ? ' (' + x.name + ')' : ''}: ${since(x.since, x.who, x.holder ? nm(x.holder) : '')}${x.reserved ? '\nreserved for your shows' : ''}`, 1);
+    }).join('')
+    + (waiters.length ? `<span class="wpill s-window held" data-tip="${esc('Waiting for ' + (slots.length > 1 ? 'a window' : 'the window') + ': ' + waiters.join(', '))}">${icon('i-window')}<span>waiting: ${esc(waiters.join(', '))}</span></span>` : '')
+    + (w.build ? (w.build.held
+      ? pill('amber', 'i-build', `build · <b>${esc(briefWho(w.build.who))}</b> · ${dur(now - (w.build.since || now))}`, 'The build lock: ' + since(w.build.since, w.build.who), 1)
+      : pill('green', 'i-build', 'build', 'No build is running (the build lock is free)')) : '')
+    + '</span></div>';
   const running = new Set(((w.state_file || '').match(/^running((?:\s+\d+)+)/) || ['', ''])[1].split(/\s+/).filter(Boolean).map(Number));
   for (const g of ['HP', 'MP', 'LP']) {
     const rows = w.groups[g] || [];

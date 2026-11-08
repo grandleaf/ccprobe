@@ -111,8 +111,9 @@ What you see:
   A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
   Under a row, a line says what its agent is doing now (`▶ Bash · 2m`); the agent is named only when it is not the
   row's own (`hp291 (earlier): stopped by the lead`), and a done row whose agent is done has no line.
-  Its top has a line per window slot (held by whom, since when, which agent), and with several slots a line naming
-  the agents waiting for one. The row whose agent holds a window is red, as on the graph: a red edge and number, and
+  Its top is one bar that stays in view: the jumps to the HP, MP and LP tables, then each window slot, the agents
+  waiting and the build lock (a free one is just its name by a green open lock; a held one a pill with who and for
+  how long, its tip saying since when and which agent). The row whose agent holds a window is red, as on the graph: a red edge and number, and
   its agent line red with the lock (`holds the window · 4m`, or `holds win1 · 4m` with two slots); an
   agent waiting for the window has its line in violet with the window. A project whose worker config names a build lock
   gets a line for it too, and a header chip (who builds, for how long). An agent waiting in the project's waiting line
