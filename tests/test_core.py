@@ -289,6 +289,11 @@ class AlertTests(unittest.TestCase):
         rows = [{"n": 1, "kind": "queued", "status": "queued", "title": "t", "agent": None}]
         self.assertNotIn("caffeinate", self.keys(session([], rows, state_file="stopped", caf=False)))
         self.assertIn("caffeinate", self.keys(session([], rows, state_file="running 1", caf=False)))
+        # another session's keep-awake does not count: it lasts only while that session's work does (2026-11-08)
+        s = session([], rows, state_file="running 1", caf=False)
+        s["wts"]["awake_others"] = 1
+        got = [x for x in alerts.compute([s], time.time(), alerts.Memory()) if x["key"].startswith("caffeinate")]
+        self.assertTrue(got and "Another session" in got[0]["detail"], got)
 
     def test_desk_waiters_do_not_alert(self):
         a = agent("m", "waiting_window", group="MP")

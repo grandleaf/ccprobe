@@ -79,6 +79,15 @@ class LockTests(unittest.TestCase):
         self.assertEqual(wts.session_file(self.root, "../x"), os.path.join(folder, "___x.json"))   # never outside
 
 
+class AwakeTests(unittest.TestCase):
+    def test_each_session_its_own_keep_awake(self):   # the worker skill since 2026-11-08: one hold per Claude session
+        holds = {95522: 1, 0: 1}                           # a lead's, and one no session owns (left running)
+        self.assertEqual(wts.session_awake(95522, holds), {"mine": True, "others": 1})
+        self.assertEqual(wts.session_awake(7, holds), {"mine": False, "others": 2})
+        self.assertEqual(wts.session_awake(7, {}), {"mine": False, "others": 0})
+        self.assertEqual(wts.session_awake(None, holds), {"mine": False, "others": 2})
+
+
 class RegistryTests(unittest.TestCase):
     def test_status_time_falls_back_to_the_file(self):
         with tempfile.TemporaryDirectory() as home:

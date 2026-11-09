@@ -74,7 +74,8 @@ svg use { pointer-events: none; }
 /* a plan limit's bar: filled to what is used, a tick where an even pace would be by now */
 .meter { display: block; width: 46px; height: 10px; flex: none; overflow: visible; }
 .chip svg.meter { width: 46px; height: 10px; }
-.meter .bg { fill: color-mix(in srgb, var(--c, var(--muted)) 20%, transparent); }
+/* the track (the whole limit): neutral and outlined, so the part left shows beside any fill colour, even at 90% red */
+.meter .bg { fill: color-mix(in srgb, var(--muted) 30%, transparent); stroke: color-mix(in srgb, var(--muted) 75%, transparent); stroke-width: 1; }
 .meter .fg { fill: var(--c, var(--muted)); }
 .meter .tick { fill: var(--text); opacity: .8; }
 .chip.plan { color: var(--text); }
@@ -369,7 +370,10 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 .wrow.holds { box-shadow: inset 3px 0 0 var(--lk, var(--red)); } .wrow.holds .n { color: var(--lk, var(--red)); }
 .wrow .obs.win { color: var(--c); font-weight: 600; } .wrow .obs.win.s-window { color: var(--s); }
 .obs .mk { color: var(--s); } .wrow .obs.win svg { width: 11px; height: 11px; flex: none; }
-.wrow .ro { grid-column: 2 / 4; color: var(--dim); font-size: 11px; }
+/* a row on another model than its table's: a small tag before its title (the table's own model is in its heading) */
+.wrow .mtag { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 5px; font-size: 10.5px; line-height: 15px;
+  vertical-align: 1px; color: var(--muted); border: 1px solid var(--line); background: var(--surface); }
+.gh .gmx { color: var(--dim); }
 
 /* alerts */
 .alhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-height: 24px; margin-bottom: 10px; font-size: 11.5px; color: var(--muted); }

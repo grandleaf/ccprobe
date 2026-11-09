@@ -12,6 +12,7 @@ from .redact import redact
 from .sessions import alive
 
 QUEUE_PY = os.path.expanduser("~/.claude/skills/worker/scripts/queue.py")
+AWAKE_PY = os.path.join(os.path.dirname(QUEUE_PY), "awake.py")   # queue.py loads it (a session's keep-awake)
 PRIS = ("HP", "MP", "LP")
 OPEN = ("asks", "active", "paused", "parked", "queued", "other")
 _mod = {"mtime": None, "m": None, "error": None}
@@ -27,6 +28,10 @@ def queue_module():
     except OSError:
         _mod.update(m=None, error="queue.py not found")
         return None
+    try:
+        mt = (mt, os.path.getmtime(AWAKE_PY))   # queue.py loads awake.py when it loads: a change there reloads too
+    except OSError:
+        pass
     if mt != _mod["mtime"]:
         # never write __pycache__ into the skill's folder (ccprobe writes nothing outside its own files: audit M3)
         old, sys.dont_write_bytecode = sys.dont_write_bytecode, True
@@ -194,6 +199,31 @@ def caffeinated(m):
         except BaseException:
             return subprocess.run(["pgrep", "-x", "caffeinate"], capture_output=True).returncode == 0
     return _cached(("caf",), 5, probe)
+
+
+def awake_holds():
+    """{Claude session pid: its keep-awake holds} as queue.py sees them (the worker skill since 2026-11-08: each session
+    holds its own `caffeinate -dims -w <its pid>`; 0 is one no session owns). None with no caffeinate, or a queue.py
+    from before. Read only: ps, cached 5 s."""
+    m = queue_module()
+    fn = getattr(m, "awake_holds", None) if m else None
+    if not fn:
+        return None
+
+    def probe():
+        try:
+            return fn()
+        except BaseException:
+            return None
+    return _cached(("awake",), 5, probe)
+
+
+def session_awake(pid, holds=None):
+    """{"mine": this session holds one, "others": how many other sessions do}, or None (see awake_holds)."""
+    hs = awake_holds() if holds is None else holds
+    if hs is None:
+        return None
+    return {"mine": bool(pid and hs.get(pid)), "others": sum(1 for k in hs if k != pid)}
 
 
 def app_running(name):

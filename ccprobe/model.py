@@ -482,6 +482,11 @@ class Collector:
                 held = wts_mod.held_rows(wpub["limits"], w["groups"])
                 wpub["groups"] = {g: [dict(r, agent=agent_of_row.get(r["n"]), held=r["n"] in held) for r in rs]
                                   for g, rs in w["groups"].items()}
+                # the keep-awake is this lead's own (the worker skill since 2026-11-08: one per Claude session); another
+                # session's keeps the Mac awake only until that session is done
+                aw = wts_mod.session_awake(s.get("pid"))
+                if aw is not None:
+                    wpub["caffeinate"], wpub["awake_others"] = aw["mine"], aw["others"]
 
         lead = {"state": lead_state(main, s, now), "ctx": main.ctx if main else 0, "ctx_max": self.ctx_max,
                 "model": main.model if main else None, "said": main.said if main else "",

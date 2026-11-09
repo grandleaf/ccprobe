@@ -120,7 +120,8 @@ def compute(sessions, now, mem):
                 or any(a["state"]["key"] in BUSY for a in agents.values()))
         if not w.get("caffeinate") and busy:
             add(f"caffeinate:{root}", "amber", "caffeinate is off while work is running",
-                "The Mac may sleep and stop the agents.", s)
+                "Another session keeps the Mac awake for now, but only until its own work ends: the lead runs `queue.py awake on`."
+                if w.get("awake_others") else "The Mac may sleep and stop the agents.", s)
 
     for a in out:
         a["since"] = mem.first_seen.setdefault(a["key"], now)

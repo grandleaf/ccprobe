@@ -221,7 +221,14 @@ function renderHeader(m, s) {
       const { text, tip } = groupHead(w, g), [i, c] = modeLook(text), lt = limitTag(w, g), tips = [tip, lt?.tip].filter(Boolean).join('\n');
       h += `<span class="chip c-${c}"${tips ? ` data-tip="${esc(tips)}"` : ''}>${icon(i)}${g} ${esc(text)}${lt ? `<span class="lim c-${lt.col}">${esc(lt.text)}</span>` : ''}</span>`;
     }
-    h += `<span class="chip soft c-${w.caffeinate ? 'green' : 'amber'}" data-tip="caffeinate keeps the Mac awake">${icon('i-cup')}<span>${w.caffeinate ? 'awake' : 'may sleep'}</span></span>`;
+    if (w.caffeinate != null) {   // this lead's own keep-awake (one per Claude session since 2026-11-08); another session's
+      // lasts only while its work does. None: no caffeinate on that machine (Linux), so no chip
+      const o = w.awake_others || 0, others = `${o} other session${o === 1 ? '' : 's'}`;
+      const [col, txt, tip] = w.caffeinate ? ['green', 'awake', 'This session keeps the Mac awake (caffeinate)']
+        : o ? ['slate', 'awake (other)', `This session holds no keep-awake; ${others} keep${o === 1 ? 's' : ''} the Mac awake until their work ends`]
+        : ['amber', 'may sleep', 'No session keeps the Mac awake (caffeinate is off)'];
+      h += `<span class="chip soft c-${col}" data-tip="${esc(tip)}">${icon('i-cup')}<span>${txt}</span></span>`;
+    }
   }
   if ($('chips').innerHTML !== h) $('chips').innerHTML = h;
   // the account's own, beside this session's: today's tokens and the plan's limits (every session shares them)
@@ -2627,6 +2634,11 @@ function groupHead(w, g) {
   const left = rows.filter(r => r.kind === 'paused').map(r => r.n);
   return { text: 'idle', tip: `nothing to run${left.length ? ` (${left.join(', ')} paused)` : ''} · ${g === 'HP' ? 'the worker' : g} says ${label}` };
 }
+// a row's model tag, short: "Sonnet" beside a table on Opus 5.5 (the same version goes), "Sonnet 4.5" when it differs
+function modelTag(m, main) {
+  const bare = x => String(x || '').replace(/^Worker \((.*)\)$/, '$1'), v = x => (bare(x).match(/\s(\d[\d.]*)$/) || [])[1];
+  return v(m) && v(m) === v(main) ? bare(m).replace(/\s\d[\d.]*$/, '') : bare(m);
+}
 function wtsPanel(s) {
   const w = s.wts;
   if (!w) return `<div class="empty-note">${esc(s.project)} has no worker queue (.autopilot/worker/queue.md).</div>`;
@@ -2656,19 +2668,23 @@ function wtsPanel(s) {
   const running = new Set(((w.state_file || '').match(/^running((?:\s+\d+)+)/) || ['', ''])[1].split(/\s+/).filter(Boolean).map(Number));
   for (const g of ['HP', 'MP', 'LP']) {
     const rows = w.groups[g] || [];
-    const runs = [...new Set(rows.map(r => r.runs_on))];
+    // the model the table's rows run on: the most common one in its heading (a tip with the count of each when they
+    // differ); a row on another model has a small tag before its title, and every row's tip says its model (the
+    // user, 2026-11-08: a line under every row once one row ran on another model "took a lot of the space")
+    const tally = new Map(); rows.forEach(r => tally.set(r.runs_on, (tally.get(r.runs_on) || 0) + 1));
+    const runs = [...tally].sort((a, b) => b[1] - a[1]), main = runs[0]?.[0];
+    const mixTip = runs.length > 1 ? ` data-tip="${esc(runs.map(([k, n]) => `${n} on ${k}`).join('\n'))}"` : '';
     const { text: head, tip } = groupHead(w, g), [mi, mc] = modeLook(head);
     const lt = limitTag(w, g);
-    h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(mi)}${esc(head || '—')}</span>${lt ? `<span class="lim c-${lt.col}" data-tip="${esc(lt.tip)}">${esc(lt.text)}</span>` : ''}${runs.length === 1 ? `<span class="gm">${esc(runs[0])}</span>` : ''}</div>`;
+    h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(mi)}${esc(head || '—')}</span>${lt ? `<span class="lim c-${lt.col}" data-tip="${esc(lt.tip)}">${esc(lt.text)}</span>` : ''}${main ? `<span class="gm"${mixTip}>${esc(main)}${runs.length > 1 ? ` <span class="gmx">+${runs.length - 1}</span>` : ''}</span>` : ''}</div>`;
     if (!rows.length) h += '<div class="empty-note">empty</div>';
     for (const r of rows) {
       const { ri, rc, html: stHtml, a, run } = rowState(s, r, now);
       const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
       const mine = a ? heldBy(w, a.id) : [], holds = mine.length > 0;   // a window's holder: red, as on the graph (lock, line, card)
       const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
-      h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(r.task)}">
-        <span class="n">${r.n}${nb}</span><span class="t">${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : r.kind === 'done' ? ' pill ring' : ''}" data-tip="${esc(r.status + (['done', 'active'].includes(r.kind) && run?.born ? `\n${a ? 'its agent ' + a.label : 'worked on'}: ${whenHM(run.born, now)}–${run.last_ts ? whenHM(run.last_ts, now) : 'now'}` : ''))}">${icon(ri)}<span>${stHtml}</span></span>`;
-      if (runs.length > 1) h += `<span class="ro">${esc(r.runs_on)}</span>`;
+      h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(`Runs on ${r.runs_on}\n\n${r.task}`)}">
+        <span class="n">${r.n}${nb}</span><span class="t">${r.runs_on !== main ? `<span class="mtag">${esc(modelTag(r.runs_on, main))}</span>` : ''}${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : r.kind === 'done' ? ' pill ring' : ''}" data-tip="${esc(r.status + (['done', 'active'].includes(r.kind) && run?.born ? `\n${a ? 'its agent ' + a.label : 'worked on'}: ${whenHM(run.born, now)}–${run.last_ts ? whenHM(run.last_ts, now) : 'now'}` : ''))}">${icon(ri)}<span>${stHtml}</span></span>`;
       // the row's agent, on a line of its own: what it is doing now. Named only when it is not the row's own agent
       // ("HP 296" under row 296 says nothing new); none for an agent that is done under a done row (the row says so)
       const quiet = a && a.state.key === 'ended' && a.state.sub === 'done' && ['done', 'closed'].includes(r.kind);

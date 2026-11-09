@@ -202,7 +202,7 @@ session, agent?}`. `since` = the first tick its key was seen; it is kept in memo
 | amber | `mode-breach:<root>:<grp>` | MP or LP is `desk`/`paused`, but an agent of that group holds the lock |
 | amber | `waiting-free:<agent>` | a waiter exists and the lock has been free ≥ 2 min |
 | amber | `stuck:<agent>` | state `stuck` |
-| amber | `caffeinate:<root>` | caffeinate is off while any row is open or any agent is `running`/`thinking` |
+| amber | `caffeinate:<root>` | this session holds no keep-awake while its HP state is running or an agent is busy (another session's does not count: §25) |
 
 Dismiss and snooze happen in the page (localStorage, keyed by `key + title`, so a changed condition shows again).
 Browser notifications fire once per new red key (§9.8).
@@ -368,6 +368,10 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   Now; task cell with the Brief fold; context; Report; files changed; recent tools; messages.
 - **WTS tab:**
   - group headers `HP · ⏵ running 152 · Worker (Opus 5.5)`, `MP · desk-only`, `LP · desk-only`;
+    the model in a header is the one most of its rows run on (`Opus 5.5 +1` when one or more differ, the tip counting
+    each); a row on another model has a small tag before its title (`Sonnet`, the version dropped when it matches),
+    and every row's tip starts `Runs on …` (2026-11-08: one row on another model used to put a model line under
+    every row);
     a group none of whose rows can run (only done rows, or paused ones under a running mode, or none) reads `idle`
     (moon), here and in the header chips; the tip keeps the mode its file says;
   - a sticky bar: the jumps `HP 17 · MP 6 · LP 3` on the left, the window slots, the waiters and the build lock
@@ -756,4 +760,20 @@ task they say what was done far better than the transcript, so ccprobe shows the
   to their icons (34 px, 70 px for two slots); a group chip (HP, MP, LP) keeps its whole text and limit badge.
 - **Popover.** Clicking either account chip opens one popover: "Plan limits" (each window's bar, figure, reset and
   pace) above "Tokens today".
+
+## 25. A keep-awake per session (2026-11-08)
+- **The race:** the worker skill's leads each ran "start `caffeinate -dims` if none is running" and stopped "it" when
+  their work ended. The check was global, the stop was not: a lead that found another project's caffeinate relied on
+  it, and lost it when that lead stopped its own; leads ran `pkill -x caffeinate` (everyone's, and Claude Code's own
+  `caffeinate -i -t 300`); a session that died left its caffeinate running.
+- **The fix, in the skill (`scripts/awake.py`, `queue.py awake on|off|status`):** each Claude session holds its own
+  `caffeinate -dims -w <its Claude pid>`, started detached, stopped only by that session's `awake off` or by macOS when
+  the session exits. macOS counts power assertions itself, so a shared counter (and its drift after a crash) is not
+  needed; a file lock keeps two `on` calls from starting two. The status line says `☕ on`, `☕ off`, or
+  `☕ off · on in N other sessions`.
+- **ccprobe:** `queue.py`'s `awake_holds()` gives {Claude pid: holds}; the model sets each session's
+  `wts.caffeinate` to whether that session's pid holds one, and `wts.awake_others`. The header chip: `awake` (green,
+  this session's), `awake (other)` (slate: only other sessions', which last while their work does), `may sleep`
+  (amber), none on a machine without caffeinate. The alert counts only the session's own hold. A plain
+  `caffeinate -dims` a session started the old way belongs to the claude process above it.
 
