@@ -305,17 +305,29 @@ function planLines(x, now) {
   if (x.even != null) l.push(`An even pace would be ${Math.round(x.even)}% by now (the tick)`);
   return l;
 }
-// the header chip: the weekly limit (as the status line's "week 61%"), and beside it any other limit once it is 80% used
-// (the 5-hour one: "5h 88%"; a model's own weekly one: "Opus 91%")
+// where a window's reading came from, when not the status line's own figures: a model's own week is in the usage rows
+// that the status line has fetched (plan_usage.py, every 10 minutes while a session draws it)
+const planFrom = x => x.src === 'usage' ? `Claude Code's usage rows, as of ${hhmm(x.seen)}` : '';
+const PLAN_RANK = { slate: 0, green: 1, amber: 2, red: 3 };
+// the header chip: the weekly limit (as the status line's "week 61%"), then each model's own week with a bar of its
+// own (the user, 2026-11-13: "for the weekly usage bar, can we also add another one for the fable weekly?": "fable",
+// lower case like "week"),
+// and any other limit once it is 80% used (the 5-hour one: "5h 88%"). The icon takes the fullest bar's colour.
 function planChip(m) {
   const ws = planWins(m);
   if (!ws.length) return '';
   const main = ws.find(x => x.key === 'seven_day') || ws.find(x => x.span >= 86400) || ws[0];
-  const near = ws.filter(x => x !== main && !x.reset && x.used >= 80), old = m.now - m.plan.seen > PLAN_OLD;
-  const tip = [planName(main) + ': ' + planLines(main, m.now).join('\n')];
-  for (const x of ws) if (x !== main) tip.push(`${planName(x)}: ${x.reset ? 'reset since' : Math.round(x.used) + '% used'}${x.resets_at && !x.reset ? ' · resets ' + dayHm(x.resets_at) : ''}`);
+  const segs = [main, ...ws.filter(x => x !== main && x.key.startsWith('seven_day_'))];
+  const near = ws.filter(x => !segs.includes(x) && !x.reset && x.used >= 80), old = m.now - m.plan.seen > PLAN_OLD;
+  const top = segs.reduce((a, x) => PLAN_RANK[x.col] > PLAN_RANK[a.col] ? x : a, main);
+  const tip = segs.map(x => planName(x) + ': ' + planLines(x, m.now).join('\n') + (planFrom(x) ? `\n(${planFrom(x)})` : ''));
+  const rest = ws.filter(x => !segs.includes(x)).map(x => `${planName(x)}: ${x.reset ? 'reset since' : Math.round(x.used) + '% used'}${x.resets_at && !x.reset ? ' · resets ' + dayHm(x.resets_at) : ''}`);
+  if (rest.length) tip.push(rest.join('\n'));
   tip.push(`As of ${hhmm(m.plan.seen)}${old ? ' (no session has drawn its status line since)' : ''}, from a Claude session's status line · click for details`);
-  return `<button class="chip plan c-${main.col}${old ? ' old' : ''}" id="planChip" aria-haspopup="true" data-tip="${esc(tip.join('\n'))}">${icon('i-gauge')}<span>${esc(main.label)}</span>${planBar(main)}<span>${main.reset ? 'reset' : Math.round(main.used) + '%<span class="wide"> used</span>'}</span>`
+  // one part per bar: its name, the bar, the figure; a part whose own reading is old (its fetch failing) dims alone
+  const seg = (x, i) => `<span class="pseg c-${x.col}${!old && m.now - x.seen > PLAN_OLD ? ' old' : ''}"><span>${esc(i ? x.label.replace(/^week · /, '').toLowerCase() : x.label)}</span>${planBar(x)}`
+    + `<span class="pv">${x.reset ? 'reset' : Math.round(x.used) + '%' + (i ? '' : '<span class="wide"> used</span>')}</span></span>`;
+  return `<button class="chip plan c-${top.col}${old ? ' old' : ''}" id="planChip" aria-haspopup="true" data-tip="${esc(tip.join('\n\n'))}">${icon('i-gauge')}${segs.map(seg).join('')}`
     + near.map(x => `<span class="lim c-${x.col}">${esc(x.key === 'five_hour' ? '5h' : x.label.replace(/^(week|5-hour) · /, ''))} ${Math.round(x.used)}%</span>`).join('') + '</button>';
 }
 // the popover's first part: each window with its bar, when it resets and where this pace leads
@@ -326,10 +338,12 @@ function planPop(m) {
   let h = `<div class="pop-h">Plan limits <span class="pmeta">as of ${hhmm(m.plan.seen)}${old ? ' · no session drawing' : ''}</span></div><div class="plpop">`;
   for (const x of ws) {
     const [, ...more] = planLines(x, m.now);
-    h += `<span class="pl-n">${esc(x.label)}</span>${planBar(x)}<span class="pl-v c-${x.col}">${x.reset ? 'reset' : Math.round(x.used) + '%'}</span>`
-      + `<span class="pl-d">${esc(x.reset ? planLines(x, m.now)[0] : more.filter(t => !/^An even pace/.test(t)).join(' · '))}</span>`;
+    const d = x.reset ? [planLines(x, m.now)[0]] : more.filter(t => !/^An even pace/.test(t));
+    if (planFrom(x)) d.push(planFrom(x));
+    h += `<span class="pl-n">${esc(x.label.toLowerCase())}</span>${planBar(x)}<span class="pl-v c-${x.col}">${x.reset ? 'reset' : Math.round(x.used) + '%'}</span>`
+      + `<span class="pl-d">${esc(d.join(' · '))}</span>`;
   }
-  return h + `</div><div class="pop-foot">The bar is what is used; the tick, an even pace. Saved by the status line (README: "Plan limits").</div><div class="pop-sep"></div>`;
+  return h + `</div><div class="pop-foot">The bar is what is used; the tick, an even pace. Saved by the status line; a model's own week from Claude Code's usage rows, fetched every 10 minutes (README: "Plan limits").</div><div class="pop-sep"></div>`;
 }
 // a session's name, with the machine it runs on when that is not this one
 const pname = s => s.project + (s.host ? ' @' + s.host : '');

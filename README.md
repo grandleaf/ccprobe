@@ -141,7 +141,8 @@ What you see:
 - **Plan limits** (top right, beside today's tokens, apart from the session's own chips: every session shares them). The
   chip shows the weekly limit as the status line's `week 61%` does, with a bar filled to what is used and a tick where
   an even pace would be by now. It is amber once 75% is used or when this pace runs out before the reset, red from
-  90%. Any other limit at 80% or more gets a badge (`5h 88%`, or a model's own weekly limit, `Opus 91%`). The tooltip
+  90%. A model's own weekly limit (the Fable week) gets a bar of its own beside it (`week ▬ 24% │ fable ▬ 40%`), and
+  any other limit at 80% or more a badge (`5h 88%`). The tooltip
   says what is left, when it resets and where this pace leads ("runs out around Mon 16:40", or "about 52% by the
   reset"); click it for each window. Claude Code gives these figures only to the status line command, so the status
   line has to save them: after it reads its JSON input `d` (Python), add
@@ -161,6 +162,20 @@ What you see:
   that runs in several sessions should keep, per window, the later `resets_at` and for the same one the higher figure
   (the worker skill's `statusline.sh` does, and writes only on a change or once a minute). The chip dims when nothing
   was saved for 15 minutes, and says when a window has reset since the reading.
+
+  A model's own week is not in `rate_limits`. Claude Code has it in the claude.ai usage endpoint's rows (the ones
+  `/usage` draws), which it answers to an SDK `get_usage` request; the worker skill's `plan_usage.py` asks a short-lived
+  headless Claude Code for them every 10 minutes while a session draws its status line (every minute while the week
+  figure moves), and saves them to `~/.cache/ccprobe/plan-usage.json`:
+
+  ```
+  claude -p --safe-mode --no-session-persistence --input-format stream-json --output-format stream-json --verbose
+  stdin: {"type":"control_request","request_id":"1","request":{"subtype":"get_usage","skip_behaviors":true}}
+  saved: {"fetched_at": <Unix seconds>, "limits": [<rate_limits.limits from the answer, as sent>]}
+  ```
+
+  No prompt, so no tokens; Claude Code signs in by itself. ccprobe reads `weekly_scoped` rows as a model's week
+  (`week · Fable`) and `weekly_all` as the week, keeping per window the higher figure of the two files.
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
   auto-hide done agents, show all relationships, compact nodes, notifications. A first visit starts dark, with
   auto-hide and all relationships on, motion Full (Reduced when the OS asks for less motion), timeline 45m.

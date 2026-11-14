@@ -179,7 +179,10 @@ Kept per transcript (main or agent), updated from new entries only:
   1. The HP row named by `state` = `running N` → the latest agent named `worker`.
   2. An agent whose description matches `(?:Task|MP|LP|HP)\s*(\d+)` → that row.
   3. The last `queue.py state N` call made by an agent → row N.
-  4. Otherwise, no binding. Satellite agents (auditors) get an **anchor**: the node they messaged most, else their parent.
+  4. Otherwise, no binding. Satellite agents (auditors) get an **anchor**: of the nodes they messaged (the lead aside),
+     one still at work before one that has finished, then the most messages, then the latest; else their parent. (Until
+     2026-11-13 it was the most messages alone, so a worker's advisor stayed on the worker it had replaced, and lost
+     its line to the task's worker, until the successor had out-talked it: 27 minutes for task 319.)
 - **Role** = `worker` (the agent named `worker`), `mp`/`lp` (bound to a row in that group), else `helper`.
 - **Window card:**
   - `held/who` = `lock_text()`; `since` = the lock dir's mtime.
@@ -777,3 +780,33 @@ task they say what was done far better than the transcript, so ccprobe shows the
   (amber), none on a machine without caffeinate. The alert counts only the session's own hold. A plain
   `caffeinate -dims` a session started the old way belongs to the claude process above it.
 
+## 26. A model's own weekly limit (2026-11-13)
+- **The ask:** "for the weekly usage bar, can we also add another one for the fable weekly? also include it in the
+  current status bar".
+- **Where the figure is.** Not in the status line's `rate_limits` (Claude Code 2.1.323 documents `five_hour`,
+  `seven_day` and a gateway's `spend_limit`, read from response headers; §24's "sometimes `seven_day_<model>`" never
+  came), and not in a mod's `$.session.usage()` (the same windows). It is in the claude.ai usage endpoint's `limits[]`
+  rows, the ones `/usage` draws: `{kind: weekly_all | weekly_scoped | …, percent, resets_at (ISO), scope: {model:
+  {display_name: "Fable"}}, severity, is_active}`. Claude Code answers them to an SDK host's `get_usage` control request
+  (`skip_behaviors: true` skips its transcript scan). Asking the endpoint ourselves would need the login token, which
+  ccprobe never touches.
+- **The fetch, in the worker skill (`scripts/plan_usage.py`).** A headless `claude -p --safe-mode
+  --no-session-persistence`, stream-json in and out: it sends the request, reads the answer and closes stdin (about
+  1 s). No prompt, so no model call; safe mode loads no hooks, plugins, MCP servers or CLAUDE.md; no transcript, and no
+  entry in `~/.claude/sessions`, so no session list shows it. The status line starts it detached (its own process
+  session: Claude Code cancels a status line mid-run), behind a non-blocking lock, every 10 minutes, or every minute
+  while the all-models figure moves (against the figure at the last fetch). A failure keeps the last rows and writes
+  `plan-usage.err`, whose time counts as an attempt.
+- **ccprobe stays read-only:** `plan.py` reads `~/.cache/ccprobe/plan-usage.json` beside `rate-limits.json`.
+  `weekly_scoped` becomes `seven_day_<name>` (`week · Fable`), `weekly_all` the week, `session` the 5-hour window;
+  reset times are rounded to the minute (the endpoint sends 14:59:59.86). One reading per window: for the same reset
+  (within an hour) the higher figure, as of the newer reading; else the later reset. Each window now carries `seen` and
+  `src` (`status line` or `usage`).
+- **Header.** The plan chip has one part per bar, `week ▬ 24% used │ fable ▬ 40%` (lower case, like `week`), with a hairline between. The gauge
+  icon takes the fullest part's colour, and a part whose own reading is 15 minutes old dims alone. The tooltip gives
+  each bar's lines and where a model's figure came from; the popover lists it like any window. The 5-hour badge (at
+  80%) stays.
+- **Status line.** `… · week 24% · fable 40%`, with the age once the rows are over half an hour old (`fable 40% 2h
+  ago`). Its week figure is now the newest saved reading (rate-limits.json), not the session's own, which an idle
+  session keeps from its last reply. The writer also clears `.tmp` files older than 10 minutes (left when a status
+  line was cancelled between writing and renaming).

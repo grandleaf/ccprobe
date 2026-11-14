@@ -79,8 +79,11 @@ svg use { pointer-events: none; }
 .meter .fg { fill: var(--c, var(--muted)); }
 .meter .tick { fill: var(--text); opacity: .8; }
 .chip.plan { color: var(--text); }
-.chip.plan > span:last-of-type:not(.lim) { color: var(--c); font-weight: 600; }
-.chip.plan.old { opacity: .7; }
+/* one part per bar (the week, then each model's own week: "Fable"), a hairline between them */
+.chip.plan .pseg { display: inline-flex; align-items: center; gap: 6px; }
+.chip.plan .pseg + .pseg { margin-left: 2px; padding-left: 8px; border-left: 1px solid var(--line2); }
+.chip.plan .pv { color: var(--c); font-weight: 600; font-variant-numeric: tabular-nums; }
+.chip.plan.old, .chip.plan .pseg.old { opacity: .7; }
 /* a narrower window: the account chips give up the bar and the extra words first, so the session's chips keep room */
 @media (max-width: 1700px) { .acct .chip .wide { display: none; } }
 @media (max-width: 1440px) { .chip.plan .meter { display: none; } .acct { gap: 6px; padding-left: 10px; } }
