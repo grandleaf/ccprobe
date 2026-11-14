@@ -422,17 +422,10 @@ class Collector:
                     # on the graph, and its row's mismatch and alert still say that nobody is at work)
                     a["finished"] = False
 
-        # anchors: a helper sits beside the agent it talks to most (not the lead), else its parent
+        # anchors: a helper sits beside the agent it talks to (one still at work first), else its parent
         for a in agents:
-            if a["role"] != "helper":
-                continue
-            count = {}
-            for m in msgs:
-                if m["kind"] == "send" and a["id"] in (m["from"], m["to"]):
-                    other = m["to"] if m["from"] == a["id"] else m["from"]
-                    if other != "lead":
-                        count[other] = count.get(other, 0) + 1
-            a["anchor"] = max(count, key=count.get) if count else (a["parent"] if a["parent"] != "lead" else None)
+            if a["role"] == "helper":
+                a["anchor"] = _anchor(a, msgs, by_id)
 
         # edges: parent→child, plus a message edge for every pair that talked; hot when a message crossed it lately,
         # or when the child is busy on what its parent last sent it
@@ -675,6 +668,30 @@ def _label_of_meta(meta, rows, aid):
 def _dur(s):
     s = int(max(0, s))
     return f"{s}s" if s < 60 else f"{s // 60}m" if s < 3600 else f"{s // 3600}h {s % 3600 // 60}m"
+
+
+def _anchor(a, msgs, by_id):
+    """The agent a helper sits beside: of those it has sent messages to or had them from (the lead aside), one still at
+    work before one that has finished, then the most messages, then the latest. With none, its parent (not the lead).
+
+    Why the first rule (the user, 2026-11-13: "why the adv319 is connected to Lead, not from HP 391b?"): the most
+    messages alone counted the agents that had finished too. When hp319 handed task 319 over to hp319b, its advisor
+    had 4 messages with hp319 and none with hp319b, so it stayed anchored to the retired worker for 27 minutes
+    (a tie, 4 to 4, went to the first). Its kept line to the task's worker went with that, and once their last message was
+    ten minutes old its only line left was the one from the lead, which started it. Now the successor takes the anchor at
+    their first message once the old worker counts as finished (a done agent does two minutes after its turn ends)."""
+    count, last = {}, {}
+    for m in msgs:
+        if m["kind"] != "send" or a["id"] not in (m["from"], m["to"]):
+            continue
+        other = m["to"] if m["from"] == a["id"] else m["from"]
+        if other in ("lead", a["id"]):
+            continue
+        count[other] = count.get(other, 0) + 1
+        last[other] = max(last.get(other, 0), m["t"])
+    if not count:
+        return a["parent"] if a["parent"] != "lead" else None
+    return max(count, key=lambda k: (k in by_id and not by_id[k]["finished"], count[k], last[k]))
 
 
 def _ekey(a, b):

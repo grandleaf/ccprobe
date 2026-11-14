@@ -8,7 +8,7 @@ import unittest
 
 from ccprobe import alerts
 from ccprobe.agents import Transcript, agent_state, lead_state
-from ccprobe.model import _holder, _holds
+from ccprobe.model import _anchor, _holder, _holds
 from ccprobe.redact import clip, redact
 from ccprobe.tail import Tailer
 
@@ -268,6 +268,35 @@ def session(agents, rows, msgs=(), window=None, lead_key="waiting_user", state_f
             "wts": {"root": "/r", "error": None, "state_file": state_file, "caffeinate": caf, "app": "App", "app_running": False,
                     "modes": modes or {"MP": "desk", "LP": "desk"}, "window": window or {"held": False, "waiters": []},
                     "groups": {"HP": rows, "MP": [], "LP": []}}}
+
+
+class AnchorTests(unittest.TestCase):
+    @staticmethod
+    def send(t, a, b):
+        return {"t": t, "from": a, "to": b, "kind": "send"}
+
+    def test_a_handover_moves_the_helper_to_the_successor(self):
+        # adv319 on 2026-11-13: four messages with hp319, which handed task 319 to hp319b and finished
+        adv = agent("adv", "ended")
+        by_id = {x["id"]: x for x in (adv, agent("w1", "ended", role="worker", finished=True), agent("w2", "thinking", role="worker"))}
+        msgs = [self.send(100, "adv", "w1"), self.send(200, "w1", "adv"), self.send(300, "adv", "w1"), self.send(310, "adv", "w1"),
+                self.send(400, "lead", "adv")]
+        self.assertEqual(_anchor(adv, msgs, by_id), "w1")      # only the old worker has talked to it: it stays there
+        msgs.append(self.send(410, "adv", "w2"))
+        self.assertEqual(_anchor(adv, msgs, by_id), "w2")      # the successor's first message takes it (it was 27 minutes)
+        msgs += [self.send(t, "w2", "adv") for t in (420, 430, 440)]
+        self.assertEqual(_anchor(adv, msgs, by_id), "w2")      # and a tie with the old one, 4 to 4, stays there too
+
+    def test_ties_go_to_the_latest_and_none_to_the_parent(self):
+        adv = agent("adv", "thinking")
+        by_id = {x["id"]: x for x in (adv, agent("x", "thinking"), agent("y", "thinking"))}
+        msgs = [self.send(100, "adv", "x"), self.send(200, "adv", "y")]
+        self.assertEqual(_anchor(adv, msgs, by_id), "y")
+        self.assertEqual(_anchor(adv, msgs + [self.send(300, "x", "adv")], by_id), "x")             # most messages first
+        self.assertEqual(_anchor(adv, [self.send(100, "adv", "gone")], by_id), "gone")             # an agent no longer listed, alone
+        self.assertEqual(_anchor(adv, [self.send(100, "adv", "gone"), self.send(50, "adv", "x")], by_id), "x")
+        self.assertIsNone(_anchor(adv, [self.send(100, "adv", "lead")], by_id))                     # the lead is never one
+        self.assertEqual(_anchor(dict(adv, parent="w"), [], by_id), "w")
 
 
 class AlertTests(unittest.TestCase):
