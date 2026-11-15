@@ -13,7 +13,7 @@ from .sessions import alive
 
 QUEUE_PY = os.path.expanduser("~/.claude/skills/worker/scripts/queue.py")
 AWAKE_PY = os.path.join(os.path.dirname(QUEUE_PY), "awake.py")   # queue.py loads it (a session's keep-awake)
-PRIS = ("HP", "MP", "LP")
+PRIS = ("HP", "MP", "LP")   # an older queue.py's tables; a newer one says its own (AG, the lead's own agents, 2026-11-14)
 OPEN = ("asks", "active", "paused", "parked", "queued", "other")
 _mod = {"mtime": None, "m": None, "error": None}
 _last_good = {}      # root -> (rows count, model): a torn read of queue.md keeps the last good one (audit M6)
@@ -398,7 +398,7 @@ def read(root):
         nidx = notes_index(root)
         state = q.read_state()
         groups = {}
-        for pri in PRIS:
+        for pri in getattr(m, "PRIS", PRIS):
             mine = [r for r in rows if r["pri"] == pri and r["n"] not in pinned]
             by_n = {r["n"]: r for r in mine}
             out = []
@@ -408,8 +408,13 @@ def read(root):
                 status = status.replace(" · reviewed by me", "")   # every done row is reviewed: only the exceptions are worth showing
                 out.append({"n": int(n), "title": redact(title), "runs_on": runs_on, "status": redact(status), "acc": acc,
                             "kind": m.Queue.kind(r) if r else "other", "state": _clip(redact(r["state"]) if r else "", 300),
-                            "task": _clip(redact(_plain(r["task"])) if r else "", 600), "notes": nidx.get(int(n))})
+                            "task": _clip(redact(_plain(r["task"])) if r else "", 600), "notes": nidx.get(int(n)),
+                            # an AG row's agent lives in one lead session: the one that filed it
+                            "owner": q.owner(int(n)) if pri == "AG" and hasattr(q, "owner") else ""})
             groups[pri] = out
+        # History (the user, 2026-11-14: "any accepted, or aborted task goes to there"): queue.py orders it, newest first;
+        # the newest few ride along, the rest come from /api/history when asked
+        hist = m.history_rows(q) if hasattr(m, "history_rows") else None
         per_session = hasattr(q, "read_session")
         defaults = limit_defaults(q.cfg, per_session)
         # the window slots: "locks" (a list, two game windows side by side) or the one "lock"; older queue.py has only the one
@@ -444,11 +449,37 @@ def read(root):
             "groups": groups, "limit_defaults": defaults, "per_session": per_session,
             "limits": apply_limits(defaults, groups),    # a lead's own limits replace these (model: session_limits)
             "worker_model": q.cfg.get("worker_model"),
+            "history": [_hist(h, nidx) for h in hist[:HISTORY_SHOWN]] if hist is not None else None,
+            "history_n": len(hist) if hist is not None else 0,
+            "closed": {h["n"]: h["pri"] for h in hist} if hist else {},     # the model's own (a helper of a closed task)
         }
         _last_good[root] = (len(rows), res)
         return res
     except BaseException as e:
         return {"root": root, "error": f"queue.py read failed: {e}", "raw": _raw_wts(root)}
+
+
+HISTORY_SHOWN = 50      # closed rows in every update; the rest only when the page asks (one project has over 300)
+
+
+def _hist(h, nidx):
+    return {"n": h["n"], "pri": h["pri"], "title": _clip(redact(h["title"]), 90), "ok": h["ok"], "date": h["date"],
+            "time": h["time"], "why": _clip(redact(h["why"]), 160), "notes": nidx.get(h["n"])}
+
+
+def history(root):
+    """Every closed row of a project, newest first (None when there is no queue or queue.py has no History)."""
+    m = queue_module()
+    if m is None or not hasattr(m, "history_rows") or not is_project(root):
+        return None
+
+    def load():
+        try:
+            nidx = notes_index(root)
+            return [_hist(h, nidx) for h in m.history_rows(m.Queue(root))]
+        except BaseException:
+            return None
+    return _cached(("history", root), 3, load)
 
 
 _raw_cache = {}

@@ -91,6 +91,8 @@ def serve_stdio(opts):
                 body = col.feed_for(*args)
             elif op == "notes":
                 body = col.notes(*args)
+            elif op == "history":
+                body = col.history(*args)
             elif op == "pic":
                 pic = col.notes_pic(*args)
                 body = {"type": pic[0], "b64": base64.b64encode(pic[1]).decode()} if pic else None
@@ -344,6 +346,10 @@ class Hub:
     def notes(self, sid, n):
         r, rid = self._route(sid)
         return r.ask("notes", rid, n) if r else self.local.notes(sid, n)
+
+    def history(self, sid):
+        r, rid = self._route(sid)
+        return r.ask("history", rid) if r else self.local.history(sid)
 
     def notes_pic(self, sid, n, i):
         r, rid = self._route(sid)

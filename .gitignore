@@ -5,3 +5,5 @@ __pycache__/
 mockup/
 docs/advice/
 x.png
+# the worker skill's queue for this project (local: it holds the user's own words)
+.autopilot/

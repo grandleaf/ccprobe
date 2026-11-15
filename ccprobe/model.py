@@ -23,14 +23,14 @@ HISTORY_S = 2 * 3600            # how far back a transcript is read on first sig
 # "Task 74: Part 5 rebuild", "MP 141b: widgets", "HP 135 redo: …" (anchored at the start: audit minor 4). Only a
 # letter suffix or a redo word may come before the colon: "MP 141 advisor:" is a helper's, "Task 2026-10-24 notes:" none
 RE_AGAIN = r"[A-Za-z]?(?i:\s+\(?(?:(?:redo|retry|rerun|again|fix)(?:\s*#?\d+)?|(?:round|take|part)\s*#?\d+|v\d+)\)?)?\s*:"
-RE_TASK = re.compile(r"^(?:Task|MP|LP|HP)\s*#?(\d{1,4})" + RE_AGAIN)
+RE_TASK = re.compile(r"^(?:Task|MP|LP|HP|AG)\s*#?(\d{1,4})" + RE_AGAIN)
 # a name may carry a round: a letter ("mp141b") or r<N> ("hp128r3", redo 3)
-RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|task)(\d{1,4})(?:[a-z]|r\d{1,2})?$", re.I)    # meta.name "mp111"
+RE_NAME_TASK = re.compile(r"^(?:mp|lp|hp|ag|task)(\d{1,4})(?:[a-z]|r\d{1,2})?$", re.I)    # meta.name "mp111"
 RE_HP_NAME = re.compile(r"^hp(\d{1,4})(?:[a-z]|r\d{1,2})?$", re.I)       # the HP worker, one fresh agent per task: "hp154"
 RE_HP_DESC = re.compile(r"^HP\s*#?(\d{1,4})" + RE_AGAIN)        # or, started without a name: "HP 163: …", "HP 135 redo: …"
 RE_HP_DESC_NAME = re.compile(r"^hp(\d{1,4})(?:[a-z]|r\d{1,2})?\s*:", re.I)    # or described by the name it lacks: "hp178b: …"
 RE_DESC_NAME = re.compile(r"^([a-z]+\d{1,4}(?:[a-z]|r\d{1,2})?)\s*:", re.I)   # a description led by an agent name
-RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|task)\s*(\d{1,4})(?:[a-z]|r\d{1,2})?\b", re.I)   # "HP 183 …", "hp183c capture …"
+RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|AG|task)\s*(\d{1,4})(?:[a-z]|r\d{1,2})?\b", re.I)   # "HP 183 …", "hp183c capture …"
 HOT_S = 60
 DEAD_KEEP_S = 600
 LIVE = ("running", "thinking", "polling", "waiting_window")
@@ -148,6 +148,12 @@ class Collector:
         root = self._root(sid)
         return wts_mod.notes(root, n) if root else None
 
+    def history(self, sid):
+        """Every closed row of the session's queue, newest first (None when it has no queue)."""
+        root = self._root(sid)
+        rows = wts_mod.history(root) if root else None
+        return {"rows": rows} if rows is not None else None
+
     def notes_pic(self, sid, n, i):
         root = self._root(sid)
         return wts_mod.notes_pic(root, n, i) if root else None
@@ -208,6 +214,8 @@ class Collector:
             for pri, rs in w["groups"].items():
                 for r in rs:
                     rows[r["n"]] = dict(r, group=pri)
+        # a helper of a task that has closed is still that task's (adv341b after 341 is accepted), not an agent to file
+        helps_rows = {**{n: {"group": g, "kind": "closed"} for n, g in (w.get("closed") or {}).items()}, **rows} if wok else rows
         lock_names = tuple(os.path.basename(p) for p in w["lock_paths"]) if wok and w.get("lock_paths") else ()
 
         # every agent file (stat only); the ones in view get tailed
@@ -378,12 +386,12 @@ class Collector:
                 st = dict(st, key="running", label=_holds(mine, len(slots)) + " · " + _dur(now - min(slots[i]["since"] or now for i in mine)))
             elif st["key"] == "waiting_window" and len(slots) > 1:
                 st = dict(st, label="waiting for a window")
-            role = "worker" if aid in workers else (row["group"].lower() if row and row["group"] in ("MP", "LP") else "helper")
+            role = "worker" if aid in workers else (row["group"].lower() if row and row["group"] in GROUP_ROLES else "helper")
             dn = None if meta.get("name") else RE_DESC_NAME.match(meta.get("description") or "")
             label = meta.get("name") or (dn.group(1) if dn else _short_desc(meta.get("description"))) or aid[:7]
             hp = RE_HP_NAME.match(meta.get("name") or "")
             hp = int(hp.group(1)) if hp else _hp_of_desc(meta, rows)
-            if role in ("mp", "lp") and n is not None:
+            if role in ("mp", "lp", "ag") and n is not None:
                 label = f"{role.upper()} {n}"
             elif hp is not None:
                 label = f"HP {hp}"
@@ -405,7 +413,7 @@ class Collector:
                 "state": st, "ctx": tr.ctx, "ctx_max": self.ctx_max, "said": tr.said, "recent": list(tr.recent),
                 "last_ts": tr.last_ts, "born": c["birth"], "finished": finished,
                 "qstate": list(tr.qstate)[-3:], "compactions": [x[0] for x in tr.compactions if now - x[0] <= self.window_s],
-                "talked": talked.get(aid, 0), "anchor": None, "helps": n if n is not None else _task_of_meta(meta, rows), "notes": notes,
+                "talked": talked.get(aid, 0), "anchor": None, "helps": n if n is not None else _task_of_meta(meta, helps_rows), "notes": notes,
             })
         by_id = {a["id"]: a for a in agents}
 
@@ -461,7 +469,7 @@ class Collector:
 
         wpub = None
         if w:
-            wpub = {k: v for k, v in w.items() if k not in ("lock_paths", "limit_defaults", "per_session")}
+            wpub = {k: v for k, v in w.items() if k not in ("lock_paths", "limit_defaults", "per_session", "closed")}
             wpub["lock_names"] = list(lock_names)
             if w.get("build"):
                 wpub["build"] = dict(w["build"], who=redact(w["build"]["who"] or "") or None)
@@ -583,7 +591,9 @@ class Collector:
                 "lead_own": lead_own}
 
 
-ROLES = ["lead", "worker", "mp", "lp", "helper"]
+ROLES = ["lead", "worker", "mp", "lp", "helper", "ag"]
+# a row's agent takes its table's role; AG (2026-11-14): the lead's own agents, each with a row of its own
+GROUP_ROLES = ("MP", "LP", "AG")
 
 
 def state_run(ws):
@@ -646,7 +656,7 @@ def _role_of_meta(meta, rows):
         return "worker"
     m = RE_NAME_TASK.match(name) or RE_TASK.match(meta.get("description") or "")
     row = rows.get(int(m.group(1))) if m else None
-    if row and row["group"] in ("MP", "LP"):
+    if row and row["group"] in GROUP_ROLES:
         return row["group"].lower()
     return "helper"
 
@@ -660,7 +670,7 @@ def _label_of_meta(meta, rows, aid):
         return f"HP {hp}"
     role = _role_of_meta(meta, rows)
     m = RE_NAME_TASK.match(name) or RE_TASK.match(meta.get("description") or "")
-    if role in ("mp", "lp") and m:
+    if role in ("mp", "lp", "ag") and m:
         return f"{role.upper()} {int(m.group(1))}"
     return name or _short_desc(meta.get("description")) or aid[:7]
 

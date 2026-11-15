@@ -8,7 +8,7 @@ import unittest
 
 from ccprobe import alerts
 from ccprobe.agents import Transcript, agent_state, lead_state
-from ccprobe.model import _anchor, _holder, _holds
+from ccprobe.model import _anchor, _holder, _holds, _label_of_meta, _role_of_meta, _task_of_meta
 from ccprobe.redact import clip, redact
 from ccprobe.tail import Tailer
 
@@ -194,6 +194,20 @@ class StateTests(Base):
         self.assertEqual(lead_state(tr, {"alive": True, "status": "idle", "statusUpdatedAt": (self.now - 890) * 1000}, self.now)["key"], "idle")
         self.assertEqual(lead_state(tr, {"alive": True, "status": "busy", "statusUpdatedAt": (self.now - 890) * 1000}, self.now)["key"], "stuck")
 
+    def test_a_hung_reply_says_so(self):   # the user, 2026-11-14: "stuck? silent 25m" read as maybe busy; it was a hung request
+        self.w.add({"type": "user", "timestamp": iso(self.now - 1560), "message": {"content": "explain 321"}},
+                   {"type": "api-request", "timestamp": iso(self.now - 1560)})
+        st = lead_state(self.tr(), {"alive": True, "status": "busy", "statusUpdatedAt": (self.now - 2000) * 1000}, self.now)
+        at = time.strftime("%H:%M", time.localtime(self.now - 1560))
+        self.assertEqual((st["key"], st["label"], st["long"]), ("stuck", "no reply · 26m", f"no reply to your {at} message · 26m"))
+        al = alerts.compute([{"id": "L", "project": "demo", "lead": {"state": st}, "agents": []}], self.now, alerts.Memory())
+        self.assertEqual(al[0]["title"], f"demo lead: no reply to your {at} message · 26m")
+        self.assertIn("Esc", al[0]["detail"])
+        self.assertEqual(al[0]["sig"], f"demo lead: no reply to your {at} message")   # the running time stays out
+        self.w.add({"type": "user", "timestamp": iso(self.now - 1500), "origin": {"kind": "human"}, "message": {"content": "and 322?"}})
+        st = lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now + 100)      # a prompt as Claude Code marks one now
+        self.assertEqual(st["long"], f"no reply to your {time.strftime('%H:%M', time.localtime(self.now - 1500))} message · 26m")
+
     def test_idle_compaction_is_not_a_prompt(self):
         self.w.add(text(self.now - 1900, "Done.", stop="end_turn"),
                    {"type": "system", "subtype": "compact_boundary", "timestamp": iso(self.now - 1800), "compactMetadata": {"trigger": "auto"}},
@@ -297,6 +311,21 @@ class AnchorTests(unittest.TestCase):
         self.assertEqual(_anchor(adv, [self.send(100, "adv", "gone"), self.send(50, "adv", "x")], by_id), "x")
         self.assertIsNone(_anchor(adv, [self.send(100, "adv", "lead")], by_id))                     # the lead is never one
         self.assertEqual(_anchor(dict(adv, parent="w"), [], by_id), "w")
+
+
+class AgTests(unittest.TestCase):
+    """AG (2026-11-14): the lead's own agents, each on a row of the AG table, tied to it by the name ag<N>."""
+    rows = {3: {"group": "AG"}, 4: {"group": "MP"}}
+
+    def test_an_ag_agent_takes_its_row(self):
+        meta = {"name": "ag3", "description": "AG 3: Idle placeholder"}
+        self.assertEqual((_role_of_meta(meta, self.rows), _label_of_meta(meta, self.rows, "x"), _task_of_meta(meta, self.rows, True)),
+                         ("ag", "AG 3", 3))
+        self.assertEqual(_task_of_meta({"description": "AG 3: Idle placeholder"}, self.rows, True), 3)   # unnamed: by its description
+
+    def test_an_unfiled_agent_stays_a_helper(self):
+        self.assertEqual(_role_of_meta({"name": "idle1"}, self.rows), "helper")
+        self.assertEqual(_role_of_meta({"name": "ag9"}, self.rows), "helper")       # no row 9: not filed
 
 
 class AlertTests(unittest.TestCase):

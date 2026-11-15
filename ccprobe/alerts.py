@@ -55,8 +55,10 @@ def compute(sessions, now, mem):
             if a["state"]["key"] == "stuck" and not limited:
                 add(f"stuck:{a['id']}", "amber", f"{a['label']}: {a['state']['label']}",
                     "No conversational entries and no model call for 10 min while not waiting on a tool or a message.", s, a["id"])
-        if (lead.get("state") or {}).get("key") == "stuck" and not limited:
-            add(f"stuck:{s['id']}:lead", "amber", f"{s['project']} lead: {lead['state']['label']}", "", s, "lead")
+        lst = lead.get("state") or {}
+        if lst.get("key") == "stuck" and not limited:
+            add(f"stuck:{s['id']}:lead", "amber", f"{s['project']} lead: {lst.get('long') or lst['label']}",
+                lst.get("detail") or "", s, "lead")
 
         w = s.get("wts")
         if not w or w.get("error"):
@@ -117,7 +119,7 @@ def compute(sessions, now, mem):
                 "A window has been free for 2 min, but their lock loops have not taken it.", s, polling[0])
 
         busy = ((w.get("state_file") or "").strip().startswith("running")
-                or any(a["state"]["key"] in BUSY for a in agents.values()))
+                or any(a["state"]["key"] in BUSY and a.get("role") != "ag" for a in agents.values()))   # AG never keeps the Mac awake
         if not w.get("caffeinate") and busy:
             add(f"caffeinate:{root}", "amber", "caffeinate is off while work is running",
                 "Another session keeps the Mac awake for now, but only until its own work ends: the lead runs `queue.py awake on`."

@@ -1,5 +1,7 @@
-"""HTTP: the page, /api/state (JSON), /api/agent (one agent's panel detail), /api/notes and /api/notes-pic (a task's notes and
+"""HTTP: the page, /api/state (JSON), /api/agent (one agent's panel detail), /api/history (a queue's closed rows),
+/api/notes and /api/notes-pic (a task's notes and
 the pictures they name, by task number and index) and /api/events (SSE). Loopback only, token-gated, no file-path endpoint."""
+import hashlib
 import hmac
 import http.server
 import json
@@ -15,6 +17,26 @@ FILES = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; c
          "app.css": "text/css; charset=utf-8", "theme.js": "text/javascript; charset=utf-8",
          "icon.svg": "image/svg+xml"}
 TOKEN_FILE = os.path.expanduser("~/.config/ccprobe/token")
+_code = {"t": 0.0, "v": ""}
+
+
+def code_sig():
+    """A fingerprint of the page's own files (each name, size and time), so an open page reloads itself when they change
+    (the user, 2026-11-13: a tab opened before a layout fix kept running the old code: "it fixed? why adv320 still not
+    directly undr hp320?"). Read at most once a second."""
+    now = time.time()
+    if now - _code["t"] >= 1:
+        h = hashlib.sha1()
+        for name in sorted(FILES):
+            try:
+                st = os.stat(os.path.join(STATIC, name))
+                h.update(f"{name}:{st.st_size}:{st.st_mtime_ns};".encode())
+            except OSError:
+                h.update(f"{name}:-;".encode())
+        _code.update(t=now, v=h.hexdigest()[:12])
+    return _code["v"]
+
+
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; "
        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
@@ -105,13 +127,17 @@ def make_handler(collector, token, port, use_token=True, host=None):
                 path = "/index.html"
             if path == "/api/state":
                 body = collector.snapshot_json()
-                return self._send(200, "application/json", body or json.dumps({"v": 1, "loading": True}))
+                return self._send(200, "application/json", body or json.dumps({"v": 1, "loading": True}),
+                                  {"X-Ccprobe-Code": code_sig()})      # the polling page's copy of the code event
             if path == "/api/agent":                # one agent's panel detail (asked for only while it is on screen)
                 d = collector.agent_detail(q.get("s", [""])[0], q.get("a", [""])[0])
                 return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
             if path == "/api/feed":                 # the Events tab's list (asked for only while the tab is open)
                 d = collector.feed_for(q.get("s", [""])[0])
                 return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
+            if path == "/api/history":              # every closed row (the WTS tab's History, asked for on "Show all")
+                d = collector.history(q.get("s", [""])[0])
+                return self._send(200 if d is not None else 404, "application/json", json.dumps(d))
             if path in ("/api/notes", "/api/notes-pic"):   # a task's notes, by session and task number (never a path)
                 sid, n, i = q.get("s", [""])[0], q.get("n", [""])[0], q.get("i", [""])[0]
                 if not re.fullmatch(r"\d{1,4}", n) or (path == "/api/notes-pic" and not re.fullmatch(r"\d{1,3}", i)):
@@ -143,10 +169,16 @@ def make_handler(collector, token, port, use_token=True, host=None):
             self.end_headers()
             if self.command == "HEAD":          # headers only: never hold a HEAD request open as a stream
                 return
-            last, ping = None, time.time()
+            last, ping, code = None, time.time(), None
             try:
                 self.wfile.write(b"retry: 2000\n\n")
                 while not collector.stopping:
+                    # the page's files: their fingerprint on connect and whenever it changes (the page reloads on a new one)
+                    sig = code_sig()
+                    if sig != code:
+                        code = sig
+                        self.wfile.write(f"event: code\ndata: {sig}\n\n".encode())
+                        self.wfile.flush()
                     model, digest = collector.snapshot()
                     if model is not None and digest != last:
                         last = digest

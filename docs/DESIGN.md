@@ -91,6 +91,13 @@ immutable model dict. The HTTP handlers only read the latest model under a lock.
 its hash changes, plus a `: ping` every 15 s. At this size a full model (~50–150 KB) beats diffs: it is simpler and
 cannot drift.
 
+**The page reloads itself on new code (2026-11-13).** The stream also carries `event: code`, a fingerprint of the
+page's files (each name, size and modification time, read at most once a second), on connect and whenever it changes;
+polling gets it as the `X-Ccprobe-Code` header on `/api/state`. The page keeps the first one it sees and reloads 1.5 s
+after a different one stops changing, so an edit across several files lands whole. A restarted server with the same
+files sends the same fingerprint, so nothing reloads. Before, a tab opened before a fix kept the old code (a helper
+still sat diagonally after the pairs change) until you reloaded it by hand.
+
 ## 4. Session discovery (`sessions.py`)
 
 Each tick:
@@ -154,7 +161,7 @@ Kept per transcript (main or agent), updated from new entries only:
 | `ended_bg` | waiting on Blender / licence / build / capture / tests / its job · how long (whole hours past the first, so it fits) | the last kind is handback/text and `bg_pending` is not empty; the newest job's command and description say what it is (`what_of`). A running or polling Bash is named the same way (`Blender · 5m`, `waiting on a build · 3m`) |
 | `ended` | waiting for a message (its turn ended; a message wakes it) / done | the last kind is handback, or a final assistant text with no pending tool. The subtype is *waiting* if the bound row is open, else *done* |
 | `thinking` | thinking | the last kind is user/tool_result/queued_command and the file grew in the last 120 s |
-| `stuck` | stuck? silent 12m | none of the above, and no growth for ≥ 10 min (shown as a question) |
+| `stuck` | stuck? silent 12m | none of the above, and no growth for ≥ 10 min (shown as a question) ; the lead says "no reply · 12m" (2026-11-14: mid-turn with no tool running it is not busy with its agents, whose waits end its turn or run as a tool, but likely a hung request) |
 | `unknown` | unknown | the parser could not tell |
 
 **The lead** (the main transcript): `dead` if the pid is dead; registry `idle` → `waiting_user` ("waiting for you");
@@ -167,7 +174,7 @@ Kept per transcript (main or agent), updated from new entries only:
 ## 6. WTS bridge (`wts.py`), for goal G3
 
 - Load `queue.py` with `importlib.util.spec_from_file_location`. Reload when its mtime changes. **Only** call `Queue(root)`,
-  `.rows()`, `.kind()`, `.read_state()`, `.group_mode()`, `.lock_text()`, `.pinned()`, `.cfg`, `hp_line`, `table_rows`. Never
+  `.rows()`, `.kind()`, `.read_state()`, `.group_mode()`, `.lock_text()`, `.pinned()`, `.owner()`, `.cfg`, `PRIS`, `hp_line`, `table_rows`, `history_rows`. Never
   call a writer (`save`, `set_row`, `mark_reviewed`, `set_title`, `write_state`). A wrapper exposes only those reads. Any
   exception becomes the model entry `wts.error` and does not stop the tick. When `queue.py` is missing, the fallback is
   to run `queue.py wts` and show the raw text.
@@ -204,7 +211,7 @@ session, agent?}`. `since` = the first tick its key was seen; it is kept in memo
 | red | `stale-row:<n>` | an agent's `queue.py state N --text "<head>"` was an error, or ≥ 2 min later the row's state does not start with that head |
 | amber | `mode-breach:<root>:<grp>` | MP or LP is `desk`/`paused`, but an agent of that group holds the lock |
 | amber | `waiting-free:<agent>` | a waiter exists and the lock has been free ≥ 2 min |
-| amber | `stuck:<agent>` | state `stuck` |
+| amber | `stuck:<agent>` | state `stuck` ; the lead's reads "no reply to your 19:34 message · 26m" (or "from the model" mid-turn), and says to press Esc and resend |
 | amber | `caffeinate:<root>` | this session holds no keep-awake while its HP state is running or an agent is busy (another session's does not count: §25) |
 
 Dismiss and snooze happen in the page (localStorage, keyed by `key + title`, so a changed condition shows again).
@@ -286,8 +293,12 @@ is no longer checked against the queue or the worker: the Events tab and the que
   anchor ±35°, then ±70°, at radius 150.
 - **Parked column (right):** agents whose state is `waiting_window` or whose row is paused/parked, sorted by task
   number. With more than 4, it becomes 2 columns.
-- **Resource row (bottom):** the HP queue card (left) and a card per window slot, spread evenly about the lead; each
-  holder has a red line to the card of the slot it holds.
+- **Resource row (bottom):** a card per window slot, spread evenly about the lead; each holder has a red line to the
+  card of the slot it holds. The HP queue card left the row (2026-11-14, the user: "maybe we can give it a better place
+  instead of in the bottom middle?", option A of four): it is an HTML card in the graph's top-left corner, fixed to
+  the view, so it never collides with agents and needs no place in the layout (it had no line since 2026-11-13: that
+  went to the first worker in the list, a leftover from one HP worker per project). A click opens the WTS tab at HP;
+  the message ticker moves down under it while it shows.
 - **Finished** agents (`ended` + done for over 2 min, or `dead`): they dim to 35 % and shrink to 0.7×. After 2 min more
   they collapse into a "✓ N finished" chip under their anchor or the lead; clicking it expands them. The "Show finished"
   setting hides them entirely.
@@ -369,6 +380,31 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
 ### 9.7 Side panel, WTS, timeline
 - **Agent tab** (revised 2026-10-24, §19): title and status; description · model; from <parent> · started · active;
   Now; task cell with the Brief fold; context; Report; files changed; recent tools; messages.
+- **AG, the lead's own agents (2026-11-14).** The user: "I want to make them a home in the WTS, since most time i use
+  the wTS table ... they should work like a normal wTS task ... I also want to do the things like \"accept\"". The
+  worker skill's fourth table (`PRIS` in queue.py; an older queue.py has three, and the tab shows three). The lead files
+  a row before it starts an agent outside the queue, and names it `ag<N>`, so `RE_NAME_TASK` ties it to its row like
+  `mp111`; its role is `ag` (indigo, a task-sized hex labelled "AG N"). No limit, no mode, and never counted for the
+  keep-awake (the caffeinate alert leaves AG agents out) or for END. A row keeps the session that filed it
+  (`titles.json` `_session`): in another session's view it says "its agent is in another session" instead of "no agent
+  seen". Accepting a row is the lead's (`accept N` stops its agent first): ccprobe stays read-only. The lead's live
+  agents that no row or task is tied to (role helper, parent the lead, not finished, no task it helps: a skill's own
+  run such as /code-review, a fork, one not filed) are rows of the table too, after the numbered ones (the user,
+  2026-11-14: "yes do it as option 1", over a muted "Not filed" line under the table, after the code-review agent
+  showed on the graph but not in AG). `unfiled()` in app.js makes them: number "—", the description without its name
+  for a title (or the name), "not filed" where a row's State goes (when it started in the tip), its live state on the
+  line under it like a bound row's agent, a click selects it. It leaves when it finishes. They count in the jump
+  bar's AG number and keep the heading "running" (`groupHead`'s `more`); the graph's queue card ("AG N open") counts
+  filed rows only.
+- **HX, the history (2026-11-14; named HX, two letters like the tables, the same day).** The user: "any accepted, or aborted task goes to there, and it is default collapsed, we can
+  expand it". queue.py's `history_rows` orders the closed rows (✔, or `n/a`), newest first, by the date and time in
+  the Accepted cell (`accept` and `close` stamp a time since that day; older rows have a date only, old n/a rows none
+  and come last, under "Earlier"), so `wts hx` (or `wts history`) and the tab agree. The model carries the newest 50 (`history`) and
+  the count (`history_n`): one project had 334, about 40 KB on every update for rows that are rarely opened. "Show all"
+  asks `/api/history?s=<session>` (by session, never a path; relayed to a remote like the notes). The section is
+  collapsed by default, its state kept per viewer. A jump to History or to a linked row ("folded into 312") goes
+  straight there, below the sticky jump bar whatever its height: a smooth scroll that long was cut short by the
+  panel's next update. `reopen N` (the lead's) clears the Accepted cell; ccprobe stays read-only.
 - **WTS tab:**
   - group headers `HP · ⏵ running 152 · Worker (Opus 5.5)`, `MP · desk-only`, `LP · desk-only`;
     the model in a header is the one most of its rows run on (`Opus 5.5 +1` when one or more differ, the tip counting
@@ -377,11 +413,13 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
     every row);
     a group none of whose rows can run (only done rows, or paused ones under a running mode, or none) reads `idle`
     (moon), here and in the header chips; the tip keeps the mode its file says;
-  - a sticky bar: the jumps `HP 17 · MP 6 · LP 3` on the left, the window slots, the waiters and the build lock
-    on the right (2026-11-08: they had a line each, three lines for `win0 free`, `win1 free`, `Build free`). A free one
-    is its name by a green open lock, no box (`win0 win1 build` fits a 380 px panel beside the jumps); a held
-    one is a pill in its colour, `win0 · hp202 capture · 5m`, the tip saying since when and which agent; the
-    waiters a violet pill. When they do not fit beside the jumps they take a line of their own, still on the right;
+  - a sticky bar: the jumps `HP 17 · MP 6 · LP 3` on the left, the window slots and the build lock on the right
+    (2026-11-08: they had a line each, three lines for `win0 free`, `win1 free`, `Build free`). Each is only its
+    name, `win0 win1 build`, in a pill with a rounded outline, free or held (the user, 2026-11-14: the holder and time
+    on the pill made the bar long enough to take two lines): free is outlined in green by an open lock (slate: kept
+    for your shows), held is filled in its colour (red, orange; amber for the build) by a closed lock; the tip says
+    who holds it, since when and which agent. No pill for the waiters (2026-11-14): each waiting row says so under
+    itself. When they do not fit beside the jumps they take a line of their own, still on the right;
   - icon rows. The current row is expanded, and queued rows are one line that expands on click.
   - Clicking a row with an agent selects it in the graph and flashes the node.
   - Next to a bound row's State it shows that agent's **observed** state, e.g. `in progress 17:04 · agent: running
@@ -547,6 +585,13 @@ methods, kept small:
   each row back under the lead: an odd row centred, an even row split about the lead when those places are free (−1 1,
   −2 −1 1 2). A helper under an agent that slid moves with it when its row has room. First sight uses the same shape,
   and Tidy lights up for an off-centre row.
+- **Pairs (2026-11-13):** the place right under an agent that a helper serves is that helper's seat, so an advisor and
+  its task's worker read top to bottom (the user: "put adv320 under hp320, they have direct relationship"). Before, a
+  helper only wanted that place: a crossing cost more than a column off, so it often sat diagonally (which counted as
+  under), and a worker overflowing into the next row could take the place first. Now a newcomer helper takes its seat
+  when free; nobody else takes a seat, including agents placed before their helper; closing up holds the seats (the
+  agent nearest the middle steps off one); Tidy moves an agent still on a seat; and a helper a column off is astray
+  unless another helper of the same agent has the seat.
 - **HP workers (2026-10-25):** the state file may name more than one running HP task (`running 128 171`); each gets
   its worker: the newest agent named for it (`hp128`, or with a round, `hp128r3`, `hp141b`) or, unnamed, described as
   it, an unfinished one first. Before, only the first number counted and only a bare `hp<N>` name, so a redo agent

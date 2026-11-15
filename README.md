@@ -27,16 +27,16 @@ What you see:
   violet squares waiting for the window, ⧗ violet on hold, a red clock stuck, ✕ red dead, ✓ blue finished, and the
   lead's rose ? waiting for you. A busy agent has none, only its spinning arc. The status line under the hex uses the
   same icon and colour. Bottom left, a green page: the task has notes; bottom right, a red lock: it holds the window. The lead sits on top. Below it is a grid of rows at fixed heights, 5, 7 or 9 places per row (whichever draws the graph biggest in its
-  area: a wide window puts more agents side by side); every agent keeps its place. A new agent goes to the free place nearest the agents it works with (a helper under the agent it serves;
+  area: a wide window puts more agents side by side); every agent keeps its place. A new agent goes to the free place nearest the agents it works with (a helper right under the agent it serves, in its column, a place nobody else takes, so an advisor and its task's worker read as a pair;
   the lead counts as the middle of the top row), chosen so it adds the fewest crossing lines and keeps its row even about
   the lead. A blocked agent stays where it is with a dashed outline. A fresh HP
   worker takes the previous worker's place, and a reused name takes its predecessor's. When an agent leaves, its place
   stays free for 2 minutes (5 for the HP worker's or a reused name's place, so the successor lands there). Once no
   agent has come or gone for 2 minutes, the rows close up around places still held and slide back under the lead; agents left in lower rows while the rows above have room move up into them, in order (an
   even row splits about it: two agents sit one each side, the lead between them; a helper moves with its agent), a helper left away from the agent
-  it serves goes back under it (when a place there is free), and neighbours that would remove 2+ crossings are swapped
+  it serves goes back under it (when that place is free; Tidy moves an agent off it), and neighbours that would remove 2+ crossings are swapped
   at most every 5 minutes. **Tidy** (top right, shown when there is something to
-  tidy) does it all at once. Places survive a reload. The view itself stays put while everything is on screen: a speech
+  tidy) does it all at once. Places survive a reload, and the page reloads itself when ccprobe's page files change (an update, or an edit). The view itself stays put while everything is on screen: a speech
   or tool card that appears (it takes a free spot inside the view when there is one) moves the view only if it would
   stick out, or if the empty space would pile up on one side (the margins differ by more than 40% of the view).
 - **Lines** carry information only: tasks (amber, arrow at the agent doing the work), recent messages (violet, fading
@@ -46,7 +46,9 @@ What you see:
   time (the placement does not change). Lines run in the channels between rows and down
   the gaps between columns, never across an agent. A chevron travels along a line for every message, pointing from
   sender to receiver. Timeline arcs end in an arrowhead on the receiver's lane.
-- **The shelf** at the bottom holds the HP queue and a card per window slot, always in the same place. A project
+- **The HP queue** is a card in the graph's top-left corner, fixed to the view: how many HP tasks are open, the next
+  one, and the MP, LP and AG counts; a click opens the WTS tab.
+- **The shelf** at the bottom holds a card per window slot, always in the same place. A project
   can share one window (`lock` in its `config.json`) or several side by side (`locks`, a list: two game windows read
   `win0` and `win1`, counted from 0 as the worker skill names them); each card is in its slot's colour while held, with
   its holder and for how long, slate while it is reserved for your shows (a `<lock>.reserved` file; no worker takes
@@ -111,9 +113,20 @@ What you see:
   A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
   Under a row, a line says what its agent is doing now (`▶ Bash · 2m`); the agent is named only when it is not the
   row's own (`hp291 (earlier): stopped by the lead`), and a done row whose agent is done has no line.
-  Its top is one bar that stays in view: the jumps to the HP, MP and LP tables, then each window slot, the agents
-  waiting and the build lock (a free one is just its name by a green open lock; a held one a pill with who and for
-  how long, its tip saying since when and which agent). The row whose agent holds a window is red, as on the graph: a red edge and number, and
+  A fourth table, **AG**, holds the lead's own agents (with a worker skill that has it): the agents a lead starts
+  itself, outside the queue, one row each, named `ag<N>` so the row and its agent's hex ("AG 3", indigo) go together.
+  They work like any row: `accept N` closes it (the lead stops its agent first). Any live agent the lead started that
+  no row is tied to (a skill's own run such as /code-review, a fork, one not filed) is a row of the AG table too, so
+  none is missing from the WTS view: number "—", its job for a title, "not filed" for its state, what it is doing on
+  the line under it; a click selects it, and it leaves the table when it finishes. The AG count on the jump bar and
+  the table's running/idle count them.
+  At the bottom, **HX** (history: collapsed until you open it; the page remembers) holds the closed tasks, accepted ✔ or
+  closed `n/a` (cancelled, folded into another), newest first under day headings, each with its table's tag. A click
+  opens a task's notes; "folded into 312" jumps to row 312. The newest 50 come with every update, "Show all" fetches
+  the rest. A row closed by mistake goes back with `reopen N`; in a terminal, `wts hx` lists the last 20.
+  Its top is one bar that stays in view: the jumps to the HP, MP, LP and AG tables and HX, then each window slot and the
+  build lock, each only its name (`win0`, `win1`, `build`) in a pill with a rounded outline: free, outlined in green
+  (slate: kept for your shows); held, filled in its colour, its tip saying who holds it, since when and which agent. The row whose agent holds a window is red, as on the graph: a red edge and number, and
   its agent line red with the lock (`holds the window · 4m`, or `holds win1 · 4m` with two slots); an
   agent waiting for the window has its line in violet with the window. A project whose worker config names a build lock
   gets a line for it too, and a header chip (who builds, for how long). An agent waiting in the project's waiting line

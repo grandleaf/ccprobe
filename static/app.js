@@ -32,7 +32,8 @@ const ROWKIND = {
   asks: ['i-ask', 'rose'], done: ['i-done', 'violet'], closed: ['i-done', 'slate'], other: ['i-wait', 'slate'],
 };
 // the hotter the colour, the higher the priority: HP rose, MP amber, LP green
-const ROLECOL = { lead: 'cyan', worker: 'rose', mp: 'amber', lp: 'green', helper: 'violet' };
+const ROLECOL = { lead: 'cyan', worker: 'rose', mp: 'amber', lp: 'green', helper: 'violet', ag: 'indigo' };   // ag: the lead's own agents (2026-11-14)
+const TASKROLES = ['worker', 'mp', 'lp', 'ag'];   // an agent with a row of its own: a big hex with its table and number
 const TOOLS = new Set(['Bash', 'Read', 'Edit', 'Write', 'SendMessage', 'Agent']);
 const toolCls = t => TOOLS.has(t) ? t : (t === 'MultiEdit' || t === 'NotebookEdit' ? 'Edit' : 'other');
 const icon = (id, cls = 'ico12') => `<svg class="${cls}"><use href="#${id}"/></svg>`;
@@ -96,9 +97,20 @@ const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b
 
 // ---- connection: SSE, falling back to polling ----
 let es = null, errs = 0, pollTimer = 0;
+// the page's own code: the server sends a fingerprint of its files (on connect, and when they change); a new one (an
+// edit, or a restarted server with new files) reloads the page, a moment after the last change so an edit across
+// several files lands whole. Before, an open tab kept the old code until you reloaded it (2026-11-13).
+let codeSig = null, codeTimer = 0;
+function onCode(sig) {
+  if (!sig) return;
+  if (codeSig === null) codeSig = sig;
+  clearTimeout(codeTimer);
+  if (sig !== codeSig) codeTimer = setTimeout(() => location.reload(), 1500);
+}
 function connect() {
   try { es = new EventSource('/api/events'); } catch (e) { return startPolling(); }
   es.onmessage = e => { errs = 0; S.lastMsgAt = Date.now(); setConn('live'); try { onModel(JSON.parse(e.data)); } catch (x) { console.error(x); } };
+  es.addEventListener('code', e => onCode(e.data));
   es.addEventListener('ping', e => {
     errs = 0; S.lastMsgAt = Date.now(); if (S.conn !== 'live') setConn('live');
     const t = parseFloat(e.data);
@@ -123,6 +135,7 @@ function startPolling() {
     try {
       const r = await fetch('/api/state', { cache: 'no-store' });
       if (r.status === 401) { S.authFailed = true; setConn('down'); return showEmpty('Not signed in: open the URL the ccprobe server printed.'); }
+      onCode(r.headers.get('X-Ccprobe-Code'));
       const m = await r.json();
       S.lastMsgAt = Date.now(); setConn('live');
       if (!m.loading) onModel(m);
@@ -217,7 +230,7 @@ function renderHeader(m, s) {
       h += w.build.held
         ? `<span class="chip win held c-amber" data-tip="${esc('Build lock held by ' + w.build.who)}">${icon('i-build')}<span>Build: ${esc(briefWho(w.build.who))} · ${dur(m.now - (w.build.since || m.now))}</span></span>`
         : `<span class="chip soft c-green" data-tip="No build is running (the build lock is free)">${icon('i-build')}<span>Build free</span></span>`;
-    for (const g of ['HP', 'MP', 'LP']) {
+    for (const g of ['HP', 'MP', 'LP']) {   // AG has no mode or limit: its count is on the WTS tab's jump bar
       const { text, tip } = groupHead(w, g), [i, c] = modeLook(text), lt = limitTag(w, g), tips = [tip, lt?.tip].filter(Boolean).join('\n');
       h += `<span class="chip c-${c}"${tips ? ` data-tip="${esc(tips)}"` : ''}>${icon(i)}${g} ${esc(text)}${lt ? `<span class="lim c-${lt.col}">${esc(lt.text)}</span>` : ''}</span>`;
     }
@@ -726,7 +739,7 @@ function rowIndex(s) {
 const isParked = n => n.state.key === 'waiting_window' || n.state.key === 'parked' || (n.rowKind === 'paused' || n.rowKind === 'parked') && !['running', 'thinking', 'polling'].includes(n.state.key);
 const radius = n => {
   const c = settings.compact;
-  return n.role === 'lead' ? (c ? 40 : 52) : ['worker', 'mp', 'lp'].includes(n.role) ? (c ? 32 : 42) : (n.finished ? 22 : c ? 22 : 30);
+  return n.role === 'lead' ? (c ? 40 : 52) : TASKROLES.includes(n.role) ? (c ? 32 : 42) : (n.finished ? 22 : c ? 22 : 30);
 };
 
 // ---- layout: rows by role (lead · agents · helpers · finished · shelf), every agent in a sticky column ----
@@ -830,13 +843,22 @@ function placeRow(rm, members, want, E, at, now, slots, isHelper) {   // fills `
   let fresh = members.filter(n => !slots.has(n.id));
   if (!slots.size && !ghosts.length) {
     // nothing remembered (first sight): the agents in role order, in full rows centred under the lead
-    const rank = { worker: 0, mp: 1, lp: 2, helper: 3 };
-    const first = fresh.filter(n => !isHelper(n)).sort((a, b) => (rank[a.role] ?? 3) - (rank[b.role] ?? 3) || (a.task || 0) - (b.task || 0) || (a.born || 0) - (b.born || 0));
+    const rank = { worker: 0, mp: 1, lp: 2, ag: 3, helper: 4 };
+    const first = fresh.filter(n => !isHelper(n)).sort((a, b) => (rank[a.role] ?? 4) - (rank[b.role] ?? 4) || (a.task || 0) - (b.task || 0) || (a.born || 0) - (b.born || 0));
     first.forEach((n, i) => slots.set(n.id, flowSlot(i, first.length)));
     fresh = fresh.filter(n => !slots.has(n.id));
   }
+  // the place right under an agent that a helper serves is that helper's seat (the advisor ↔ task pair reads top to
+  // bottom, the user, 2026-11-13: "put adv320 under hp320, they have direct relationship"): the helper takes it when it
+  // is free, and nobody else takes it, the agents placed before their helpers included
+  const byId = new Map(members.map(m => [m.id, m]));
+  const seatOf = m => isHelper(m) && !isHelper(byId.get(m.anchor)) && slots.has(m.anchor)
+    ? { sub: slots.get(m.anchor).sub + 1, col: slots.get(m.anchor).col } : null;
   for (const n of fresh.sort((a, b) => (isHelper(a) - isHelper(b)) || (a.born || 0) - (b.born || 0))) {   // helpers after their anchors
     const busy = new Set([...[...slots.values()].map(v => slotKey(v.sub, v.col)), ...ghosts]);
+    const mine = seatOf(n);
+    if (mine && !busy.has(slotKey(mine.sub, mine.col))) { slots.set(n.id, mine); continue; }
+    for (const m of members) { const s = m !== n && seatOf(m); if (s) busy.add(slotKey(s.sub, s.col)); }
     const maxSub = Math.max(0, ...[...slots.values()].map(v => v.sub), ...ghosts.map(g => +g.split(':')[0]));
     const w = want(n, slots), side = n.role === 'worker' ? .001 : -.001;
     const rowSum = sub => members.reduce((a, m) => { const v = slots.get(m.id); return a + (m !== n && !isHelper(m) && v?.sub === sub ? v.col : 0); }, 0);   // agents only, as compactRow
@@ -888,6 +910,11 @@ function compactRow(rm, keys, fixed = [], dry = false) {
     const pivot = items.reduce((b, it, i) => Math.abs(it.col) < Math.abs(items[b].col) ? i : b, 0);
     const free = c => !held.has(slotKey(sub, c)) && Math.abs(c) <= MAXC;
     const was = items.map(it => it.col), cols = was.slice();
+    // the one nearest the centre stays, unless it sits on a held place (a helper's seat): then the nearest free one
+    for (let d = 1; !free(cols[pivot]) && d <= 2 * MAXC; d++) {
+      const c0 = was[pivot], to = [c0 - Math.sign(c0 || 1) * d, c0 + Math.sign(c0 || 1) * d].find(free);
+      if (to !== undefined) cols[pivot] = to;
+    }
     let c = cols[pivot];
     for (let i = pivot + 1; i < items.length; i++) { c++; while (!free(c) && c < MAXC) c++; cols[i] = c; }
     c = cols[pivot];
@@ -965,8 +992,31 @@ function layout(nodes, s) {
   const underAgent = n => isHelper(n) && !isHelper(byId.get(n.anchor));
   const agentKeys = live.filter(n => !isHelper(n)).map(n => g.keyOf.get(n.id));
   const helperSlots = () => live.filter(isHelper).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean);
-  const isAstray = n => underAgent(n) && slot.has(n.anchor) && slot.has(n.id)
-    && (slot.get(n.id).sub !== slot.get(n.anchor).sub + 1 || Math.abs(slot.get(n.id).col - slot.get(n.anchor).col) > 1);
+  // the seats: the place under each agent that a helper serves (see placeRow), held when the rows close up
+  const seats = () => {
+    const out = new Map();
+    for (const n of live) if (underAgent(n) && slot.has(n.anchor)) { const a = slot.get(n.anchor); out.set(slotKey(a.sub + 1, a.col), { sub: a.sub + 1, col: a.col }); }
+    return [...out.values()];
+  };
+  // a helper is astray off its seat; beside it (a column off) is fine only while another helper of that agent has it
+  const isAstray = n => {
+    if (!underAgent(n) || !slot.has(n.anchor) || !slot.has(n.id)) return false;
+    const a = slot.get(n.anchor), v = slot.get(n.id);
+    if (v.sub !== a.sub + 1 || Math.abs(v.col - a.col) > 1) return true;
+    return v.col !== a.col && !live.some(m => m !== n && m.anchor === n.anchor && slot.get(m.id)?.sub === a.sub + 1 && slot.get(m.id)?.col === a.col);
+  };
+  // the pairs, on Tidy and when the rows flow (the helpers serving an agent lifted first): the agents close up around
+  // the seats (twice: a row that closed up moves the seats under it), one still on a seat makes way, then each helper
+  // takes its seat
+  const settle = () => {
+    for (let i = 0; i < 2; i++) { compactRow(mem.agents, agentKeys, [...helperSlots(), ...seats()]); sync(); }
+    const taken = new Set(seats().map(e => slotKey(e.sub, e.col)));
+    for (const n of live) {
+      const v = !isHelper(n) && slot.get(n.id);
+      if (v && taken.has(slotKey(v.sub, v.col))) { mem.agents.delete(g.keyOf.get(n.id)); slot.delete(n.id); }
+    }
+    placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
+  };
   // the agents spread over more rows than they fill (the top row freed up after they came), or the column count
   // changed: they flow, in reading order, into full rows centred under the lead, and the helpers go back under them
   const rowsOf = keys => new Set(keys.map(k => mem.agents.get(k)?.sub)).size;
@@ -975,19 +1025,18 @@ function layout(nodes, s) {
     const order = agentKeys.map(k => mem.agents.get(k)).sort((a, b) => a.sub - b.sub || a.col - b.col);
     order.forEach((e, i) => Object.assign(e, flowSlot(i, order.length)));
     for (const n of live.filter(isHelper)) { mem.agents.delete(g.keyOf.get(n.id)); slot.delete(n.id); }
-    sync(); placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
+    sync(); settle();
   }
   if (tidy) {
     for (const k of reserved()) mem.agents.delete(k);
     // the agents close up first; then the helpers that serve one go back under it
     const hs = live.filter(underAgent);
     for (const n of hs) { mem.agents.delete(g.keyOf.get(n.id)); slot.delete(n.id); }
-    compactRow(mem.agents, agentKeys, helperSlots()); sync();
-    placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
+    settle();
   } else if (quiet) {
     // the helpers under an agent that slid along slide with it, when their own row has room
     const was = live.filter(underAgent).map(n => [n, slot.get(n.anchor)?.col]);
-    compactRow(mem.agents, agentKeys, [...helperSlots(), ...reserved().map(k => mem.agents.get(k))]); sync();
+    compactRow(mem.agents, agentKeys, [...helperSlots(), ...seats(), ...reserved().map(k => mem.agents.get(k))]); sync();
     const moves = was.map(([n, c0]) => [mem.agents.get(g.keyOf.get(n.id)), (slot.get(n.anchor)?.col ?? c0) - c0]).filter(([e, d]) => e && d);
     for (const [e, d] of moves.sort((p, q) => q[0].col * Math.sign(q[1]) - p[0].col * Math.sign(p[1]))) {
       const col = e.col + d;
@@ -1016,7 +1065,7 @@ function layout(nodes, s) {
   if (tidy) mem.lastReorder = now;
   // can Tidy do anything? (a row with a gap or off centre, a reserved slot, or a helper away from its anchor)
   // (held as Tidy holds them: Tidy lifts the helpers under an agent before closing up, so they do not count here)
-  const loose = compactRow(mem.agents, agentKeys, live.filter(n => isHelper(n) && !underAgent(n)).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean), true) > 0;
+  const loose = compactRow(mem.agents, agentKeys, [...live.filter(n => isHelper(n) && !underAgent(n)).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean), ...seats()], true) > 0;
   const astray = live.some(isAstray);
   const reflow = maxc !== mem.maxc || rowsOf(agentKeys) > Math.ceil(agentKeys.length / (2 * MAXC + 1));
   S.canTidy = loose || reserved().length > 0 || astray || reflow;
@@ -1349,27 +1398,26 @@ function renderGraph(s) {
   // resources: the HP queue and the window (the folded finished agents are a button in the stage bar)
   const resSeen = new Set();
   const w = s.wts && !s.wts.error ? s.wts : null;
-  const worker = nodes.find(n => n.role === 'worker' && seen.has(n.id));
   if (w) {
     const hp = (w.groups.HP || []).filter(r => ['queued', 'active', 'paused', 'parked', 'asks', 'other'].includes(r.kind));
     const next = (w.groups.HP || []).find(r => r.kind === 'queued' && !r.held), held = (w.groups.HP || []).filter(r => r.held).length;   // held: HP's max is 0
     const lim = w.limits?.HP, full = lim && lim.max > 0 && lim.running >= lim.max;
-    // the shelf: the queue and a card per window slot side by side at the bottom, always in the same place
-    const slots = winSlots(w), k = 1 + slots.length, gap = k > 2 ? 300 : 330, at = i => LEAD_X + (i - (k - 1) / 2) * gap;
-    resSeen.add('_queue');
-    boxes.push(placeRes('_queue', { x: at(0), y: res.y }, ROLECOL.worker, 'i-queue', `HP queue · ${hp.length} open`,
-      next ? clip(full ? `next ${next.n} when one finishes` : `next ${next.n} · ${next.title}`, 36) : held ? `${held} held: HP max is 0` : 'nothing queued',
-      `MP ${(w.groups.MP || []).filter(r => r.kind !== 'done').length} · LP ${(w.groups.LP || []).filter(r => r.kind !== 'done').length} open`));
+    // the queue: a card fixed in the graph's top-left corner, not on the shelf (the user, 2026-11-14: "maybe we can give it
+    // a better place instead of in the bottom middle?", option A): it has no line, so it needs no place among the agents
+    queueCard(s, w, hp, next, held, full);
+    // the shelf: a card per window slot side by side at the bottom, always in the same place (their holders' lines end there)
+    const slots = winSlots(w), k = slots.length, gap = k > 2 ? 300 : 330, at = i => LEAD_X + (i - (k - 1) / 2) * gap;
     const waiters = ((w.window || {}).waiters || []).map(id => byId.get(id)?.label).filter(Boolean);
     slots.forEach((x, i) => {
       const id = resId(i);
       resSeen.add(id);
-      boxes.push(placeRes(id, { x: at(i + 1), y: res.y }, ...slotLook(x, i),
+      boxes.push(placeRes(id, { x: at(i), y: res.y }, ...slotLook(x, i),
         `${slotName(w, i)} · ${x.name}${x.reserved ? ' · reserved' : ''}`,
         x.held ? clip(`${shortWho(x.who)} · ${dur(now - (x.since || now))}`, 38) : x.reserved ? 'kept free for your shows' : 'free',
         waiters.length ? clip('waiting: ' + waiters.join(', '), 38) : ''));   // they wait for any slot: told on each
     });
   }
+  if (!w) queueCard(s, null);          // no queue (or it could not be read): no card
   for (const [id, r] of S.res) if (!resSeen.has(id)) {
     const d = S.disp.get(id);
     if (!d) { r.g.remove(); S.res.delete(id); }
@@ -1410,7 +1458,8 @@ function renderGraph(s) {
   winSlots(w).forEach((x, i) => {   // a red line from each holder to the slot it holds
     if (x.held && seen.has(x.holder) && S.res.has(resId(i))) drawEdge(i ? 'lock' + (i + 1) : 'lock', x.holder, resId(i), `edge lock${lkClass(i)}` + dimRes(x.holder), '', eSeen);
   });
-  if (w && worker && S.res.has('_queue')) drawEdge('queue', worker.id, '_queue', 'edge queue' + dimRes(worker.id), '', eSeen);
+  // no line to the HP queue card (2026-11-13): it went to one worker, from when a project had one; with a fresh agent per
+  // task and several at once it went to whichever came first, and said nothing (the lead starts each task)
   for (const [k, e] of S.edges) if (!eSeen.has(k) && !e.leaving) leave(e, 150, () => { e.g.remove(); S.edges.delete(k); });
   S.lanes = laneMap(eSeen);
 
@@ -1472,8 +1521,8 @@ function hexWords(n) {
   if (n.role === 'lead') return ['', 'Lead'];
   const own = n.name || ((n.desc || '').match(RE_DESC_NAME) || [''])[0].replace(/\s*:\s*$/, '');
   const m = own.match(/^([a-z]+)[-_]?(\d.*)$/i);
-  if (['worker', 'mp', 'lp'].includes(n.role)) {
-    const own_n = m && /^(hp|mp|lp|task)$/i.test(m[1]) && parseInt(m[2], 10) === n.task ? m[2] : null;   // its round: "184e"
+  if (TASKROLES.includes(n.role)) {
+    const own_n = m && /^(hp|mp|lp|ag|task)$/i.test(m[1]) && parseInt(m[2], 10) === n.task ? m[2] : null;   // its round: "184e"
     return [n.role === 'worker' ? 'HP' : n.role.toUpperCase(), own_n || String(n.task ?? '')];
   }
   if (m) return [m[1].toLowerCase(), m[2]];
@@ -1602,6 +1651,23 @@ function drawRes(id, col, ico, h, s1, s2) {
   return { w: wdt, h: hgt };
 }
 
+// the HP queue's card, in the graph's top-left corner (fixed to the view, not the drawing): how much is left and what is
+// next; a click opens the WTS tab at HP. Hidden for a project with no queue
+function queueCard(s, w, hp, next, held, full) {
+  const el = $('qcard');
+  if (!w) { el.hidden = true; $('stage').classList.remove('hasq'); return; }
+  const open = g => (w.groups[g] || []).filter(r => r.kind !== 'done').length;
+  const ag = w.groups.AG ? open('AG') + unfiled(s, S.model.now).length : 0;      // the unfiled rows too (HP 3)
+  const nx = next ? (full ? `next ${next.n} when one finishes` : `next ${next.n} · ${next.title}`) : held ? `${held} held: HP max is 0` : 'nothing queued';
+  el.innerHTML = `<div class="q1">${icon('i-queue')}<b>HP ${hp.length} open</b><span class="qn">· ${esc(clip(nx, 40))}</span></div>`
+    + `<div class="q2">MP ${open('MP')} · LP ${open('LP')}${ag ? ` · AG ${ag}` : ''} open</div>`;
+  el.dataset.tip = `The HP queue: ${hp.length} open${next ? `\nnext: ${next.n} · ${next.title}` : ''}\nclick: the WTS tab`;
+  el.hidden = false; $('stage').classList.add('hasq');
+}
+$('qcard').addEventListener('click', () => {
+  S.tab = 'wts'; S.tabWas = null; renderPanel();
+  belowBar($('g-HP'), 'auto');
+});
 // a resource card at a fixed place (the shelf): it never moves, so you always know where to look
 const resId = i => i ? '_window' + (i + 1) : '_window';   // a window slot's card on the shelf
 function placeRes(id, p, ...rest) {
@@ -1633,7 +1699,7 @@ function drawEdge(key, a, b, cls, label, seen) {
   }
   unleave(e);
   e.a = a; e.b = b;
-  e.bend = key.startsWith('lock') || key === 'queue' ? 0 : ((hash(key) % 2) ? .07 : -.07);
+  e.bend = key.startsWith('lock') ? 0 : ((hash(key) % 2) ? .07 : -.07);
   if (!e.path.classList.contains('flashy')) e.path.setAttribute('class', cls);
   setA(e.path, { 'marker-end': /\btask\b/.test(cls) ? 'url(#arrTask)' : 'none' });
   e.cls = cls;
@@ -2456,8 +2522,8 @@ function toName(s, to) {
 // ---- tokens: output is the headline (what the model wrote); fresh input and cache reads each on their own scale ----
 const TOKKINDS = [['out', 'Output'], ['fresh', 'Fresh in'], ['read', 'Cache read']];
 const tokOf = (v, k) => k === 'out' ? v[3] : k === 'fresh' ? v[0] + v[1] : v[2];
-const ROLEORDER = ['lead', 'worker', 'mp', 'lp', 'helper'];
-const ROLENAME = { lead: 'lead', worker: 'HP', mp: 'MP', lp: 'LP', helper: 'helpers' };
+const ROLEORDER = ['lead', 'worker', 'mp', 'lp', 'ag', 'helper'];
+const ROLENAME = { lead: 'lead', worker: 'HP', mp: 'MP', lp: 'LP', ag: 'AG', helper: 'helpers' };
 const roleCol = r => r === 'lead' ? 'cyan' : ROLECOL[r] || 'violet';
 const spanName = s => s < 3600 ? `${s / 60}m` : `${s / 3600}h`;
 function tokTip(name, t) {
@@ -2501,7 +2567,7 @@ function tokensPanel(s) {
   // per minute, stacked by role, over the timeline's span
   const span = settings.span, binS = span <= 7200 ? 60 : 180, bins = Math.round(span / binS), now = S.model.now;
   const end = Math.floor(now / 60) * 60 + 60, start = end - bins * binS;
-  const cells = Array.from({ length: bins }, () => [0, 0, 0, 0, 0]);
+  const cells = Array.from({ length: bins }, () => ROLEORDER.map(() => 0));
   const ki = k === 'out' ? 4 : k === 'fresh' ? 2 : 3;
   for (const row of T.series.rows) {
     const b = Math.floor((T.series.t0 + row[0] * 60 - start) / binS), ri = ROLEORDER.indexOf(T.series.roles[row[1]]);
@@ -2513,7 +2579,7 @@ function tokensPanel(s) {
   cells.forEach((c, b) => {
     const last = b === bins - 1;
     let y = 72;
-    if (peak) for (let ri = 0; ri < 5; ri++) {
+    if (peak) for (let ri = 0; ri < ROLEORDER.length; ri++) {
       const hh = c[ri] / per / peak * 70;
       if (hh <= 0) continue;
       y -= hh;
@@ -2623,7 +2689,9 @@ function rowState(s, r, now) {
   const a = r.agent ? (s.agents || []).find(x => x.id === r.agent) : null, run = taskRun(s, r.n, a, r.kind);
   return Object.assign(rowStatus(r, now, run, s.tokens?.rows?.[r.n]?.last?.[0]), { a, run });
 }
-const GROUPCOL = { HP: ROLECOL.worker, MP: ROLECOL.mp, LP: ROLECOL.lp };   // the same colours as the agents on the graph
+const GROUPCOL = { HP: ROLECOL.worker, MP: ROLECOL.mp, LP: ROLECOL.lp, AG: ROLECOL.ag };
+// the tables a queue has: AG only with a worker skill that knows it (2026-11-14)
+const groupsOf = w => ['HP', 'MP', 'LP', 'AG'].filter(g => g !== 'AG' || (w.groups || {}).AG);   // the same colours as the agents on the graph
 // a group's mode (HP: the worker's state line; MP/LP: running, desk-only or paused) as an icon and a colour
 const modeLook = t => /idle/i.test(t) ? ['i-idle', 'slate'] : /running/i.test(t) ? ['i-run', 'green'] : /paus/i.test(t) ? ['i-park', 'slate']
   : /desk/i.test(t) ? ['i-park', 'cyan'] : /stop/i.test(t) ? ['i-dead', 'red'] : ['i-wait', 'slate'];
@@ -2634,19 +2702,20 @@ const CANRUN = ['active', 'queued', 'other', 'parked', 'asks'];
 // a table's most tasks at once, beside how many are in hand: "3/5"; "max 0" when it starts nothing new; null with no
 // limit. The limit is this lead session's own (`queue.py limit hp 2`), else config.json's hp_/mp_/lp_parallel default
 function limitTag(w, g) {
-  const l = w.limits?.[g];
+  const l = g === 'AG' ? null : w.limits?.[g];   // AG has no limit, so no badge (the user, 2026-11-14)
   if (!l || l.max == null) return null;
   const from = l.src === 'session' ? 'set for this session' : `the default: ${g.toLowerCase()}_parallel in config.json`;
   if (l.max === 0) return { text: 'max 0', col: 'amber', tip: `${g} starts nothing new: its max is 0 (${from})${l.running ? ` · the ${l.running} in hand finish` : ''}` };
   return { text: `${l.running}/${l.max}`, col: 'green', tip: `${l.running} in hand, at most ${l.max} at once (${from})${l.running >= l.max ? ': full, the next waits for one to finish' : ''}` };
 }
-function groupHead(w, g) {
-  const rows = (w.groups || {})[g] || [], mode = g === 'HP' ? (w.hp_line || '').replace(/^[^\w]+/, '') : (w.modes || {})[g] || 'running';
+function groupHead(w, g, more = 0) {   // more: AG's rows for the lead's unfiled agents, each one at work
+  // HP's "running 356 357 …" is just "running": the table shows which (the user, 2026-11-14)
+  const rows = (w.groups || {})[g] || [], mode = g === 'HP' ? (w.hp_line || '').replace(/^[^\w]+/, '').replace(/^running\b.*/, 'running') : (w.modes || {})[g] || 'running';
   const label = mode === 'desk' ? 'desk-only' : mode, paused = /paus/i.test(mode);
-  const idle = paused ? !rows.some(r => r.kind === 'paused' || CANRUN.includes(r.kind)) : !rows.some(r => CANRUN.includes(r.kind));
+  const idle = !more && (paused ? !rows.some(r => r.kind === 'paused' || CANRUN.includes(r.kind)) : !rows.some(r => CANRUN.includes(r.kind)));
   if (!idle || /idle/i.test(label)) return { text: label, tip: '' };
   const left = rows.filter(r => r.kind === 'paused').map(r => r.n);
-  return { text: 'idle', tip: `nothing to run${left.length ? ` (${left.join(', ')} paused)` : ''} · ${g === 'HP' ? 'the worker' : g} says ${label}` };
+  return { text: 'idle', tip: `nothing to run${left.length ? ` (${left.join(', ')} paused)` : ''}` + (g === 'AG' ? '' : ` · ${g === 'HP' ? 'the worker' : g} says ${label}`) };
 }
 // a row's model tag, short: "Sonnet" beside a table on Opus 5.5 (the same version goes), "Sonnet 4.5" when it differs
 function modelTag(m, main) {
@@ -2660,45 +2729,50 @@ function wtsPanel(s) {
   const now = S.model.now, win = w.window || {};
   const agents = new Map((s.agents || []).map(a => [a.id, a]));
   const nm = id => id === 'lead' ? 'lead' : (agents.get(id)?.label || '?');
-  // one bar: the jumps to each table, then the window slots, the waiters and the build lock (the user, 2026-11-08: "win0
-  // free, win1 free and build free took 3 lines ... compact it into one line"). A free one is just its name by a green
-  // open lock (slate: kept for your shows); a held one a pill in its colour with who and how long; the tip has the rest.
-  // The jumps on the left, the locks on the right (the user, 2026-11-08). It stays at the top while the tables scroll
-  const slots = winSlots(w), waiters = (win.waiters || []).map(nm);
+  const loose = (w.groups || {}).AG ? unfiled(s, now) : [];   // AG's rows with no number: the lead's agents not filed
+  const rowsOf = g => (w.groups[g] || []).concat(g === 'AG' ? loose : []);
+  // one bar: the jumps to each table, then the window slots and the build lock (the user, 2026-11-08: "win0 free, win1
+  // free and build free took 3 lines ... compact it into one line"). Each is only its name, held or free, in an
+  // outlined pill: who holds it and since when are in the tip (the user, 2026-11-14: "just show win1, win0, no need to
+  // add detail ... always use a legend for win0, win1, and build"). Free: outlined in green (slate: kept for your
+  // shows); held: filled in its colour. The jumps on the left, the locks on the right (the user, 2026-11-08). It stays
+  // at the top while the tables scroll
+  const slots = winSlots(w);
   const since = (t, who, x) => `held by ${shortWho(who)} since ${hhmm(t, 1)} (${dur(now - (t || now))})${x ? ' · its agent ' + x : ''}`;
   const pill = (col, ic, text, tip, held) => `<span class="wpill c-${col}${held ? ' held' : ''}" data-tip="${esc(tip)}">${icon(ic)}<span>${text}</span></span>`;
-  let h = '<div class="jump">' + ['HP', 'MP', 'LP'].map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${(w.groups[g] || []).length}</a>`).join('')
+  let h = '<div class="jump">' + groupsOf(w).map(g => `<a data-jump="${g}" class="c-${GROUPCOL[g]}">${g} ${rowsOf(g).length}</a>`).join('')
+    + (w.history ? `<a data-jump="HX" class="c-mauve" data-tip="History: the closed tasks">HX ${w.history_n || 0}</a>` : '')
     + '<span class="wpills">' + slots.map((x, i) => {
       const [col, ic] = slotLook(x, i), name = slotName(w, i);
       if (!x.held) return pill(col, ic, name, `${name}${x.name ? ' (' + x.name + ')' : ''}: free${x.reserved ? ', kept for your shows: no worker takes it' : ''}`);
-      return pill(col, ic, `${name} · <b>${esc(briefWho(x.who))}</b> · ${dur(now - (x.since || now))}`,
+      return pill(col, ic, name,
         `${name}${x.name ? ' (' + x.name + ')' : ''}: ${since(x.since, x.who, x.holder ? nm(x.holder) : '')}${x.reserved ? '\nreserved for your shows' : ''}`, 1);
     }).join('')
-    + (waiters.length ? `<span class="wpill s-window held" data-tip="${esc('Waiting for ' + (slots.length > 1 ? 'a window' : 'the window') + ': ' + waiters.join(', '))}">${icon('i-window')}<span>waiting: ${esc(waiters.join(', '))}</span></span>` : '')
+    // no "waiting: HP 356, …" pill (the user, 2026-11-14): each waiting row says so under itself
     + (w.build ? (w.build.held
-      ? pill('amber', 'i-build', `build · <b>${esc(briefWho(w.build.who))}</b> · ${dur(now - (w.build.since || now))}`, 'The build lock: ' + since(w.build.since, w.build.who), 1)
+      ? pill('amber', 'i-build', 'build', 'The build lock: ' + since(w.build.since, w.build.who), 1)
       : pill('green', 'i-build', 'build', 'No build is running (the build lock is free)')) : '')
     + '</span></div>';
   const running = new Set(((w.state_file || '').match(/^running((?:\s+\d+)+)/) || ['', ''])[1].split(/\s+/).filter(Boolean).map(Number));
-  for (const g of ['HP', 'MP', 'LP']) {
-    const rows = w.groups[g] || [];
+  for (const g of groupsOf(w)) {
+    const rows = rowsOf(g);
     // the model the table's rows run on: the most common one in its heading (a tip with the count of each when they
     // differ); a row on another model has a small tag before its title, and every row's tip says its model (the
     // user, 2026-11-08: a line under every row once one row ran on another model "took a lot of the space")
     const tally = new Map(); rows.forEach(r => tally.set(r.runs_on, (tally.get(r.runs_on) || 0) + 1));
     const runs = [...tally].sort((a, b) => b[1] - a[1]), main = runs[0]?.[0];
     const mixTip = runs.length > 1 ? ` data-tip="${esc(runs.map(([k, n]) => `${n} on ${k}`).join('\n'))}"` : '';
-    const { text: head, tip } = groupHead(w, g), [mi, mc] = modeLook(head);
+    const { text: head, tip } = groupHead(w, g, g === 'AG' ? loose.length : 0), [mi, mc] = modeLook(head);   // AG's too: running or idle (the user, 2026-11-14)
     const lt = limitTag(w, g);
     h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(mi)}${esc(head || '—')}</span>${lt ? `<span class="lim c-${lt.col}" data-tip="${esc(lt.tip)}">${esc(lt.text)}</span>` : ''}${main ? `<span class="gm"${mixTip}>${esc(main)}${runs.length > 1 ? ` <span class="gmx">+${runs.length - 1}</span>` : ''}</span>` : ''}</div>`;
     if (!rows.length) h += '<div class="empty-note">empty</div>';
     for (const r of rows) {
-      const { ri, rc, html: stHtml, a, run } = rowState(s, r, now);
+      const { ri, rc, html: stHtml, a, run } = r.loose ? r.loose : rowState(s, r, now);
       const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
       const mine = a ? heldBy(w, a.id) : [], holds = mine.length > 0;   // a window's holder: red, as on the graph (lock, line, card)
       const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
-      h += `<div class="wrow ${running.has(r.n) ? 'cur' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(`Runs on ${r.runs_on}\n\n${r.task}`)}">
-        <span class="n">${r.n}${nb}</span><span class="t">${r.runs_on !== main ? `<span class="mtag">${esc(modelTag(r.runs_on, main))}</span>` : ''}${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : r.kind === 'done' ? ' pill ring' : ''}" data-tip="${esc(r.status + (['done', 'active'].includes(r.kind) && run?.born ? `\n${a ? 'its agent ' + a.label : 'worked on'}: ${whenHM(run.born, now)}–${run.last_ts ? whenHM(run.last_ts, now) : 'now'}` : ''))}">${icon(ri)}<span>${stHtml}</span></span>`;
+      h += `<div ${r.loose ? '' : `id="row-${r.n}" `}class="wrow ${running.has(r.n) ? 'cur' : ''}${r.loose ? ' loose' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(`Runs on ${r.runs_on}\n\n${r.task}`)}">
+        <span class="n">${r.loose ? '—' : r.n}${nb}</span><span class="t">${r.runs_on !== main ? `<span class="mtag">${esc(modelTag(r.runs_on, main))}</span>` : ''}${esc(r.title)}</span><span class="st2 c-${rc}${live ? ' pill' : r.kind === 'done' ? ' pill ring' : ''}" data-tip="${esc(r.status + (['done', 'active'].includes(r.kind) && run?.born ? `\n${a ? 'its agent ' + a.label : 'worked on'}: ${whenHM(run.born, now)}–${run.last_ts ? whenHM(run.last_ts, now) : 'now'}` : ''))}">${icon(ri)}<span>${stHtml}</span></span>`;
       // the row's agent, on a line of its own: what it is doing now. Named only when it is not the row's own agent
       // ("HP 296" under row 296 says nothing new); none for an agent that is done under a done row (the row says so)
       const quiet = a && a.state.key === 'ended' && a.state.sub === 'done' && ['done', 'closed'].includes(r.kind);
@@ -2714,13 +2788,99 @@ function wtsPanel(s) {
           h += `<span class="obs win s-window"${tip}>${icon('i-window')}${who}${esc(a.state.label)}</span>`;
         } else
         h += `<span class="obs${mismatch ? ' mismatch' : ''}"${tip}>${who}<span class="${am ? 'mk s-' + am : 'c-' + ac}">${icon(am ? MARK[am] : ai)}</span>${esc(a.state.label)}${mismatch ? ' · does not match the row' : ''}</span>`;
+      } else if (!a && r.owner && r.owner !== (s.host ? s.id.slice(s.host.length + 1) : s.id) && LIVEKIND.includes(r.kind)) {   // a remote session's id has its host in front
+        h += `<span class="obs">its agent is in another session (${esc(r.owner.slice(0, 8))})</span>`;
       } else if (!a && r.kind === 'active') {
         h += `<span class="obs">no agent seen for this row</span>`;
       }
       h += '</div>';
     }
   }
+  return h + historyPanel(s, w);
+}
+
+// ---- History: the closed rows, newest first (the user, 2026-11-14: "any accepted, or aborted task goes to there, and it
+// is default collapsed, we can expand it"). The newest 50 come with every update; "Show all" asks /api/history ----
+let histOpen = store.get('ccprobe.histOpen', false);
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function dayLabel(date) {
+  if (!date) return 'Earlier';        // an older n/a row: no date was kept before 2026-11-14
+  if (date === ymd(new Date())) return 'Today';
+  if (date === ymd(new Date(Date.now() - 864e5))) return 'Yesterday';
+  return new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function historyPanel(s, w) {
+  if (!w.history) return '';           // an older worker skill: no History
+  const n = w.history_n || 0, all = S.hist?.sid === s.id ? S.hist : null;
+  if (histOpen && all?.rows && all.want !== n && !all.busy && !all.failed) setTimeout(() => loadHistory(s), 0);   // closed or reopened since (once per count: a stale reply never asks again and again)
+  // HX: history's shorthand, two letters like the tables (the user, 2026-11-14)
+  // the label, the count in a pill like the tables' legends, then the fold arrow (the user, 2026-11-14); all one button
+  let h = `<div class="gh hist c-mauve" id="g-HX"><button class="hhead" data-hist aria-expanded="${histOpen}" data-tip="History: the closed tasks, accepted or n/a"><span class="gname">HX</span><span class="mode">${icon('i-done')}${n} closed</span>${icon('i-chev', 'ico12 hchev')}</button></div>`;
+  if (!histOpen) return h;
+  if (!n) return h + '<div class="empty-note">nothing closed yet: an accepted or cancelled task comes here</div>';
+  const rows = all?.rows || w.history, stamp = r => [r.date, r.time].filter(Boolean).join(' ');
+  let day = null;
+  for (const r of rows) {
+    const d = dayLabel(r.date);
+    if (d !== day) { day = d; h += `<div class="hday">${esc(d)}</div>`; }
+    // "folded into 312", "superseded by 299": the other row is a link (in its table, or here)
+    const to = !r.ok && (r.why || '').match(/^(.*?)\b((?:folded into|superseded by|moved to)\s+#?(\d{1,4}))\b(.*)$/i);
+    const why = r.ok ? '' : to ? `${esc(to[1])}<a data-jumprow="${to[3]}">${esc(to[2])}</a>${esc(to[4])}` : esc(r.why || 'n/a');
+    const tip = (r.ok ? `Accepted${stamp(r) ? ' ' + stamp(r) : ''}${r.why ? `\nthe user: "${r.why}"` : ''}`
+      : `Closed (n/a)${stamp(r) ? ' ' + stamp(r) : ''}${r.why ? ': ' + r.why : ''}`) + (r.notes ? '\nclick: its notes' : '') + `\nreopen ${r.n}: back in its table`;
+    h += `<div class="hrow${r.notes ? ' bound' : ''}" id="row-${r.n}"${r.notes ? ` data-notes="${r.n}"` : ''} data-tip="${esc(tip)}">`
+      + `<span class="hs c-${r.ok ? 'green' : 'slate'}">${icon(r.ok ? 'i-done' : 'i-x')}</span><span class="n">${r.n}</span>`
+      + `<span class="hg c-${GROUPCOL[r.pri] || 'slate'}">${esc(r.pri)}</span><span class="t">${esc(r.title)}</span>`
+      + `<span class="hw">${why}</span><span class="ht">${esc(r.time || '')}</span></div>`;
+  }
+  if (rows.length < n) h += `<button class="hmore" data-histall>${all?.busy ? 'loading…' : all?.failed ? 'could not load them: try again' : `Show all ${n}`}</button>`;
   return h;
+}
+function loadHistory(s, then) {
+  const n = s.wts?.history_n || 0, keep = S.hist?.sid === s.id ? S.hist.rows : null;
+  S.hist = { sid: s.id, n, want: n, rows: keep, busy: true };
+  fetch(`/api/history?s=${encodeURIComponent(s.id)}`, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null).then(d => {
+    if (S.hist?.sid !== s.id) return;
+    S.hist = d?.rows ? { sid: s.id, n: d.rows.length, want: n, rows: d.rows } : { sid: s.id, n, want: n, rows: keep, failed: true };
+    if (S.tab === 'wts') renderPanel();
+    if (then && d?.rows) then();
+  });
+}
+// scroll the WTS tab so el shows just below the sticky jump bar (its height varies: it wraps with the window slots), or
+// a third of the way down (mid)
+function belowBar(el, behavior, mid) {
+  const bar = document.querySelector('.jump'), box = bar?.parentElement;
+  if (!el || !box) return el?.scrollIntoView({ block: 'start' });
+  const gap = el.getBoundingClientRect().top - bar.getBoundingClientRect().bottom - (mid ? (box.clientHeight - bar.offsetHeight) / 3 : 8);
+  box.scrollTo({ top: box.scrollTop + gap, behavior });
+}
+// a row by number: in its table, or in History (opened for it); it flashes where it is
+function jumpRow(n) {
+  let el = $('row-' + n);
+  if (!el && !histOpen) { histOpen = true; store.set('ccprobe.histOpen', true); renderPanel(); el = $('row-' + n); }
+  // older than the newest 50: fetch them all, then jump (once: a row that is in none of them stays put)
+  const s = cur(), all = S.hist?.sid === s?.id && S.hist.rows;
+  if (!el && s && !all) return loadHistory(s, () => { if ($('row-' + n)) jumpRow(n); });
+  if (!el) return;
+  belowBar(el, 'auto', true);
+  el.classList.remove('flashrow'); void el.offsetWidth; el.classList.add('flashrow');
+}
+// the lead's agents with no row (the user, 2026-11-14: the AG table is their home): any live one the lead started that
+// no row is tied to (a skill's own run such as /code-review, a fork, one not filed) is a row of the AG table, so none
+// is missing from the WTS view, even one started before the AG table. It has no number ("—"), its job for a title, its
+// live state on the line under it like a bound row, and a click selects it; it leaves the table when it finishes (the
+// user, 2026-11-14: "yes do it as option 1", over the muted "Not filed" line under the table)
+function unfiled(s, now) {
+  return (s.agents || []).filter(a => a.parent === 'lead' && a.role === 'helper' && !a.finished && a.helps == null).map(a => {
+    // its job without its name ("code-review: Review the diff" under the name it already has on its line)
+    const m = modelName(a.model) || 'model ?', named = (a.desc || '').startsWith(a.label + ':') ? a.desc.slice(a.label.length + 1) : a.desc || '';
+    const title = named.replace(RE_DESC_NAME, '').trim() || a.label;
+    return {
+      n: null, title, runs_on: m, kind: 'loose', agent: a.id, status: `Not filed: no row is tied to ${a.label}` + (a.born ? `\nstarted ${whenHM(a.born, now)}` : ''),
+      task: `${a.desc || a.label}\n\nStarted by the lead with no row: the lead files one with queue.py add --pri AG, and names the agent ag<N>`,
+      loose: { ri: 'i-queue', rc: 'slate', a, run: null, html: 'not filed' },   // short, so its title has the room (when it started: the tip)
+    };
+  });
 }
 
 function liveAlerts(m) {
@@ -2899,6 +3059,12 @@ $('panel').addEventListener('click', e => {
     store.set('ccprobe.dismissed', dismissed);
     return render();
   }
+  const hb = e.target.closest('[data-hist],[data-histall],[data-jumprow]');   // History: open/close, show all, a linked row
+  if (hb) {
+    if (hb.hasAttribute('data-hist')) { histOpen = !histOpen; store.set('ccprobe.histOpen', histOpen); return renderPanel(); }
+    if (hb.hasAttribute('data-histall')) { const s = cur(); if (s) loadHistory(s); return renderPanel(); }
+    return jumpRow(+hb.dataset.jumprow);
+  }
   const nb = e.target.closest('[data-notes],[data-pic]');   // a task's notes: the reader over the graph
   if (nb) {
     if (nb.dataset.notes) return openReader(+nb.dataset.notes, +(nb.dataset.doc || 0));
@@ -2922,7 +3088,11 @@ $('panel').addEventListener('click', e => {
   }
   const t = e.target.closest('[data-select],[data-dismiss],[data-snooze],[data-jump]');
   if (!t) return;
-  if (t.dataset.jump) { $('g-' + t.dataset.jump)?.scrollIntoView({ block: 'start', behavior: 'smooth' }); return; }
+  if (t.dataset.jump) {
+    if (t.dataset.jump === 'HX' && !histOpen) { histOpen = true; store.set('ccprobe.histOpen', true); renderPanel(); }   // a jump there opens it
+    // History is far down: straight there (a smooth scroll that long is cut short by the panel's next update)
+    belowBar($('g-' + t.dataset.jump), t.dataset.jump === 'HX' ? 'auto' : 'smooth'); return;
+  }
   if (t.dataset.dismiss) { dismissed[t.dataset.dismiss] = 1e12; store.set('ccprobe.dismissed', dismissed); return render(); }
   if (t.dataset.snooze) { dismissed[t.dataset.snooze] = Date.now() / 1000 + 3600; store.set('ccprobe.dismissed', dismissed); return render(); }
   if (t.dataset.sid && t.dataset.sid !== S.sid) selectSession(t.dataset.sid);

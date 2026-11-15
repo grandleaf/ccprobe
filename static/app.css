@@ -6,7 +6,7 @@
   --text: #c8d3f0; --text-strong: #eef3ff; --muted: #7d8ab0; --dim: #55628a;
   /* the state marks (badge, status line, WTS agent line): each kind of waiting its own colour, far apart on the wheel */
   --b-job: #f272d6; --b-poll: #b8e34f; --b-paused: #ffd84d; --b-done: #6f9bff; --b-blender: #ea7600;
-  --cyan: #5cc8ff; --amber: #f4b740; --violet: #b48cff; --green: #5fe0a0; --rose: #ff7a90; --slate: #8592b3; --red: #ff5d5d;
+  --cyan: #5cc8ff; --amber: #f4b740; --violet: #b48cff; --green: #5fe0a0; --rose: #ff7a90; --slate: #8592b3; --red: #ff5d5d; --indigo: #8aa2ff; --mauve: #c9a3c6;
   --win2: #ff8a3d; --win3: #f2c230;   /* window slots 2 and 3: the holder's lock, line and card (slot 1 is red) */
   --lift-shadow: 0 12px 28px rgb(0 0 0 / .55), 0 0 0 1px var(--cyan);
   --node-fill: rgb(10 15 34 / .94); --sel-tint: 18%; --halo-op: .09; --pulse: #ffffff; --star: #9fb3ff; --star-op: .45;
@@ -20,14 +20,14 @@
   --line: #dde3f0; --line2: #c6cfe3; --grid: #e6eaf3;
   --text: #1b2440; --text-strong: #0b1020; --muted: #55607f; --dim: #8a93ab;
   --b-job: #b0258f; --b-poll: #4f7a00; --b-paused: #a07800; --b-done: #2f5fd0; --b-blender: #ea7600;
-  --cyan: #0b74b0; --amber: #9a5f00; --violet: #6a3fc8; --green: #0f7a46; --rose: #c8325a; --slate: #5f6b88; --red: #c02626;
+  --cyan: #0b74b0; --amber: #9a5f00; --violet: #6a3fc8; --green: #0f7a46; --rose: #c8325a; --slate: #5f6b88; --red: #c02626; --indigo: #3b52c4; --mauve: #8a4f86;
   --win2: #e0640f; --win3: #a87f00;
   --lift-shadow: 0 8px 24px rgb(20 30 60 / .18), 0 0 0 1px var(--cyan);
   --node-fill: #ffffff; --sel-tint: 10%; --halo-op: .06; --pulse: #ffffff; --star: #b9c3da; --star-op: .7;
   --glow: none; --card-shadow: 0 1px 2px rgb(20 30 60 / .08), 0 4px 12px rgb(20 30 60 / .06);
   --crit-bg: #fdecee; --warn-bg: #fdf4e2; --info-bg: #eaf4fb;
 }
-.c-cyan { --c: var(--cyan); } .c-amber { --c: var(--amber); } .c-violet { --c: var(--violet); } .c-green { --c: var(--green); }
+.c-cyan { --c: var(--cyan); } .c-amber { --c: var(--amber); } .c-violet { --c: var(--violet); } .c-green { --c: var(--green); } .c-indigo { --c: var(--indigo); } .c-mauve { --c: var(--mauve); }
 .c-rose { --c: var(--rose); } .c-slate { --c: var(--slate); } .c-red { --c: var(--red); } .c-win2 { --c: var(--win2); } .c-win3 { --c: var(--win3); }
 
 * { box-sizing: border-box; }
@@ -178,6 +178,15 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 #graph.panning { cursor: grabbing; }
 .ticker { position: absolute; left: 14px; top: 12px; max-width: min(620px, 75%); background: var(--card); border: 1px solid var(--line2); border-radius: 8px; padding: 7px 11px; display: flex; gap: 9px; align-items: baseline; box-shadow: var(--card-shadow); transition: opacity .6s; }
 .ticker.fade { opacity: 0; }
+/* the HP queue, top left of the graph (2026-11-14): fixed to the view; the ticker goes under it while it shows */
+.qcard { --c: var(--rose); position: absolute; left: 14px; top: 12px; z-index: 2; text-align: left; font-size: 11.5px; line-height: 1.5;
+  background: linear-gradient(var(--card), var(--card)) var(--bg); border: 1px solid color-mix(in srgb, var(--c) 60%, transparent);
+  border-radius: 8px; padding: 5px 10px; box-shadow: var(--card-shadow); max-width: min(360px, 45%); }
+.qcard:hover { border-color: var(--c); }
+.qcard .q1 { display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; }
+.qcard .q1 svg { width: 12px; height: 12px; color: var(--c); flex: none; } .qcard b { color: var(--c); }
+.qcard .qn { color: var(--text); overflow: hidden; text-overflow: ellipsis; } .qcard .q2 { color: var(--muted); padding-left: 18px; }
+.stage.hasq .ticker { top: 68px; }
 .ticker .who { color: var(--violet); white-space: nowrap; }
 .ticker .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ticker .when { color: var(--muted); white-space: nowrap; }
@@ -254,7 +263,6 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 :root[data-motion="full"] .edge { transition: opacity .8s; }   /* a line going faint fades, it does not snap */
 .edge.lock { stroke: var(--lk, var(--red)); stroke-dasharray: none; stroke-width: 1.6; opacity: .8; }   /* routed through the gaps to the shelf */
 .edge.flashy { stroke-width: 3; opacity: 1; }
-.edge.queue { stroke: var(--rose); stroke-dasharray: 2 5; opacity: .45; }
 .edge.faint { opacity: .3; }                       /* a message line that is no longer hot */
 .edge.dim, .edge.hot.dim { opacity: .12; }         /* an agent is selected: lines that are not its own step back */
 .node .lockm circle { fill: var(--bg); stroke: var(--lk, var(--red)); stroke-width: 1.6; }
@@ -321,21 +329,17 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 .panel .empty-note { color: var(--muted); }
 
 /* WTS */
-/* the bar at the top of the tab: the jumps to each table on the left, the window slots, the waiters and the build lock
-   on the right (free: a name by a green icon, no box; held or waiting: a pill filled in its colour). When the locks
-   do not fit beside the jumps they take a line of their own, still on the right */
-.jump { position: sticky; top: -14px; background: var(--panel); padding: 8px 0; display: flex; flex-wrap: wrap; align-items: center;
+/* the bar at the top of the tab: the jumps to each table on the left, the window slots and the build lock on the
+   right, each only its name in a pill with a rounded outline (free: outlined in its colour; held: filled too). When
+   the locks do not fit beside the jumps they take a line of their own, still on the right */
+.jump { position: sticky; top: -14px; background: linear-gradient(var(--panel), var(--panel)), var(--bg);   /* solid: rows scroll under it */ padding: 8px 0; display: flex; flex-wrap: wrap; align-items: center;
   gap: 8px 5px; z-index: 1; }
-.wpills { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; min-width: 0; margin-left: auto;
+.wpills { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; margin-left: auto;
   padding-left: 12px; }
 .wpill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 11px;
-  line-height: 18px; white-space: nowrap; color: var(--muted); border: 1px solid transparent; }
-.wpill:not(.held) { padding-inline: 0; }
+  line-height: 18px; white-space: nowrap; color: var(--c); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
 .wpill svg { width: 11px; height: 11px; flex: none; color: var(--c); }
-.wpill.held { color: var(--c); font-weight: 600; background: color-mix(in srgb, var(--c) 14%, transparent);
-  border-color: color-mix(in srgb, var(--c) 55%, transparent); }
-.wpill.s-window { --c: var(--s); }
-.wpill b { font-weight: 700; }
+.wpill.held { font-weight: 600; background: color-mix(in srgb, var(--c) 14%, transparent); }
 .jump a { color: var(--c, var(--cyan)); text-decoration: none; cursor: pointer; font-weight: 600; padding: 1px 7px; border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--c, var(--cyan)) 50%, transparent); }
 .jump a:hover { background: color-mix(in srgb, var(--c, var(--cyan)) 16%, transparent); }
@@ -355,7 +359,7 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 .wrow.cur { background: color-mix(in srgb, var(--amber) 8%, transparent); }
 .wrow .n { color: var(--muted); }
 .wrow .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wrow.open .t, .wrow.cur .t, .wrow.live .t { white-space: normal; }
+.wrow.open .t, .wrow.cur .t, .wrow.live .t, .wrow.loose .t { white-space: normal; }
 .wrow .st2 { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; color: var(--c); max-width: 30ch; min-width: 0; }
 .wrow .st2 > span { overflow: hidden; text-overflow: ellipsis; }   /* a long state ("queued (started and …") keeps the title in view */
 /* live rows (in progress, paused, asking) stand out: a filled pill and a bar down the left edge */
@@ -526,6 +530,24 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 .wrow .n { display: flex; align-items: center; gap: 5px; height: 1.45em; }
 .wrow .nbtn { color: var(--muted); display: flex; }
 .wrow .nbtn svg { width: 12px; height: 12px; } .wrow .nbtn:hover { color: var(--cyan); }
+/* History: the closed rows (2026-11-14), collapsed by default */
+.gh.hist .hhead { display: inline-flex; align-items: center; gap: 8px; }
+.gh.hist .hchev { transition: transform .15s; color: var(--c); }   /* › closed, ⌄ open, as the other folds */
+.gh.hist .hhead[aria-expanded="true"] .hchev { transform: rotate(90deg); }
+.hday { margin: 10px 0 3px; color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.hrow { display: grid; grid-template-columns: 14px 34px 24px minmax(0, 1fr) auto 40px; gap: 6px; align-items: center; padding: 3px 4px;
+  font-size: 12px; border-bottom: 1px solid var(--line); }
+.hrow.bound { cursor: pointer; } .hrow.bound:hover { background: var(--surface); }
+.hrow .hs { display: flex; color: var(--c); } .hrow .hs svg { width: 11px; height: 11px; }
+.hrow .n { color: var(--muted); } .hrow .hg { color: var(--c); font-size: 10px; font-weight: 800; letter-spacing: .03em; }
+.hrow .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.hrow .hw { color: var(--muted); font-size: 11px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hrow .hw a { color: var(--cyan); cursor: pointer; } .hrow .ht { color: var(--dim); font-size: 11px; text-align: right; }
+.hmore { margin: 8px 0 4px; padding: 4px 10px; border: 1px solid var(--line2); border-radius: 6px; color: var(--muted); font-size: 11.5px; }
+.hmore:hover { color: var(--text); border-color: var(--slate); }
+.flashrow { animation: flashrow 1.6s ease-out; }
+@keyframes flashrow { from { background: color-mix(in srgb, var(--cyan) 28%, transparent); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .flashrow { animation: none; outline: 1px solid var(--cyan); } }
 .notes { border-left: 2px solid var(--line2); padding: 0 0 0 10px; }
 .ntitle { color: var(--text-strong); margin: 2px 0 6px; overflow-wrap: anywhere; }
 .nsec { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 0 6px; align-items: baseline; width: 100%; text-align: left; padding: 5px 0 4px; border-top: 1px dashed var(--line); }

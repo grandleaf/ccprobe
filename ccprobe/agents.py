@@ -117,6 +117,7 @@ class Transcript:
         self.last_ts = 0.0                     # newest conversational entry's own timestamp
         self.last_activity = 0.0               # newest conversational entry or model call (api-request)
         self.last_kind = None                  # tool | handback | end | text | result | received | user | turn_end
+        self.prompt_t = 0.0                    # the newest prompt typed into this session
         self.ctx = 0
         self.model = None
         self.said = ""
@@ -312,6 +313,7 @@ class Transcript:
                     return
                 self._touch(t)
                 self.handed_back = False
+                self.prompt_t = t
                 self.last_kind = "user"          # a prompt typed into this session
         known = [i for i in ids if i in self.pending]
         res = d.get("toolUseResult") if isinstance(d.get("toolUseResult"), dict) else {}
@@ -354,6 +356,8 @@ class Transcript:
 
     def _received(self, origin, text, t):
         kind = origin.get("kind")
+        if kind == "human":                    # a typed prompt (Claude Code marks one so since about 2.1.300)
+            self.prompt_t = t
         for tid in RE_NOTIFY_ID.findall(text) + [self.bg_task.pop(k) for k in RE_TASK_ID.findall(text) if k in self.bg_task]:
             self.bg_pending.pop(tid, None)
             self.bg_desc.pop(tid, None)
@@ -579,7 +583,19 @@ def lead_state(tr, session, now):
     if reg_idle:
         return {"key": "idle", "label": "idle", "since": (session.get("statusUpdatedAt") or 0) / 1000,
                 "detail": "the last turn ended without a reply (interrupted?)"}
-    return _ladder(tr, now)
+    st = _ladder(tr, now)
+    if st["key"] == "stuck":
+        # the user, 2026-11-14 (a lead's "stuck? silent 25m" while its worker ran): say what is wrong. A lead that waits
+        # on its agents has ended its turn (idle) or runs a tool (Agent, Bash); this one is mid-turn with no tool and
+        # nothing back from the model, so its request is likely hung, and "stuck? silent" read as maybe just busy
+        quiet = _dur(now - (tr.last_activity or tr.last_ts or now))
+        asked = tr.prompt_t and tr.prompt_t >= tr.last_ts      # your prompt is the newest entry: it has no answer yet
+        st.update(label=f"no reply · {quiet}",
+                  long=(f"no reply to your {time.strftime('%H:%M', time.localtime(tr.prompt_t))} message · {quiet}" if asked
+                        else f"no reply from the model · {quiet}"),
+                  detail="Mid-turn, no tool running, and nothing back from the model: its request may be hung. "
+                         "Press Esc in its terminal and send it again.")
+    return st
 
 
 def _dur(s):
