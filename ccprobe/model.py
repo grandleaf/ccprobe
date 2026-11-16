@@ -406,6 +406,16 @@ class Collector:
             # you stopped it
             if st["key"] in ("ended", "unknown") and (meta.get("finished") or meta.get("stoppedByUser")):
                 finished = True
+            # a helper whose turn ended on a background job, which Claude Code says has finished, and whose task is done
+            # or closed: done, not "waiting on its job" for ever (the user, 2026-11-15: "task 378 is done, why we show its
+            # advisor adv378 is still there?"; its job never reported back). A worker waiting on its build is "finished"
+            # in its meta too until the job wakes it, so the flag alone does not tell
+            if st["key"] == "ended_bg" and role == "helper" and (meta.get("finished") or meta.get("stoppedByUser")):
+                hn = n if n is not None else _task_of_meta(meta, helps_rows)
+                if hn is not None and (rows.get(hn) or {}).get("kind") not in wts_mod.OPEN:
+                    st = {"key": "ended", "label": "done", "since": st["since"], "sub": "done",
+                          "detail": f"task {hn} is done; it was waiting on: {st.get('detail') or 'its job'}"}
+                    finished = True
             agents.append({
                 "id": aid, "name": meta.get("name"), "label": label, "desc": clip(redact(meta.get("description") or ""), 120),
                 "role": role, "task": n, "task_title": row["title"] if row else None, "group": row["group"] if row else None,
