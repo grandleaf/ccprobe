@@ -373,6 +373,15 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
   color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
 .wrow .obs { grid-column: 2 / 4; color: var(--muted); font-size: 11px; display: flex; gap: 6px; align-items: center; }
 .wrow .obs.mismatch { color: var(--amber); }
+/* a task's helpers and the agents spawned under it: indented lines under the row's own, a tree corner before each */
+.wrow .obs.crew { padding-left: 10px; cursor: pointer; min-width: 0; }
+.wrow .obs.crew.l2 { padding-left: 24px; } .wrow .obs.crew.l3 { padding-left: 38px; }
+.wrow .obs.crew::before { content: ''; flex: none; width: 7px; height: 8px; margin-top: -7px; border-left: 1px solid var(--muted); border-bottom: 1px solid var(--muted); opacity: .45; }
+.wrow .obs.crew .cn { flex: none; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--c); }
+.wrow .obs.crew .cs { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wrow .obs.crew svg { width: 11px; height: 11px; flex: none; }
+.wrow .obs.crew:hover .cn, .wrow .obs.crew.sel .cn { text-decoration: underline; }
+.wrow .obs.crew.fin { cursor: default; opacity: .8; }
 /* the window: its holder's row has a red edge and number, its agent line red with the lock; a waiter's line is amber */
 .wrow.holds { box-shadow: inset 3px 0 0 var(--lk, var(--red)); } .wrow.holds .n { color: var(--lk, var(--red)); }
 .wrow .obs.win { color: var(--c); font-weight: 600; } .wrow .obs.win.s-window { color: var(--s); }

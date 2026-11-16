@@ -161,6 +161,7 @@ Kept per transcript (main or agent), updated from new entries only:
 | `ended_bg` | waiting on Blender / licence / build / capture / tests / its job · how long (whole hours past the first, so it fits) | the last kind is handback/text and `bg_pending` is not empty; the newest job's command and description say what it is (`what_of`). A running or polling Bash is named the same way (`Blender · 5m`, `waiting on a build · 3m`) |
 | `ended` | waiting for a message (its turn ended; a message wakes it) / done | the last kind is handback, or a final assistant text with no pending tool. The subtype is *waiting* if the bound row is open, else *done* |
 | `thinking` | thinking | the last kind is user/tool_result/queued_command and the file grew in the last 120 s |
+| `ended` (stopped) | stopped: weekly limit / 5-hour limit / API error 529 | the last entry is an API error message (`isApiErrorMessage`: the request failed after Claude Code's retries, the usage limit or an overload): the agent has stopped, finished like a TaskStop; the lead is idle, the error in its detail. A row's agent stopped so stays in view while its row is open and no newer agent has the task, with a red alert (2026-11-15: helpers that hit the weekly limit read "stuck? silent 16m", one alert each) |
 | `stuck` | stuck? silent 12m | none of the above, and no growth for ≥ 10 min (shown as a question) ; the lead says "no reply · 12m" (2026-11-14: mid-turn with no tool running it is not busy with its agents, whose waits end its turn or run as a tool, but likely a hung request) |
 | `unknown` | unknown | the parser could not tell |
 
@@ -315,7 +316,7 @@ is no longer checked against the queue or the worker: the Events tab and the que
 - **Edge labels** get a `paint-order: stroke` halo. The spawn-edge label is dropped.
 - **Viewport:**
   - Fit-to-content on layout change (unless the user has panned).
-  - Wheel zoom (0.4–3×) and drag to pan.
+  - ⌘/Ctrl + wheel zoom (0.4–3×; a pinch too; a plain wheel scrolls the page, 2026-11-15) and drag to pan.
   - `F` fits; when the user has panned and the layout then changes, a "⤢ Fit" button appears.
 
 ### 9.4 Status vocabulary and icons
@@ -396,6 +397,13 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   line under it like a bound row's agent, a click selects it. It leaves when it finishes. They count in the jump
   bar's AG number and keep the heading "running" (`groupHead`'s `more`); the graph's queue card ("AG N open") counts
   filed rows only.
+- **A row's crew** (the user, 2026-11-15: "task 377 spawn a couple of subagent, but it is not show in the LP section
+  ... this is also true for the adv HEX, e.g. HP378 has adv378 for advisor"). `crewOf()` in app.js gives each helper
+  to the row of its nearest agent with a number (its own `helps`, as an advisor or critic the lead started for the
+  task, else up its parents to the task's agent), with its depth under the row; one with no numbered agent above it
+  goes to the unfiled AG row of its top agent. `crewLines()` draws, under the row's agent line, one indented line per
+  live one (a tree corner, its name in its role's colour, its state's mark and words; a click selects it), then the
+  finished ones in one muted line while the row is open, with how many stopped on an API error and why.
 - **HX, the history (2026-11-14; named HX, two letters like the tables, the same day).** The user: "any accepted, or aborted task goes to there, and it is default collapsed, we can
   expand it". queue.py's `history_rows` orders the closed rows (✔, or `n/a`), newest first, by the date and time in
   the Accepted cell (`accept` and `close` stamp a time since that day; older rows have a date only, old n/a rows none
@@ -791,8 +799,12 @@ task they say what was done far better than the transcript, so ccprobe shows the
   file's time is the reading's time (`seen`).
 - **Stale sessions.** Every session draws its status line (here once a second), and an idle one keeps the figure from
   its last reply: 23% from two days back beside a busy session's 70% made the file flip each second. The writer keeps
-  per window the later `resets_at` and, for the same one, the higher figure (use only grows inside a window), drops
-  windows whose reset has passed, and writes only on a change or once a minute.
+  per window the later `resets_at` and, for the same one, the newer reading, drops windows whose reset has passed, and
+  writes only on a change or once a minute. Each reading is stamped `seen_at`, its session's transcript time (the
+  figure comes from the last reply's headers). Until 2026-11-15 the same reset kept the higher figure (use only grows
+  inside a window), but a weekly limit reset by hand keeps its reset time, so the stale 100% stayed (the user,
+  2026-11-15: "i have reset my weekly limit (include fable), but the UI doesn't reflect that"). The status line's own
+  week figure is the newer of that and the usage rows' `weekly_all`.
 - **Model.** `plan`: `{seen, windows: [{key, label, span, used, resets_at}]}` (5-hour first, then the week, then any
   model's own week); used capped to 0–100; milliseconds and ISO times read as times. A remote's own reading is not
   merged: the local one stands.
@@ -845,8 +857,9 @@ task they say what was done far better than the transcript, so ccprobe shows the
 - **ccprobe stays read-only:** `plan.py` reads `~/.cache/ccprobe/plan-usage.json` beside `rate-limits.json`.
   `weekly_scoped` becomes `seven_day_<name>` (`week · Fable`), `weekly_all` the week, `session` the 5-hour window;
   reset times are rounded to the minute (the endpoint sends 14:59:59.86). One reading per window: for the same reset
-  (within an hour) the higher figure, as of the newer reading; else the later reset. Each window now carries `seen` and
-  `src` (`status line` or `usage`).
+  (within an hour) the newer figure (`at`: the status line's `seen_at`, the rows' `fetched_at`; a status line reading
+  without `seen_at` counts as of its file's time), seen as of the newer reading; else the later reset (2026-11-15; it
+  was the higher figure). Each window carries `seen`, `at` and `src` (`status line` or `usage`).
 - **Header.** The plan chip has one part per bar, `week ▬ 24% used │ fable ▬ 40%` (lower case, like `week`), with a hairline between. The gauge
   icon takes the fullest part's colour, and a part whose own reading is 15 minutes old dims alone. The tooltip gives
   each bar's lines and where a model's figure came from; the popover lists it like any window. The 5-hour badge (at

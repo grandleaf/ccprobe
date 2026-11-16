@@ -16,8 +16,12 @@ them: regular files, at most 64 KB, never served as they are.
       {"fetched_at": 1794615441, "limits": [{"kind": "weekly_all", "percent": 24, "resets_at": "2026-11-19T15:00:00Z"},
           {"kind": "weekly_scoped", "percent": 40, "scope": {"model": {"display_name": "Fable"}}, …}, …]}
 
-Both give the all-models week; per window the reading kept is the higher figure for the same reset (use only grows
-inside a window), else the later reset, as the status line's writer keeps it.
+Both give the all-models week; per window the reading kept is the newer one for the same reset, else the later
+reset, as the status line's writer keeps it. A status line reading's time is its `seen_at` (when its session last
+wrote its transcript, so last had a reply: an idle session passes on an old figure), the rows' their `fetched_at`.
+Until 2026-11-15 the same reset kept the higher figure (use only grows inside a window), but a weekly limit reset by
+hand keeps its reset time, and the stale 100% won (the user, 2026-11-15: "i have reset my weekly limit (include
+fable), but the UI doesn't reflect that").
 """
 import datetime as dt
 import json
@@ -66,8 +70,8 @@ def _label(key):
 
 
 def parse(d, seen):
-    """{"seen", "windows": [{key, label, used, resets_at, span, seen, src}]} from the status line's saved object, or None
-    with no window."""
+    """{"seen", "windows": [{key, label, used, resets_at, span, seen, at, src}]} from the status line's saved object, or
+    None with no window. `seen`: when it was last drawn (the file's time); `at`: when the figure was (its seen_at)."""
     rl = d.get("rate_limits") if isinstance(d, dict) else None
     if not isinstance(rl, dict):
         return None
@@ -79,7 +83,8 @@ def parse(d, seen):
         if used is None or lab is None:
             continue
         out.append({"key": key, "label": lab[0], "span": lab[1], "used": max(0.0, min(used, 100.0)),
-                    "resets_at": _when(w.get("resets_at")), "seen": seen, "src": "status line"})
+                    "resets_at": _when(w.get("resets_at")), "seen": seen,
+                    "at": min(_num(w.get("seen_at")) or seen, seen), "src": "status line"})
     out.sort(key=_order)
     return {"seen": seen, "windows": out} if out else None
 
@@ -117,7 +122,7 @@ def parse_usage(d):
             continue
         rs = _when(r.get("resets_at"))     # 14:59:59.86 as sent: to the minute, so it reads as the week's 15:00
         out.append({"key": key, "label": label, "span": span, "used": max(0.0, min(used, 100.0)),
-                    "resets_at": round(rs / 60) * 60.0 if rs else rs, "seen": seen, "src": "usage"})
+                    "resets_at": round(rs / 60) * 60.0 if rs else rs, "seen": seen, "at": seen, "src": "usage"})
     return out
 
 
@@ -126,15 +131,15 @@ def _order(w):
 
 
 def merge(*lists):
-    """One reading per window: for the same reset (an hour apart at most: the endpoint's time has fractions) the higher
-    figure, seen as of the newer reading; else the one with the later reset."""
+    """One reading per window: for the same reset (an hour apart at most: the endpoint's time has fractions) the newer
+    figure (`at`; a tie: the higher), seen as of the newer reading; else the one with the later reset."""
     by = {}
     for w in (w for ws in lists for w in ws):
         o = by.get(w["key"])
         if o is None:
             by[w["key"]] = w
         elif o["resets_at"] and w["resets_at"] and abs(o["resets_at"] - w["resets_at"]) < HOUR:
-            top = w if w["used"] > o["used"] or (w["used"] == o["used"] and w["seen"] > o["seen"]) else o
+            top = w if (w["at"], w["used"], w["seen"]) > (o["at"], o["used"], o["seen"]) else o
             by[w["key"]] = {**top, "seen": max(o["seen"], w["seen"])}
         elif (w["resets_at"] or 0) > (o["resets_at"] or 0):
             by[w["key"]] = w

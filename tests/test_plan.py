@@ -86,14 +86,32 @@ class PlanTests(unittest.TestCase):
         self.save({"fetched_at": 1794615400, "limits": rows}, self.upath)
         got = self.read()
         week = next(w for w in got["windows"] if w["key"] == "seven_day")
-        # the same window: the higher figure (the rows' 24 over the status line's 23), as of the newer reading
-        self.assertEqual((week["used"], week["src"], week["seen"]), (24.0, "usage", 1794615600))
+        # the same window, no seen_at (an older status line): the file's time, so the status line's is the newer
+        self.assertEqual((week["used"], week["src"], week["seen"]), (23.0, "status line", 1794615600))
         self.assertEqual([w["key"] for w in got["windows"]], ["five_hour", "seven_day", "seven_day_fable"])
         self.assertEqual(got["seen"], 1794615600)
         # a later window wins whatever its figure: the week reset, the status line has the new one
         self.save({"rate_limits": {"seven_day": {"used_percentage": 1, "resets_at": 1795705200}}})
         week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
         self.assertEqual((week["used"], week["src"]), (1.0, "status line"))
+
+    def test_a_reset_by_hand_keeps_its_reset_time(self):
+        # the user, 2026-11-15: the week reset by hand, same reset time; an idle session still passes on its 100%
+        self.save({"rate_limits": {"seven_day": {"used_percentage": 100, "resets_at": 1795100400, "seen_at": 1794675600}}})
+        os.utime(self.path, (1794798700, 1794798700))
+        self.save({"fetched_at": 1794798650, "limits": [
+            {"kind": "weekly_all", "percent": 1, "resets_at": "2026-11-19T15:00:00.08+00:00"},
+            {"kind": "weekly_scoped", "percent": 1, "resets_at": "2026-11-19T15:00:00.08+00:00",
+             "scope": {"model": {"display_name": "Fable"}}}]}, self.upath)
+        got = self.read()
+        week = next(w for w in got["windows"] if w["key"] == "seven_day")
+        self.assertEqual((week["used"], week["src"], week["seen"]), (1.0, "usage", 1794798700))   # the newer figure
+        self.assertEqual(got["seen"], 1794798700)                     # drawn a minute ago: not "no session drawing"
+        # a reply after the fetch: the status line's figure is the newer
+        self.save({"rate_limits": {"seven_day": {"used_percentage": 3, "resets_at": 1795100400, "seen_at": 1794798690}}})
+        os.utime(self.path, (1794798700, 1794798700))
+        week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
+        self.assertEqual((week["used"], week["src"]), (3.0, "status line"))
 
     def test_bad_usage_rows_give_nothing(self):
         for bad in ("not json", "[]", '{"limits": []}', '{"limits": {}, "fetched_at": 1}',

@@ -120,6 +120,10 @@ What you see:
   none is missing from the WTS view: number "—", its job for a title, "not filed" for its state, what it is doing on
   the line under it; a click selects it, and it leaves the table when it finishes. The AG count on the jump bar and
   the table's running/idle count them.
+  Under a row's agent line, an indented line for each other agent working for the task: its advisor or critic
+  (`adv378` under 378) and every agent spawned under one of its agents, however deep (an unfiled AG row: the ones
+  spawned under it), each with its state; a click selects it on the graph. The finished ones share one muted line
+  while the row is open ("17 finished · 15 stopped: weekly limit"; each in the tip).
   At the bottom, **HX** (history: collapsed until you open it; the page remembers) holds the closed tasks, accepted ✔ or
   closed `n/a` (cancelled, folded into another), newest first under day headings, each with its table's tag. A click
   opens a task's notes; "folded into 312" jumps to row 312. The newest 50 come with every update, "Show all" fetches
@@ -172,8 +176,10 @@ What you see:
   ```
 
   Without the file there is no chip. An idle session keeps passing on the figure from its last reply, so a status line
-  that runs in several sessions should keep, per window, the later `resets_at` and for the same one the higher figure
-  (the worker skill's `statusline.sh` does, and writes only on a change or once a minute). The chip dims when nothing
+  that runs in several sessions should keep, per window, the later `resets_at` and for the same one the newer reading,
+  stamped `seen_at` (when its session last wrote its transcript, so last had a reply); the worker skill's
+  `statusline.sh` does, and writes only on a change or once a minute. Not the higher figure: a weekly limit reset by hand
+  keeps its reset time. The chip dims when nothing
   was saved for 15 minutes, and says when a window has reset since the reading.
 
   A model's own week is not in `rate_limits`. Claude Code has it in the claude.ai usage endpoint's rows (the ones
@@ -188,11 +194,11 @@ What you see:
   ```
 
   No prompt, so no tokens; Claude Code signs in by itself. ccprobe reads `weekly_scoped` rows as a model's week
-  (`week · Fable`) and `weekly_all` as the week, keeping per window the higher figure of the two files.
+  (`week · Fable`) and `weekly_all` as the week, keeping per window the newer figure of the two files (`seen_at` against `fetched_at`).
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
   auto-hide done agents, show all relationships, compact nodes, notifications. A first visit starts dark, with
   auto-hide and all relationships on, motion Full (Reduced when the OS asks for less motion), timeline 45m.
-- **Keys:** `1`…`5` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · double-click an agent with a page mark: its notes · `Esc` closes the notes, else deselects · wheel zooms and
+- **Keys:** `1`…`5` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · double-click an agent with a page mark: its notes · `Esc` closes the notes, else deselects · ⌘ or Ctrl + wheel (or a pinch) zooms and
   dragging pans.
 - **Panel widths:** drag the splitter on either side of the graph (or focus one and use ← →) to resize the sessions list
   or the side panel, and double-click a splitter to reset it. Both widths are remembered in this browser, and the graph

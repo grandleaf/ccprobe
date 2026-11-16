@@ -130,6 +130,7 @@ class Transcript:
         self.stops = {}                        # task or agent id -> when this transcript stopped it (TaskStop)
         self.compactions = collections.deque(maxlen=50)   # (t, pre, post)
         self.limit = None                      # {"since": t, "text": …} while a usage limit holds
+        self.api_error = None                  # {t, what, text}: its last request failed for good (the usage limit …)
         self.title = None
         self.perm_mode = None
         self.unknown = collections.Counter()
@@ -180,7 +181,10 @@ class Transcript:
             self.last_activity = max(self.last_activity, t)
         elif typ == "assistant":
             self._touch(t)
-            self._assistant(d.get("message") or {}, t)
+            if d.get("isApiErrorMessage"):     # Claude Code's own message (model "<synthetic>"), not a reply: no model,
+                self._api_error(d, t)          # no context, and a usage limit it reports still holds
+            else:
+                self._assistant(d.get("message") or {}, t)
         elif typ == "user":
             self._user(d, t)
         elif typ == "attachment":
@@ -192,7 +196,8 @@ class Transcript:
             st = d.get("subtype")
             if st == "turn_duration":
                 self._touch(t)
-                self.last_kind = "turn_end"
+                if self.last_kind != "api_error":   # the lead's turn ends right after a failed request: keep why
+                    self.last_kind = "turn_end"
             elif st == "compact_boundary":
                 m = d.get("compactMetadata") or {}
                 self.compactions.append((t, m.get("preTokens"), m.get("postTokens")))
@@ -231,6 +236,24 @@ class Transcript:
                 self.last_kind = "end" if msg.get("stop_reason") == "end_turn" else "text"
             elif c.get("type") == "tool_use":
                 self._tool_use(c, t)
+
+    def _api_error(self, d, t):
+        """A request that failed after Claude Code's own retries: its message is the turn's last entry, and an agent stops
+        there (the user, 2026-11-15: helpers that hit the weekly limit read "stuck? silent 16m", one alert each)."""
+        info = (d.get("apiErrorParams") or {}).get("rate_limit_info") or d.get("quotaLimits") or {}
+        kind = str(info.get("rateLimitType") or "") if isinstance(info, dict) else ""
+        m = re.fullmatch(r"seven_day_([a-z0-9]+)", kind)
+        what = ({"seven_day": "weekly limit", "five_hour": "5-hour limit"}.get(kind)
+                or (f"{m.group(1).capitalize()} weekly limit" if m else None)
+                or ("usage limit" if d.get("error") == "rate_limit" else None)
+                or (f"API error {d['apiErrorStatus']}" if d.get("apiErrorStatus") else "API error"))
+        content = (d.get("message") or {}).get("content")
+        text = next((first_line(c["text"]) for c in content if isinstance(c, dict) and c.get("type") == "text"
+                     and str(c.get("text", "")).strip()), "") if isinstance(content, list) else ""
+        if text:
+            self.said = text
+        self.api_error = {"t": t, "what": what, "text": clip(redact(text), 160)}
+        self.last_kind = "api_error"
 
     def _tool_use(self, c, t):
         name, inp, tid = c.get("name") or "?", c.get("input") or {}, c.get("id")
@@ -529,6 +552,10 @@ def agent_state(tr, now, *, alive=True, lock_names=(), is_holder=False, row_open
     st = pending_state(tr, now, lock_names, is_holder)
     if st:
         return st
+    if tr.last_kind == "api_error":            # its request failed for good: it has stopped (finished, as a TaskStop)
+        e = tr.api_error
+        return {"key": "ended", "label": f"stopped: {e['what']}", "since": e["t"], "detail": e["text"], "sub": "stopped",
+                "api_error": e["what"]}
     ended = tr.last_kind in ("handback", "end", "turn_end")
     if ended and tr.bg_pending:
         # the newest job it waits on, named when its command says what it is ("waiting on Blender · 12m")
@@ -575,6 +602,9 @@ def lead_state(tr, session, now):
         if age > 60:
             st["detail"] = (st.get("detail") or "") + " (or waiting for your approval?)"
         return st
+    if tr.last_kind == "api_error":           # the request failed for good (the usage limit …): its turn is over
+        e = tr.api_error
+        return {"key": "idle", "label": "idle", "since": e["t"], "detail": f"its last request failed: {e['text'] or e['what']}"}
     if tr.last_kind in ("turn_end", "end", "handback"):      # its turn is over: idle until you write
         return {"key": "idle", "label": "idle", "since": tr.last_ts, "detail": ""}
     if tr.last_kind is None:

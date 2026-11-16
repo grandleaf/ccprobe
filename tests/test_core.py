@@ -208,6 +208,33 @@ class StateTests(Base):
         st = lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now + 100)      # a prompt as Claude Code marks one now
         self.assertEqual(st["long"], f"no reply to your {time.strftime('%H:%M', time.localtime(self.now - 1500))} message · 26m")
 
+    def test_a_request_that_failed_for_good_stops_the_agent(self):   # the user, 2026-11-15: helpers at the weekly limit read "stuck?"
+        lim = {"type": "assistant", "timestamp": iso(self.now - 1000), "isApiErrorMessage": True, "error": "rate_limit",
+               "apiErrorStatus": 429, "apiErrorParams": {"rate_limit_info": {"status": "rejected", "rateLimitType": "seven_day"}},
+               "message": {"role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence",
+                           "content": [{"type": "text", "text": "You've hit your weekly limit · resets Nov 19 at 7am"}]}}
+        self.w.add(tool_use(self.now - 1010, "toolu_r1", "Read", {"file_path": "/x"}), result(self.now - 1009, "toolu_r1"),
+                   {"type": "api-request", "timestamp": iso(self.now - 1009)}, lim)
+        st = agent_state(self.tr(), self.now)
+        self.assertEqual((st["key"], st["sub"], st["label"], st["api_error"]), ("ended", "stopped", "stopped: weekly limit", "weekly limit"))
+        self.assertIn("weekly limit", st["detail"])
+        self.assertEqual(lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now)["key"], "idle")   # a lead: its turn is over
+        self.assertNotEqual(self.tr().model, "<synthetic>")
+        # a lead's transcript ends the turn right after (turn_duration): the error still says why
+        lead_tr = self.tr()
+        lead_tr.apply({"type": "system", "subtype": "turn_duration", "timestamp": iso(self.now - 999)})
+        self.assertIn("weekly limit", lead_state(lead_tr, {"alive": True, "status": "busy"}, self.now)["detail"])
+        # a row in progress whose agent stopped so: one alert that says why, not "stuck? silent"
+        a = {"id": "w1", "label": "HP 5", "state": st, "qstate": []}
+        w = {"root": "/r", "groups": {"HP": [{"n": 5, "kind": "active", "agent": "w1", "title": "t", "status": "in progress"}]}}
+        al = alerts.compute([{"id": "S", "project": "demo", "lead": {}, "agents": [a], "wts": w}], self.now, alerts.Memory())
+        self.assertEqual([x["title"] for x in al], ["Row 5 says in progress, but HP 5 stopped: weekly limit"])
+        # another error: its status; a later reply puts it back to work
+        self.w.add(dict(lim, timestamp=iso(self.now - 900), error="overloaded", apiErrorStatus=529, apiErrorParams={}))
+        self.assertEqual(agent_state(self.tr(), self.now)["label"], "stopped: API error 529")
+        self.w.add(tool_use(self.now - 10, "toolu_r2", "Read", {"file_path": "/y"}))
+        self.assertEqual(agent_state(self.tr(), self.now)["key"], "running")
+
     def test_idle_compaction_is_not_a_prompt(self):
         self.w.add(text(self.now - 1900, "Done.", stop="end_turn"),
                    {"type": "system", "subtype": "compact_boundary", "timestamp": iso(self.now - 1800), "compactMetadata": {"trigger": "auto"}},

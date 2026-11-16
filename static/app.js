@@ -1535,7 +1535,7 @@ function hexWords(n) {
 const MARK = { msg: 'i-msg', blender: 'i-blender', job: 'i-gear', poll: 'i-poll', paused: 'i-park', window: 'i-window',
   hold: 'i-wait', stuck: 'i-stall', dead: 'i-dead', done: 'i-done', ask: 'i-ask' };
 function markOf(n, st = n.state || {}) {
-  if (st.key === 'dead') return 'dead';
+  if (st.key === 'dead' || st.api_error) return 'dead';   // stopped on a failed request (the weekly limit): not done
   if (n.role === 'lead') return st.key === 'waiting_user' ? 'ask' : null;
   if (st.key === 'waiting_window') return 'window';
   if (!n.finished && isParked(n)) return st.key === 'parked' ? (st.sub === 'hold' ? 'hold' : 'paused') : n.rowKind === 'paused' ? 'paused' : 'hold';
@@ -1924,8 +1924,11 @@ function svgPoint(ev) {
   pt.x = ev.clientX; pt.y = ev.clientY;
   return pt.matrixTransform(svg.getScreenCTM().inverse());
 }
+// zoom on ⌘/Ctrl + wheel only (a trackpad pinch comes as Ctrl + wheel too); a plain wheel scrolls the page (the user,
+// 2026-11-15: "when i mouse scroll up down on the graph window, it will zoom in or zoom out, can we change it to some
+// key + scroll")
 $('graph').addEventListener('wheel', ev => {
-  if (!S.vb || !S.fitVb) return;
+  if (!S.vb || !S.fitVb || !(ev.ctrlKey || ev.metaKey)) return;
   ev.preventDefault();
   const p = svgPoint(ev), k = Math.exp(ev.deltaY * .0015);
   const w = Math.min(S.fitVb.w / .4, Math.max(S.fitVb.w / 3, S.vb.w * k)), f = w / S.vb.w;
@@ -2754,6 +2757,7 @@ function wtsPanel(s) {
       : pill('green', 'i-build', 'build', 'No build is running (the build lock is free)')) : '')
     + '</span></div>';
   const running = new Set(((w.state_file || '').match(/^running((?:\s+\d+)+)/) || ['', ''])[1].split(/\s+/).filter(Boolean).map(Number));
+  const crew = crewOf(s);
   for (const g of groupsOf(w)) {
     const rows = rowsOf(g);
     // the model the table's rows run on: the most common one in its heading (a tip with the count of each when they
@@ -2778,7 +2782,7 @@ function wtsPanel(s) {
       const quiet = a && a.state.key === 'ended' && a.state.sub === 'done' && ['done', 'closed'].includes(r.kind);
       if (a && !quiet) {
         const [ai, ac] = stLook(a.state), am = markOf(a);
-        const mismatch = (r.kind === 'active' && ['dead', 'stuck'].includes(a.state.key)) ||
+        const mismatch = (r.kind === 'active' && (['dead', 'stuck'].includes(a.state.key) || a.state.api_error)) ||
           (['paused', 'parked'].includes(r.kind) && a.state.key === 'running' && !/window/.test(a.state.label));
         const who = a.label === `${g} ${r.n}` ? '' : esc(a.label) + ': ', tip = ` data-tip="${esc('Its agent: ' + a.label)}"`;
         if (holds) {   // its agent line in the window's colours: red with the lock (holds it), amber with the window (waits)
@@ -2793,10 +2797,54 @@ function wtsPanel(s) {
       } else if (!a && r.kind === 'active') {
         h += `<span class="obs">no agent seen for this row</span>`;
       }
+      h += crewLines(crew.by, r.loose ? crew.byRoot.get(a?.id) : crew.byTask.get(r.n), r, a);
       h += '</div>';
     }
   }
   return h + historyPanel(s, w);
+}
+
+// The agents working for a row beside its own, each on an indented line under the row's (the user, 2026-11-15: "task
+// 377 spawn a couple of subagent, but it is not show in the LP section ... this is also true for the adv HEX, e.g. HP378
+// has adv378 for advisor"): its advisor or critic (a helper the lead started for it: helps N), and every helper spawned
+// under one of its agents, however deep; for an unfiled AG row, the helpers spawned under its agent. byTask: task
+// number -> [agent], byRoot: the lead's own agent -> [agent], oldest first; each with its depth under the row (lvl).
+function crewOf(s) {
+  const by = new Map((s.agents || []).map(a => [a.id, a])), byTask = new Map(), byRoot = new Map();
+  const put = (m, k, v) => (m.get(k) || m.set(k, []).get(k)).push(v);
+  for (const a of s.agents || []) {
+    if (a.role !== 'helper') continue;
+    let x = a, k = 0, top = null;
+    for (; x && k < 8; x = by.get(x.parent), k++) {
+      if ((x.task ?? x.helps) != null) break;   // the nearest agent with a number: the row it works for
+      top = x;
+    }
+    if (x && k < 8) put(byTask, x.task ?? x.helps, { a, lvl: Math.max(1, k + (x.role === 'helper' ? 1 : 0)) });
+    else if (top && top !== a && top.parent === 'lead') put(byRoot, top.id, { a, lvl: Math.max(1, k - 1) });
+  }
+  for (const m of [byTask, byRoot]) for (const l of m.values()) l.sort((p, q) => (p.a.born || 0) - (q.a.born || 0));
+  return { byTask, byRoot, by };
+}
+// one line for each that is at work or waiting (its name, its state's mark and words; a click selects it), then the
+// finished ones in one muted line while the row is open ("6 finished · 6 stopped: weekly limit", each in the tip)
+function crewLines(by, list, r, own) {
+  const mine = (list || []).filter(c => c.a.id !== own?.id);
+  if (!mine.length) return '';
+  let h = '';
+  for (const { a: c, lvl } of mine.filter(c => !c.a.finished)) {
+    const [ci, cc] = stLook(c.state), cm = markOf(c);
+    const from = c.parent === 'lead' ? `started by the lead for ${r.n ?? 'it'}` : `spawned by ${by.get(c.parent)?.label || 'an agent that has gone'}`;
+    const tip = `${c.label}${c.desc && c.desc !== c.label ? '\n' + c.desc : ''}\n${from}\n${c.state.label}${c.state.detail ? ' · ' + c.state.detail : ''}\nclick: select it on the graph`;
+    h += `<span class="obs crew l${Math.min(lvl, 3)}${c.id === S.sel ? ' sel' : ''}" data-select="${esc(c.id)}" data-tip="${esc(tip)}">`
+      + `<span class="cn c-${roleCol(c.role)}">${esc(c.label)}</span><span class="${cm ? 'mk s-' + cm : 'c-' + cc}">${icon(cm ? MARK[cm] : ci)}</span><span class="cs">${esc(c.state.label)}</span></span>`;
+  }
+  const fin = mine.filter(c => c.a.finished);
+  if (fin.length && (r.loose || LIVEKIND.includes(r.kind))) {
+    const why = new Map(); fin.forEach(c => c.a.state.api_error && why.set(c.a.state.api_error, (why.get(c.a.state.api_error) || 0) + 1));
+    const tip = fin.map(c => `${c.a.label}: ${c.a.state.label}`).join('\n');
+    h += `<span class="obs crew fin l1" data-tip="${esc(tip)}">${icon('i-done')}<span class="cs">${fin.length} finished${[...why].map(([k, n]) => ` · ${n} stopped: ${esc(k)}`).join('')}</span></span>`;
+  }
+  return h;
 }
 
 // ---- History: the closed rows, newest first (the user, 2026-11-14: "any accepted, or aborted task goes to there, and it
@@ -3086,6 +3134,7 @@ $('panel').addEventListener('click', e => {
     if (k.dataset.tktab) S.tab = 'tokens';
     return renderPanel();
   }
+  if (e.target.closest('.crew.fin')) return;   // a row's finished helpers: a summary, not its agent (the row's select)
   const t = e.target.closest('[data-select],[data-dismiss],[data-snooze],[data-jump]');
   if (!t) return;
   if (t.dataset.jump) {

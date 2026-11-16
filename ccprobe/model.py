@@ -430,6 +430,14 @@ class Collector:
                     # on the graph, and its row's mismatch and alert still say that nobody is at work)
                     a["finished"] = False
 
+        # a row's agent that a failed request stopped (the weekly limit) stays in view while its row is open and no newer
+        # agent took the task: the row's line says so, and an alert (2026-11-15)
+        for a in agents:
+            if a["state"].get("api_error") and a["task"] is not None \
+                    and (rows.get(a["task"]) or {}).get("kind") in ("active", "paused", "parked", "asks") \
+                    and not any(b is not a and b["task"] == a["task"] and (b["born"] or 0) > (a["born"] or 0) for b in agents):
+                a["finished"] = False
+
         # anchors: a helper sits beside the agent it talks to (one still at work first), else its parent
         for a in agents:
             if a["role"] == "helper":

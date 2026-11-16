@@ -76,7 +76,12 @@ def compute(sessions, now, mem):
                 st = a["state"]
                 # only a dead agent: one waiting for a message (its turn ended, the lead or its advisor wakes it) is the
                 # normal way a task waits, not an alert (the user's call)
-                if st["key"] == "dead":
+                if st.get("api_error"):            # stopped on a failed request (the usage limit): nobody is at work
+                    if limited:                     # the session's usage-limit alert says it once, not a row at a time
+                        continue
+                    add(f"orphan-row:{root}:{r['n']}", "red", f"Row {r['n']} says in progress, but {a['label']} stopped: {st['api_error']}",
+                        (st.get("detail") or "Its last request failed.") + " Resume it, or start a fresh agent for the row.", s, a["id"])
+                elif st["key"] == "dead":
                     add(f"orphan-row:{root}:{r['n']}", "red", f"Row {r['n']} says in progress, but {a['label']} is {st['label']}",
                         f"{a['label']} last wrote {_ago(now - st['since'])} ago; its process is gone."
                         + (f" Its row says: \"{_cut(r.get('state') or '', 140)}\"" if r.get("state") else ""), s, a["id"])
