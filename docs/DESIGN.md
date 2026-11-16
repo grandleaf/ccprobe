@@ -307,7 +307,11 @@ is no longer checked against the queue or the worker: the Events tab and the que
   nodes move with a 400 ms transform tween.
 - **Keyed DOM:** `nodes: Map(id → parts)` and `edges: Map(key → parts)`. Each tick only calls `setAttribute` and
   `textContent` on what changed. There is no `innerHTML` wipe.
-- **Cards:** at most 3 speech bubbles and 3 tool cards. The selected node goes first, then the most recently active.
+- **Cards:** at most 3 speech bubbles and 3 tool cards. The selected node goes first. Then a bubble goes to the newest
+  words (when each agent's text was first seen), and a tool card stays with its agent while that agent runs tools.
+  Cards already up are placed before new ones, and a card whose words change size tries its side of the node first.
+  Before 2026-11-15 both kinds went to the agents with the newest last entry, which changed nearly every tick with four
+  or more at work, so cards came and went every second or two.
   - Candidate positions E, SE, NE, W, SW, NW.
   - Take the first rect that hits no node box and no placed card. Text is measured with a canvas `measureText`.
   - Each card is opaque, tethered by a 1 px line in the node colour, and drawn above the edges. When nothing fits, it
@@ -403,7 +407,18 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   task, else up its parents to the task's agent), with its depth under the row; one with no numbered agent above it
   goes to the unfiled AG row of its top agent. `crewLines()` draws, under the row's agent line, one indented line per
   live one (a tree corner, its name in its role's colour, its state's mark and words; a click selects it), then the
-  finished ones in one muted line while the row is open, with how many stopped on an API error and why.
+  finished ones in one muted line while the row is open, with how many stopped on an API error and why. A usage limit
+  that has reset since (`limitPassed()`: the plan's reading for its window, taken after the stop, under 100%) is old
+  news and leaves the line ("17 finished"); the tip keeps each one's reason and time (the user, 2026-11-15: "the
+  weekly limit message in the WTS table, why it is still there. weekly limit has been reset").
+- **The side panel keeps the reader's place** (the user, 2026-11-15: "sometime I found the wts table automatically
+  scroll to the first row"). It was the pane's own scrollTop carried from one rebuild to the next, so one short
+  rebuild lost it for good: a tab stood in for a tick (a queue read that failed), or a model still loading after a
+  restart, clamped it to 0; and the page's reload when its code changes started at the top. Now `PS` keeps, per tab,
+  session and (Agent tab) agent, the place the reader last scrolled to (scroll events the page caused are told apart
+  by the value it set). A rebuild too short for it keeps it for when the content is back, for a minute (after that it
+  really shrank). On `pagehide` the session, tab, agent and places go to sessionStorage (this browser tab only), and
+  the reload comes back to them.
 - **HX, the history (2026-11-14; named HX, two letters like the tables, the same day).** The user: "any accepted, or aborted task goes to there, and it is default collapsed, we can
   expand it". queue.py's `history_rows` orders the closed rows (✔, or `n/a`), newest first, by the date and time in
   the Accepted cell (`accept` and `close` stamp a time since that day; older rows have a date only, old n/a rows none
@@ -428,7 +443,10 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
     for your shows), held is filled in its colour (red, orange; amber for the build) by a closed lock; the tip says
     who holds it, since when and which agent. No pill for the waiters (2026-11-14): each waiting row says so under
     itself. When they do not fit beside the jumps they take a line of their own, still on the right;
-  - icon rows. The current row is expanded, and queued rows are one line that expands on click.
+  - icon rows. The current row is expanded, and queued rows are one line that expands on click. ⚙ "Two-line WTS
+    rows" (§9.8) lets the other rows' titles and statuses take two lines.
+  - a time on another day reads month/day, `11/14 20:51` (no leading zeros); today's is `HH:MM` alone (the user,
+    2026-11-15: "use a shorter format like 11/10 20:51 to save space"; it was `14 Nov 20:51`).
   - Clicking a row with an agent selects it in the graph and flashes the node.
   - Next to a bound row's State it shows that agent's **observed** state, e.g. `in progress 17:04 · agent: running
     Bash 2m`. A mismatch shows in amber.
@@ -458,6 +476,9 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   - Auto-hide done agents (on by default)
   - Show all relationships (on by default)
   - Compact nodes
+  - Two-line WTS rows (on by default, 2026-11-15): a WTS or HX row's title runs onto a second line before it is cut
+    (a row at work wraps in full either way), and a status takes up to two lines of 20 characters, breaking only between
+    its parts, so the title has more of the row. The user: "now it is too short, and the text display trimmed".
   - Desktop notifications, which requests permission when switched on and fires on a new red alert or a new `asks`
     while the tab is hidden
   - Reset layout and dismissed alerts
@@ -582,10 +603,16 @@ methods, kept small:
   slot with the least cost: distance to its neighbours, plus 5 per row away, plus 2 per crossing it adds. A freed
   slot stays reserved for 2 minutes (5 for a slot with an heir: the HP worker's, a reused name's). Only after 2 quiet
   minutes (no agent came or went), or on Tidy: gaps close (stepping around reserved slots), a helper away from the
-  agent it serves goes back under it if a slot there is free (tried at most once a minute), and swaps that remove 2+
+  agent it serves goes back under it if a slot there is free, and swaps that remove 2+
   crossings happen (at most every 5 minutes). At those moments too, when the column count no longer suits (the
   window resized, agents came or went) or the agents spread over more rows than they fill, they flow in reading order
-  into full rows centred under the lead, and the helpers go back under them.
+  into full rows centred under the lead, and the helpers go back under them. A flow that saves no row is undone.
+- **Upkeep once (2026-11-15):** the quiet-time upkeep runs once for each arrangement: the agents on screen, whom each
+  helper serves, the column count and the reserved slots. Until one of those changes, or Tidy is pressed, nothing
+  moves. It used to run on every tick, and its steps did not always undo each other. In one session, fourteen agents
+  (four of them with a helper's seat in the row below) flowed into two full rows. The agents on the seats made way into
+  a third row, and the third row asked for the flow again. So two agents swapped places on every tick for as long as
+  the session stayed quiet (the user: "a couple of the agent keep on shuffling around with animation without stop").
 - **Balance (2026-10-25):** a row used to keep to one side: a newcomer whose only line was to the lead went to the
   row's end (the worker far left, others far right), since the lead was not counted as a neighbour, and closing gaps
   never changed sides. Now the lead counts as the middle of the top row, a slot's cost adds .3 per column the row's

@@ -44,7 +44,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private window: settings last for this visit */ } },
 };
 const reducedOS = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const settings = Object.assign({ v: 1, theme: 'dark', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, autoHide: true, compact: false, notify: false, railSort: 'attn', hideUnseen: false, allEdges: true },
+const settings = Object.assign({ v: 1, theme: 'dark', motion: reducedOS ? 'reduced' : 'full', span: 2700, showFinished: true, autoHide: true, compact: false, notify: false, railSort: 'attn', hideUnseen: false, allEdges: true, wtsTwoLine: true },
   store.get('ccprobe.settings', {}));
 const saveSettings = () => store.set('ccprobe.settings', settings);
 let dismissed = store.get('ccprobe.dismissed', {});    // alert key|sig -> until (epoch s; 1e12 dismissed, 2e12 cleared)
@@ -67,6 +67,7 @@ function applyTheme() {
   document.documentElement.setAttribute('data-theme', t);
   document.documentElement.setAttribute('data-motion', settings.motion);
   document.documentElement.toggleAttribute('data-compact', !!settings.compact);
+  document.documentElement.toggleAttribute('data-wts2', !!settings.wtsTwoLine);   // WTS rows: a title or status wraps once
 }
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => settings.theme === 'system' && applyTheme());
 
@@ -973,7 +974,8 @@ function layout(nodes, s) {
   };
   // quiet-time upkeep: once nothing has come or gone for QUIET_MS, close the gaps within rows (stepping around places
   // still held for an agent that went), put a helper left away from the agent it serves back under it, and, rarely,
-  // swap neighbours that remove 2+ crossings. Tidy does it all now, held places included.
+  // swap neighbours that remove 2+ crossings; once, until the arrangement changes (see upSig). Tidy does it all now,
+  // held places included.
   const sig = live.map(n => n.id).sort().join();
   if (sig !== mem.sig) { mem.sig = sig; mem.since = now; }
   const quiet = now - mem.since > QUIET_MS, tidy = S.tidyNow || mem.tidyOnce;
@@ -986,6 +988,15 @@ function layout(nodes, s) {
   MAXC = mem.maxc;
   const g = placeRow(mem.agents, live, want, E, at, now, slot, isHelper);
   const reserved = () => [...mem.agents.keys()].filter(k => ![...g.keyOf.values()].includes(k));
+  // the quiet-time upkeep runs once for each arrangement it is given (who is on screen, whom each helper serves, the
+  // column count, the places still held for agents that went), not on every tick. Its steps need not undo each other
+  // exactly, and they did not: fourteen agents, four of them with a helper's seat in the row below, flowed into two
+  // full rows, the agents on the seats made way into a third, and that third row asked for the flow again, so two
+  // agents swapped places on every tick for as long as the session stayed quiet (the user, 2026-11-15: "a couple of
+  // the agent keep on shuffling around with animation without stop"). Now nothing moves until one of those changes,
+  // or Tidy is pressed.
+  const upSig = () => JSON.stringify([live.map(n => n.id + (isHelper(n) ? '>' + n.anchor : '')).sort(), mem.maxc, maxc, reserved().sort()]);
+  const upkeep = quiet && mem.upSig !== upSig();
   const sync = () => { for (const n of live) { const e = mem.agents.get(g.keyOf.get(n.id)); if (e) slot.set(n.id, { sub: e.sub, col: e.col }); } };   // helpers being re-placed have none yet
   // a helper sits under a regular agent (helpers anchored to helpers keep their own place)
   const byId = new Map(live.map(n => [n.id, n]));
@@ -1020,12 +1031,17 @@ function layout(nodes, s) {
   // the agents spread over more rows than they fill (the top row freed up after they came), or the column count
   // changed: they flow, in reading order, into full rows centred under the lead, and the helpers go back under them
   const rowsOf = keys => new Set(keys.map(k => mem.agents.get(k)?.sub)).size;
-  if (recount || ((quiet || tidy) && rowsOf(agentKeys) > Math.ceil(agentKeys.length / (2 * MAXC + 1)))) {
+  let vain = false;
+  if (recount || ((upkeep || tidy) && rowsOf(agentKeys) > Math.ceil(agentKeys.length / (2 * MAXC + 1)))) {
+    const rows0 = rowsOf(agentKeys), was = [...mem.agents].map(([k, e]) => [k, { ...e }]);
     for (const k of reserved()) mem.agents.delete(k);
     const order = agentKeys.map(k => mem.agents.get(k)).sort((a, b) => a.sub - b.sub || a.col - b.col);
     order.forEach((e, i) => Object.assign(e, flowSlot(i, order.length)));
     for (const n of live.filter(isHelper)) { mem.agents.delete(g.keyOf.get(n.id)); slot.delete(n.id); }
     sync(); settle();
+    // a flow that saves no row moves everyone for nothing (the agents on the seats make way into a new row again):
+    // all back as it was
+    if (!recount && rowsOf(agentKeys) >= rows0) { mem.agents = new Map(was); slot.clear(); sync(); vain = true; }
   }
   if (tidy) {
     for (const k of reserved()) mem.agents.delete(k);
@@ -1033,7 +1049,7 @@ function layout(nodes, s) {
     const hs = live.filter(underAgent);
     for (const n of hs) { mem.agents.delete(g.keyOf.get(n.id)); slot.delete(n.id); }
     settle();
-  } else if (quiet) {
+  } else if (upkeep) {
     // the helpers under an agent that slid along slide with it, when their own row has room
     const was = live.filter(underAgent).map(n => [n, slot.get(n.anchor)?.col]);
     compactRow(mem.agents, agentKeys, [...helperSlots(), ...seats(), ...reserved().map(k => mem.agents.get(k))]); sync();
@@ -1044,18 +1060,15 @@ function layout(nodes, s) {
     }
     sync();
     // a stray helper goes back under its agent, one at a time, and only when a place there is free (else it stays put);
-    // tried at most once a minute, so a helper that cannot get there is not shuffled about
-    if (mem.lastHelpers === undefined || now - mem.lastHelpers > 60000) {
-      mem.lastHelpers = now;
-      for (const n of live.filter(isAstray)) {
-        const k = g.keyOf.get(n.id), old = mem.agents.get(k);
-        mem.agents.delete(k); slot.delete(n.id);
-        placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
-        if (isAstray(n)) { mem.agents.set(k, old); slot.set(n.id, { sub: old.sub, col: old.col }); }
-      }
+    // like the rest of the upkeep, tried once for each arrangement, so a helper that cannot get there is not shuffled about
+    for (const n of live.filter(isAstray)) {
+      const k = g.keyOf.get(n.id), old = mem.agents.get(k);
+      mem.agents.delete(k); slot.delete(n.id);
+      placeRow(mem.agents, live, want, E, at, now, slot, isHelper); sync();
+      if (isAstray(n)) { mem.agents.set(k, old); slot.set(n.id, { sub: old.sub, col: old.col }); }
     }
   }
-  if (tidy || (quiet && now - mem.lastReorder > REORDER_MS)) {
+  if (tidy || (upkeep && now - mem.lastReorder > REORDER_MS)) {
     const saved = [...mem.agents.values()].map(e => [e, e.col]);
     const gain = untangleRow(mem.agents, g.keyOf, live, E, id => (sync(), at(id)));
     if (gain >= (tidy ? 1 : 2)) mem.lastReorder = now;
@@ -1063,13 +1076,15 @@ function layout(nodes, s) {
     sync();
   }
   if (tidy) mem.lastReorder = now;
+  if (upkeep || tidy) mem.upSig = upSig();   // done for this arrangement
+  const key = JSON.stringify([...mem.agents].map(([k, e]) => [k, e.sub, e.col]));
+  if (vain) mem.vainFlow = key;   // a flow here saves no row: it is not something Tidy can do
   // can Tidy do anything? (a row with a gap or off centre, a reserved slot, or a helper away from its anchor)
   // (held as Tidy holds them: Tidy lifts the helpers under an agent before closing up, so they do not count here)
   const loose = compactRow(mem.agents, agentKeys, [...live.filter(n => isHelper(n) && !underAgent(n)).map(n => mem.agents.get(g.keyOf.get(n.id))).filter(Boolean), ...seats()], true) > 0;
   const astray = live.some(isAstray);
-  const reflow = maxc !== mem.maxc || rowsOf(agentKeys) > Math.ceil(agentKeys.length / (2 * MAXC + 1));
+  const reflow = maxc !== mem.maxc || (rowsOf(agentKeys) > Math.ceil(agentKeys.length / (2 * MAXC + 1)) && mem.vainFlow !== key);
   S.canTidy = loose || reserved().length > 0 || astray || reflow;
-  const key = JSON.stringify([...mem.agents].map(([k, e]) => [k, e.sub, e.col]));
   if (key !== mem.savedKey) { mem.savedKey = key; saveMem(s.id, mem); }
 
   // rows at fixed heights from Y_AGENTS down; then finished; then the shelf
@@ -1745,25 +1760,26 @@ document.addEventListener('visibilitychange', flowKick);
 function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
 
 // ---- speech bubbles and tool cards, placed where they hit nothing (ui.md §3) ----
+S.saidAt = new Map();   // agent id -> [its words, when they were first seen]
 function placeCards(nodes, pos, boxes, now) {
-  const want = [];
-  const byRecent = nodes.filter(n => !n.collapsed && pos.has(n.id)).sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
-  const sel = byRecent.find(n => n.id === S.sel);
-  const order = sel ? [sel, ...byRecent.filter(n => n !== sel)] : byRecent;
-  let nb = 0, nt = 0;
-  for (const n of order) {
-    const st = n.state || {};
-    const active = ['running', 'thinking', 'polling'].includes(st.key) || n.role === 'lead';
-    if (n.said && (n === sel || (active && now - (n.last_ts || 0) < 600)) && nb < 3 && !n.finished) {
-      nb++;
-      want.push({ key: n.id + ':b', node: n, kind: 'bubble', head: `${n.label} says`.toUpperCase(), lines: wrap(n.said, 40, 3) });
-    }
-    if ((st.key === 'running' || st.key === 'polling') && st.detail && nt < 3) {
-      nt++;
-      const tool = (st.label || '').split(' · ')[0];
-      want.push({ key: n.id + ':t', node: n, kind: 'tool', head: null, lines: [clip(`${tool}: ${st.detail}`, 44)] });
-    }
-  }
+  const shown = nodes.filter(n => !n.collapsed && pos.has(n.id)), ids = new Set(shown.map(n => n.id));
+  const sel = shown.find(n => n.id === S.sel);
+  // who has the three bubbles and the three tool cards changes only when something happens to them: a bubble goes to
+  // the newest words (when each agent's text was first seen), a tool card stays with its agent while it runs tools.
+  // Before, both went to the agents whose last entry was newest, which changed on nearly every tick with four or more
+  // at work, and cards came and went every second or two (the user, 2026-11-15: "keep on shuffling around with
+  // animation without stop"). The selected agent comes first.
+  for (const n of shown) if (n.said && S.saidAt.get(n.id)?.[0] !== n.said) S.saidAt.set(n.id, [n.said, now]);
+  for (const id of S.saidAt.keys()) if (!ids.has(id)) S.saidAt.delete(id);
+  const up = key => { const c = S.cards.get(key); return c && !c.leaving ? c : null; };
+  const rank = (kind, t) => (a, b) => (b === sel) - (a === sel) || t(b) - t(a) || !!up(b.id + kind) - !!up(a.id + kind) || (b.last_ts || 0) - (a.last_ts || 0);
+  const talk = shown.filter(n => n.said && !n.finished && (n === sel || ((BUSY.includes(n.state?.key) || n.role === 'lead') && now - (n.last_ts || 0) < 600)))
+    .sort(rank(':b', n => S.saidAt.get(n.id)[1])).slice(0, 3);
+  const work = shown.filter(n => ['running', 'polling'].includes(n.state?.key) && n.state.detail).sort(rank(':t', () => 0)).slice(0, 3);
+  // the cards already up are placed first, oldest first, so a new one never takes the spot one of them holds
+  const want = [...talk.map(n => ({ key: n.id + ':b', node: n, kind: 'bubble', head: `${n.label} says`.toUpperCase(), lines: wrap(n.said, 40, 3) })),
+    ...work.map(n => ({ key: n.id + ':t', node: n, kind: 'tool', head: null, lines: [clip(`${(n.state.label || '').split(' · ')[0]}: ${n.state.detail}`, 44)] }))]
+    .sort((a, b) => (b.node === sel) - (a.node === sel) || (up(a.key)?.born ?? 1e15) - (up(b.key)?.born ?? 1e15));
   const placed = [];
   const seen = new Set();
   const view = S.fitVb && visible(S.fitVb), inView = r => !view || (r.x > view.x0 + 8 && r.x + r.w < view.x1 - 8 && r.y > view.y0 + 8 && r.y + r.h < view.y1 - 8);
@@ -1792,16 +1808,17 @@ function placeCards(nodes, pos, boxes, now) {
       [p.x - r - 40 - w, p.y - h / 2], [p.x - r - 22 - w, p.y + r + 8], [p.x - r - 22 - w, p.y - r - 60 - h],
       [p.x + r + 40, p.y + r + 70], [p.x - r - 40 - w, p.y + r + 70],
       [p.x - w / 2, p.y + (S.disp.get(c.node.id)?.bottom || r + 80) + 14],   // under its own labels, where lines seldom run
-    ];
+    ].map(([x, y], i) => [x, y, i]);
     // a free spot on screen first, so a new card does not make the view move; else any free spot. Among the free
-    // ones, the one that covers least line (in the order above when equal); the card's current spot wins a tie
-    const was = S.cards.get(c.key);
-    if (was && !was.leaving && Math.abs(was.w - w) < 1 && Math.abs(was.h - h) < 1) cands.unshift([p.x + was.tox, p.y + was.toy]);   // same size only
+    // ones, the one that covers least line (in the order above when equal); the card's current spot wins a tie, and a
+    // card whose words changed its size tries the same side of its node first (it went wherever was first free)
+    const was = up(c.key);
+    if (was) cands.unshift(Math.abs(was.w - w) < 1 && Math.abs(was.h - h) < 1 ? [p.x + was.tox, p.y + was.toy, was.cand] : cands[was.cand] || cands[0]);
     let spot = null;
     for (const pass of [inView, () => true]) {
       let best = null;
-      for (const [x, y] of cands) {
-        const rect = { x, y, w, h };
+      for (const [x, y, i] of cands) {
+        const rect = { x, y, w, h, i };
         if (!pass(rect) || boxes.some(b => hit(rect, b)) || placed.some(b => hit(rect, b))) continue;
         const cost = onLines(rect);
         if (!best || cost < best.cost) best = { rect, cost };
@@ -1834,7 +1851,7 @@ function drawCard(c, spot, p) {
   let k = S.cards.get(c.key);
   if (!k) {
     const g = el('g', {}, $('gCards'));
-    k = { g, t: el('line', {}, $('gTethers')), sig: null, f1: 1, ox, oy, tox: ox, toy: oy, vox: 0, voy: 0 };
+    k = { g, t: el('line', {}, $('gTethers')), sig: null, f1: 1, ox, oy, tox: ox, toy: oy, vox: 0, voy: 0, born: performance.now() };
     g.addEventListener('mouseenter', () => showTip(g, k.tip));
     g.addEventListener('mouseleave', hideTip);
     S.cards.set(c.key, k);
@@ -1850,7 +1867,7 @@ function drawCard(c, spot, p) {
     }
     if (!posAnim()) { k.ox = k.tox; k.oy = k.toy; k.vox = k.voy = 0; k.swapAt = 0; }
   }
-  k.node = c.node.id; k.w = spot.w; k.h = spot.h;
+  k.node = c.node.id; k.w = spot.w; k.h = spot.h; k.cand = spot.i;   // which of placeCards' spots: its side of the node
   k.tip = c.kind === 'bubble' ? c.node.said : c.node.state.detail;
   const sig = `${c.kind}|${col}|${c.head || ''}|${c.lines.join('\n')}|${spot.w.toFixed(0)},${spot.h.toFixed(0)}`;
   if (k.sig === sig) return;   // only its text and size; a move never rebuilds it
@@ -2037,6 +2054,42 @@ function nodeTip(id) {
 document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) { S.tab = b.dataset.tab; S.tabWas = null; renderPanel(); } });
 $('alertBtn').addEventListener('click', jumpWorstAlert);
 
+// The reader's place in the side panel, per tab, session and (on the Agent tab) agent (the user, 2026-11-15: "sometime I
+// found the wts table automatically scroll to the first row, we should not do that"). It was the pane's own scrollTop,
+// carried from one rebuild to the next, so one short rebuild lost it for good: a tab stood in for a tick (a queue read
+// that failed), a model still loading after a restart; and the page's reload when its code changes started at the
+// top. Now the place is what the reader last scrolled to: a rebuild too short for it keeps it for when the content is
+// back (for a minute: after that it really shrank), and a reload comes back to the same tab, agent and place
+// (sessionStorage: this browser tab only).
+const PS = { key: null, set: null, places: new Map() };
+const placeKey = () => `${S.tab}|${S.sid}|${S.tab === 'agent' ? S.sel : ''}`;
+function placeOf(k) {
+  let m = PS.places.get(k);
+  if (!m) { m = { want: 0, clampedAt: 0 }; PS.places.set(k, m); if (PS.places.size > 60) PS.places.delete(PS.places.keys().next().value); }
+  return m;
+}
+function setPlace(pane, m, v) {
+  pane.scrollTop = v; PS.set = pane.scrollTop;    // what the browser made of it: its own scroll event for it is not the reader's
+  if (PS.set >= v - 1) m.clampedAt = 0;
+  else if (!m.clampedAt) m.clampedAt = Date.now();
+  else if (Date.now() - m.clampedAt > 60000) { m.want = PS.set; m.clampedAt = 0; }
+}
+$('panel').addEventListener('scroll', () => {
+  const p = $('panel');
+  if (PS.key == null || p.scrollTop === PS.set) return;
+  const m = placeOf(PS.key); m.want = p.scrollTop; m.clampedAt = 0; PS.set = null;
+}, { passive: true });
+try {
+  const p = JSON.parse(sessionStorage.getItem('ccprobe.place') || 'null');
+  if (p && p.sid && (S.sid == null || p.sid === S.sid)) {   // none stored when the page picked the session itself
+    S.sid = p.sid; S.tab = p.tab || null; S.sel = p.sel || 'lead';
+    for (const [k, v] of p.places || []) PS.places.set(k, { want: v, clampedAt: 0 });
+  }
+} catch (e) { /* no storage: start at the top */ }
+addEventListener('pagehide', () => {
+  try { sessionStorage.setItem('ccprobe.place', JSON.stringify({ sid: S.sid, tab: S.tab, sel: S.sel, places: [...PS.places].map(([k, m]) => [k, m.want]) })); } catch (e) { /* no storage */ }
+});
+
 function renderPanel() {
   const want = S.panelFocus; S.panelFocus = null;   // focus an action asked for (Undo after Clear): this rebuild only
   if (S.alUndo && (S.tab !== 'alerts' || S.alUndo.sid !== S.sid)) S.alUndo = null;   // Undo lasts while you stay on the tab
@@ -2054,13 +2107,16 @@ function renderPanel() {
   else h = agentPanel(s, S.sel);
   const focusOn = k => k && ($('panel').querySelector(`[data-k="${k}"]`) || (want && $('panel').querySelector('.alhead button')))?.focus({ preventScroll: true });
   if (h === S.panelHtml) return void focusOn(want);
-  // keep the reader's place: the section header at the top of the view stays where it was, and focus stays put
-  const pane = $('panel'), top = pane.scrollTop, py = pane.getBoundingClientRect().top, fk = want || document.activeElement?.dataset?.k;
+  // keep the reader's place (PS): the section header at the top of the view stays where it was, and focus stays put
+  const pane = $('panel'), py = pane.getBoundingClientRect().top, fk = want || document.activeElement?.dataset?.k;
+  const key = placeKey(), m = placeOf(key), same = key === PS.key && !m.clampedAt;
   let anchor = null;
-  if (top > 0) for (const el of pane.querySelectorAll('[data-k]')) { const y = el.getBoundingClientRect().top - py; if (y <= 1) anchor = { k: el.dataset.k, y }; else break; }
-  pane.innerHTML = h; S.panelHtml = h; pane.scrollTop = top;
+  if (same && pane.scrollTop > 0) for (const el of pane.querySelectorAll('[data-k]')) { const y = el.getBoundingClientRect().top - py; if (y <= 1) anchor = { k: el.dataset.k, y }; else break; }
+  pane.innerHTML = h; S.panelHtml = h; PS.key = key;
+  pane.scrollTop = m.want;
   const a = anchor && pane.querySelector(`[data-k="${anchor.k}"]`);
-  if (a) pane.scrollTop += a.getBoundingClientRect().top - py - anchor.y;
+  if (a) m.want = pane.scrollTop + a.getBoundingClientRect().top - py - anchor.y;   // what was above it grew or shrank
+  setPlace(pane, m, m.want);
   focusOn(fk);
   pane.querySelectorAll('svg.pbar').forEach(svg => {
     const f = +svg.dataset.frac; const r = svg.querySelector('.fg');
@@ -2641,7 +2697,9 @@ function atHM(hm, near, now) {   // the time HH:MM nearest `near` (default now) 
   return (past.length ? past : c).reduce((a, t) => Math.abs(t - ref) < Math.abs(a - ref) ? t : a);
 }
 const sameDay = (a, b) => new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString();
-const whenHM = (t, now) => (sameDay(t, now) ? '' : new Date(t * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ') + hhmm(t);
+// another day's time with its month/day in front, "11/14 20:51" (the user, 2026-11-15: "do not use the "14 Nov 20: 51"
+// FORMAT, use a shorter format like 11/10 20:51 to save space"); today's is HH:MM alone
+const whenHM = (t, now) => { const d = new Date(t * 1000); return (sameDay(t, now) ? '' : `${d.getMonth() + 1}/${d.getDate()} `) + hhmm(t); };
 // a task's latest run ({born, last_ts}), the newest of: its agent in view; its own agent in the session's history; the
 // row's own State writes, from its first "in progress" to the "done" after it (a row done inside another task, 119 in
 // 141; with no "in progress" write only the day is known)
@@ -2771,7 +2829,9 @@ function wtsPanel(s) {
     h += `<div class="gh c-${GROUPCOL[g]}" id="g-${g}"><span class="gname">${g}</span><span class="mode c-${mc}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${icon(mi)}${esc(head || '—')}</span>${lt ? `<span class="lim c-${lt.col}" data-tip="${esc(lt.tip)}">${esc(lt.text)}</span>` : ''}${main ? `<span class="gm"${mixTip}>${esc(main)}${runs.length > 1 ? ` <span class="gmx">+${runs.length - 1}</span>` : ''}</span>` : ''}</div>`;
     if (!rows.length) h += '<div class="empty-note">empty</div>';
     for (const r of rows) {
-      const { ri, rc, html: stHtml, a, run } = r.loose ? r.loose : rowState(s, r, now);
+      const { ri, rc, html: st0, a, run } = r.loose ? r.loose : rowState(s, r, now);
+      // a status on two lines breaks between its parts only ("11/14 23:42 · 1h 53m · to review"), never inside one
+      const stHtml = st0.replace(/(^|>)([^<]+)/g, (m, gt, t) => gt + t.replace(/(?<!·) (?!·)/g, ' '));
       const live = LIVEKIND.includes(r.kind);   // in progress, paused or asking: these get a filled pill and an edge bar
       const mine = a ? heldBy(w, a.id) : [], holds = mine.length > 0;   // a window's holder: red, as on the graph (lock, line, card)
       const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
@@ -2825,6 +2885,14 @@ function crewOf(s) {
   for (const m of [byTask, byRoot]) for (const l of m.values()) l.sort((p, q) => (p.a.born || 0) - (q.a.born || 0));
   return { byTask, byRoot, by };
 }
+// has the usage limit an agent stopped on reset since? The plan's reading for its window, taken after the stop, is under
+// 100% ("weekly limit": the week; "Fable weekly limit": the Fable week; "5-hour limit"). Other errors never pass.
+function limitPassed(what, since) {
+  const fab = /^(\S+) weekly limit$/.exec(what || '');
+  const k = what === 'weekly limit' ? 'seven_day' : what === '5-hour limit' ? 'five_hour' : fab ? 'seven_day_' + fab[1].toLowerCase() : null;
+  const w = k && (S.model?.plan?.windows || []).find(x => x.key === k);
+  return !!w && w.used < 100 && (w.at ?? w.seen) > since;
+}
 // one line for each that is at work or waiting (its name, its state's mark and words; a click selects it), then the
 // finished ones in one muted line while the row is open ("6 finished · 6 stopped: weekly limit", each in the tip)
 function crewLines(by, list, r, own) {
@@ -2840,8 +2908,11 @@ function crewLines(by, list, r, own) {
   }
   const fin = mine.filter(c => c.a.finished);
   if (fin.length && (r.loose || LIVEKIND.includes(r.kind))) {
-    const why = new Map(); fin.forEach(c => c.a.state.api_error && why.set(c.a.state.api_error, (why.get(c.a.state.api_error) || 0) + 1));
-    const tip = fin.map(c => `${c.a.label}: ${c.a.state.label}`).join('\n');
+    // why they stopped, while it still holds: a limit that has reset since is old news (the user, 2026-11-15: "the
+    // weekly limit message in the WTS table, why it is still there. weekly limit has been reset"); the tip keeps it
+    const why = new Map(), gone = c => limitPassed(c.a.state.api_error, c.a.state.since);
+    fin.forEach(c => c.a.state.api_error && !gone(c) && why.set(c.a.state.api_error, (why.get(c.a.state.api_error) || 0) + 1));
+    const tip = fin.map(c => `${c.a.label}: ${c.a.state.label}${c.a.state.api_error ? ` at ${hhmm(c.a.state.since)}${gone(c) ? ' (it has reset since)' : ''}` : ''}`).join('\n');
     h += `<span class="obs crew fin l1" data-tip="${esc(tip)}">${icon('i-done')}<span class="cs">${fin.length} finished${[...why].map(([k, n]) => ` · ${n} stopped: ${esc(k)}`).join('')}</span></span>`;
   }
   return h;

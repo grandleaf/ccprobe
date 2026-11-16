@@ -35,10 +35,13 @@ What you see:
   agent has come or gone for 2 minutes, the rows close up around places still held and slide back under the lead; agents left in lower rows while the rows above have room move up into them, in order (an
   even row splits about it: two agents sit one each side, the lead between them; a helper moves with its agent), a helper left away from the agent
   it serves goes back under it (when that place is free; Tidy moves an agent off it), and neighbours that would remove 2+ crossings are swapped
-  at most every 5 minutes. **Tidy** (top right, shown when there is something to
+  at most every 5 minutes. That happens once. After it, nothing moves until an agent comes or goes, a helper changes
+  agents, the number of places per row changes, or a held place is let go. **Tidy** (top right, shown when there is something to
   tidy) does it all at once. Places survive a reload, and the page reloads itself when ccprobe's page files change (an update, or an edit). The view itself stays put while everything is on screen: a speech
   or tool card that appears (it takes a free spot inside the view when there is one) moves the view only if it would
   stick out, or if the empty space would pile up on one side (the margins differ by more than 40% of the view).
+  Up to 3 speech bubbles go to the newest words, and up to 3 tool cards stay with their agents while they run tools,
+  so cards don't come and go as agents take turns.
 - **Lines** carry information only: tasks (amber, arrow at the agent doing the work), recent messages (violet, fading
   after the first minute, gone after 10; their dashes flow at full speed for a minute after a message, then slow to a
   stop by 5 minutes), and spawns by another agent. A new agent's "spawned by" line shows for 2
@@ -108,8 +111,10 @@ What you see:
   (`✓ 21:40 · 1h 59m`). The start and length come from the task's latest run, the newest of: its agent in view, its own
   agent's first and last reply in the session's whole history (so older MP rows get theirs too), and the row's own
   State writes found in the transcripts (a row done inside another task). The State has HH:MM only: its day is that of
-  the row's latest State write, and a day that is not today is shown (`24 Oct 15:06`); a done row nothing dates keeps
-  its bare time. The State's own words are in the tooltip.
+  the row's latest State write, and a day that is not today is shown as month/day (`10/24 15:06`); a done row nothing
+  dates keeps its bare time. The State's own words are in the tooltip. With ⚙ "Two-line WTS rows" (on by default) a
+  title runs onto a second line before it is cut, and a long status takes two narrower lines; off, each row keeps one
+  line (a row at work always shows its whole title).
   A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
   Under a row, a line says what its agent is doing now (`▶ Bash · 2m`); the agent is named only when it is not the
   row's own (`hp291 (earlier): stopped by the lead`), and a done row whose agent is done has no line.
@@ -196,8 +201,9 @@ What you see:
   No prompt, so no tokens; Claude Code signs in by itself. ccprobe reads `weekly_scoped` rows as a model's week
   (`week · Fable`) and `weekly_all` as the week, keeping per window the newer figure of the two files (`seen_at` against `fetched_at`).
 - **⚙ settings:** theme (System / Light / Dark), motion (Full / Reduced / Off), timeline span, show finished agents,
-  auto-hide done agents, show all relationships, compact nodes, notifications. A first visit starts dark, with
-  auto-hide and all relationships on, motion Full (Reduced when the OS asks for less motion), timeline 45m.
+  auto-hide done agents, show all relationships, compact nodes, two-line WTS rows, notifications. A first visit starts
+  dark, with auto-hide, all relationships and two-line rows on, motion Full (Reduced when the OS asks for less motion),
+  timeline 45m.
 - **Keys:** `1`…`5` switch tabs (in the order shown: WTS first when the session has a queue) · `[` `]` switch sessions · `F` fits the graph · double-click an agent with a page mark: its notes · `Esc` closes the notes, else deselects · ⌘ or Ctrl + wheel (or a pinch) zooms and
   dragging pans.
 - **Panel widths:** drag the splitter on either side of the graph (or focus one and use ← →) to resize the sessions list

@@ -369,6 +369,14 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 .wrow .st2.pill.ring { background: none; font-weight: 500; border-color: color-mix(in srgb, var(--c) 60%, transparent); }
 .wrow.live { box-shadow: inset 3px 0 0 var(--c); }
 .wrow.live .n { color: var(--c); font-weight: 600; }
+/* ⚙ Two-line WTS rows (on by default; the user, 2026-11-15: "the wTS's dsiplay can make two rows for one item. now it is
+   too short, and the text display trimmed"): a title runs onto a second line before it is cut (a live row's still
+   wraps in full), and a long status takes two narrower lines, which leaves the title more of the row */
+[data-wts2] .wrow:not(.open, .cur, .live, .loose) .t, [data-wts2] .hrow .t { white-space: normal; display: -webkit-box;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; align-self: start; }   /* start: a taller row shows no third line */
+[data-wts2] .wrow .st2 { white-space: normal; max-width: calc(20ch + 35px); }   /* 20 characters ("11/14 23:42 · 1h 53m") beside the icon, gap, padding and border */
+[data-wts2] .wrow .st2 > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+[data-wts2] .wrow .st2.pill { border-radius: 9px; }
 .gh .mode { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
   color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
 .wrow .obs { grid-column: 2 / 4; color: var(--muted); font-size: 11px; display: flex; gap: 6px; align-items: center; }
