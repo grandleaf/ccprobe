@@ -444,7 +444,7 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
     who holds it, since when and which agent. No pill for the waiters (2026-11-14): each waiting row says so under
     itself. When they do not fit beside the jumps they take a line of their own, still on the right;
   - icon rows. The current row is expanded, and queued rows are one line that expands on click. ⚙ "Two-line WTS
-    rows" (§9.8) lets the other rows' titles and statuses take two lines.
+    rows" (§9.8) lets the other rows' titles take two lines, and a status with a time two pills (when, how long).
   - a time on another day reads month/day, `11/14 20:51` (no leading zeros); today's is `HH:MM` alone (the user,
     2026-11-15: "use a shorter format like 11/10 20:51 to save space"; it was `14 Nov 20:51`).
   - Clicking a row with an agent selects it in the graph and flashes the node.
@@ -477,8 +477,26 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
   - Show all relationships (on by default)
   - Compact nodes
   - Two-line WTS rows (on by default, 2026-11-15): a WTS or HX row's title runs onto a second line before it is cut
-    (a row at work wraps in full either way), and a status takes up to two lines of 20 characters, breaking only between
-    its parts, so the title has more of the row. The user: "now it is too short, and the text display trimmed".
+    (a row at work wraps in full either way), so the title has more of the row. The user: "now it is too short, and
+    the text display trimmed". A status with a time (in progress, paused, parked, asking, done) is two pills, right
+    aligned, one on each of the row's two lines, each only as wide as it needs (the user, 2026-11-15: "suggest to do
+    two pills, one first line, one second line, both right aligned, the first pill show the start date, and the second
+    pill shows the time it taken"): line 1 the icon and the start or done time, always with its day (`11/15 18:54`, `11/14 23:42`: today's too, so the first pills read alike), line 2 a
+    stopwatch (`i-timer`) and how long (`1h 46m`). Same colours and kinds as the one pill (filled at work, outlined
+    when done) and the same tip. Every first pill in the tab has one width (the user, 2026-11-15: "try to make all the
+    first pill a same size ... think to add an icron ahead of the text of the second pill"; then "for the second pill,
+    do't make them fix size"): the font is monospace, so `wtsPanel` sets `--pw1` on the panel to the widest first-line
+    text in `ch` (from script: the CSP takes no inline style), and the time sits right in it, so the times line up. A
+    second pill is as wide as its length. A task handed to a fresh agent (lp377 to lp377b) counts from the first "in
+    progress" of its stretch, not from the newest agent's start (the user, 2026-11-15: "task 377 it started for a very
+    long time, when we saw it is only took 9m"; `taskRun`); the tip adds "its agent … since 21:09 (took over)". A row
+    silent for 6 h starts a new stretch at its next "in progress" (`state_run`, `STRETCH_GAP`), so a redo after a "done"
+    the transcripts never saw does not count from the day before. The words after them would widen a pill, so they go before the
+    second pill, outside it: `to review` an eye, `waits for the window` a window, `small fix owed` a hammer (the words
+    for screen readers and in the tip), any other word as muted text. A parked row's word ("parked 20:44") leaves the
+    first pill: its amber hourglass says it, the tip keeps it. A status with no time (queued, held, not filed) keeps its one pill, up to
+    two lines of 20 characters, breaking only between its parts. `rowStatus` gives the two lines (`two`) beside its
+    one-line `html`, which the Agent tab and the notes reader keep using. With the setting off: one line, one pill.
   - Desktop notifications, which requests permission when switched on and fires on a new red alert or a new `asks`
     while the tab is hidden
   - Reset layout and dismissed alerts

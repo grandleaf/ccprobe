@@ -40,6 +40,10 @@ class RowTimeTests(unittest.TestCase):
                          {"start": 50, "done": 70, "open": None, "last": [70, "done"]})   # the last round counts
         self.assertEqual(state_run({(30, "done")}), {"start": None, "done": 30, "open": None, "last": [30, "done"]})   # only its day
         self.assertEqual(state_run({(10, "in progress"), (20, "queued"), (60, "in progress"), (70, "done")})["start"], 60)   # requeued
+        # a redo after a "done" never seen: 17 h of silence starts a new stretch; a task's own handover (minutes) does not
+        h = 3600
+        self.assertEqual(state_run({(0, "in progress"), (6 * h, "in progress"), (23 * h, "in progress")})["open"], 23 * h)
+        self.assertEqual(state_run({(0, "in progress"), (2 * h, "in progress"), (2 * h + 900, "in progress")})["open"], 0)
 
     def test_primary_agents(self):
         from ccprobe.model import _task_of_meta

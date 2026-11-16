@@ -113,8 +113,14 @@ What you see:
   State writes found in the transcripts (a row done inside another task). The State has HH:MM only: its day is that of
   the row's latest State write, and a day that is not today is shown as month/day (`10/24 15:06`); a done row nothing
   dates keeps its bare time. The State's own words are in the tooltip. With ⚙ "Two-line WTS rows" (on by default) a
-  title runs onto a second line before it is cut, and a long status takes two narrower lines; off, each row keeps one
-  line (a row at work always shows its whole title).
+  title runs onto a second line before it is cut, and a status with a time becomes two small pills, right aligned on
+  the row's two lines: when it started or was done on the first, always with its day (`✓ 11/14 23:42`, today's too), a stopwatch and how long on the
+  second (`⏱ 1h 53m`), so the title gets the width back. Every first pill in the tab has one width, the time right
+  aligned in it, so the times line up; a second pill is as wide as its length. "to review" shows as an eye,
+  "waits for the window" as a window and "small fix owed" as a hammer, before the second pill and outside it (the
+  words are in the tooltip); a parked row's word leaves its pill (its amber hourglass says it). A status with no time
+  keeps one pill. Off,
+  each row keeps one line and one pill (a row at work always shows its whole title).
   A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
   Under a row, a line says what its agent is doing now (`▶ Bash · 2m`); the agent is named only when it is not the
   row's own (`hp291 (earlier): stopped by the lead`), and a done row whose agent is done has no line.

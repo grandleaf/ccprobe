@@ -604,12 +604,19 @@ ROLES = ["lead", "worker", "mp", "lp", "helper", "ag"]
 GROUP_ROLES = ("MP", "LP", "AG")
 
 
+STRETCH_GAP = 6 * 3600
+
+
 def state_run(ws):
     """A row's last stretch from its State writes [(time, what)]: start (its first "in progress") and done (the first
     "done" after it), or open (in progress since); last: the latest write [time, what], the exact day of the State's
-    HH:MM. A "done" written again later changes nothing; a row queued again starts a new stretch."""
+    HH:MM. A "done" written again later changes nothing; a row queued again starts a new stretch, and so does one
+    silent for STRETCH_GAP: a redo after a "done" these transcripts never saw (2026-11-15: a row done at 04:28 and
+    reopened at 21:16 read "started 11/14 22:22 · 22h 57m"; a task at work writes its State far more often)."""
     start, done, open_, last = None, None, None, None
     for t, what in sorted(ws):
+        if what in ("in progress", "in hand") and open_ is not None and last and t - last[0] >= STRETCH_GAP:
+            open_ = None
         last = [t, what]
         if what in ("in progress", "in hand"):
             open_ = t if open_ is None else open_
