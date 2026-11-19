@@ -8,7 +8,7 @@ import unittest
 
 from ccprobe import alerts
 from ccprobe.agents import Transcript, agent_state, lead_state
-from ccprobe.model import _anchor, _holder, _holds, _label_of_meta, _role_of_meta, _task_of_meta
+from ccprobe.model import _anchor, _holder, _holds, _label_of_meta, _review_state, _role_of_meta, _task_of_meta
 from ccprobe.redact import clip, redact
 from ccprobe.tail import Tailer
 
@@ -353,6 +353,28 @@ class AgTests(unittest.TestCase):
     def test_an_unfiled_agent_stays_a_helper(self):
         self.assertEqual(_role_of_meta({"name": "idle1"}, self.rows), "helper")
         self.assertEqual(_role_of_meta({"name": "ag9"}, self.rows), "helper")       # no row 9: not filed
+
+
+class ReviewTests(unittest.TestCase):
+    """A done row the lead has not reviewed keeps its agents up, waiting for that review (2026-11-18)."""
+    todo = {"kind": "done", "status": "🔍 to review 22:50"}
+
+    def test_an_unreviewed_row_keeps_its_agent_up(self):
+        for key in ("ended", "ended_bg", "unknown"):
+            st = _review_state({"key": key, "since": 5}, self.todo, 389, False)
+            self.assertEqual((st["key"], st["label"], st["since"]), ("review", "waiting for the lead's review", 5))
+
+    def test_reviewed_or_open_rows_and_other_agents_keep_their_state(self):
+        st = {"key": "ended", "since": 5}
+        self.assertIsNone(_review_state(st, {"kind": "done", "status": "✅ done 22:50"}, 389, False))          # reviewed
+        self.assertIsNone(_review_state(st, {"kind": "done", "status": "✅ done 22:50 · small fix owed"}, 389, False))
+        self.assertIsNone(_review_state(st, {"kind": "closed", "status": "✅ done"}, 389, False))               # accepted
+        self.assertIsNone(_review_state(st, {"kind": "active", "status": "⏩ in progress 21:00"}, 389, False))
+        self.assertIsNone(_review_state(st, None, None, False))
+        self.assertIsNone(_review_state(st, self.todo, 389, True))                                             # an earlier agent
+        self.assertIsNone(_review_state({"key": "running", "since": 5}, self.todo, 389, False))                # still at work
+        self.assertIsNone(_review_state({"key": "ended", "sub": "stopped", "since": 5}, self.todo, 389, False))
+        self.assertIsNone(_review_state({"key": "ended", "api_error": "weekly limit", "since": 5}, self.todo, 389, False))
 
 
 class AlertTests(unittest.TestCase):

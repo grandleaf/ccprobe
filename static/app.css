@@ -6,7 +6,7 @@
   --text: #c8d3f0; --text-strong: #eef3ff; --muted: #7d8ab0; --dim: #55628a;
   /* the state marks (badge, status line, WTS agent line): each kind of waiting its own colour, far apart on the wheel */
   --b-job: #f272d6; --b-poll: #b8e34f; --b-paused: #ffd84d; --b-done: #6f9bff; --b-blender: #ea7600;
-  --cyan: #5cc8ff; --amber: #f4b740; --violet: #b48cff; --green: #5fe0a0; --rose: #ff7a90; --slate: #8592b3; --red: #ff5d5d; --indigo: #8aa2ff; --mauve: #c9a3c6;
+  --cyan: #5cc8ff; --amber: #f4b740; --violet: #b48cff; --green: #5fe0a0; --rose: #ff7a90; --slate: #8592b3; --red: #ff5d5d; --indigo: #8aa2ff; --mauve: #c9a3c6; --teal: #2fd8c8;
   --win2: #ff8a3d; --win3: #f2c230;   /* window slots 2 and 3: the holder's lock, line and card (slot 1 is red) */
   --lift-shadow: 0 12px 28px rgb(0 0 0 / .55), 0 0 0 1px var(--cyan);
   --node-fill: rgb(10 15 34 / .94); --sel-tint: 18%; --halo-op: .09; --pulse: #ffffff; --star: #9fb3ff; --star-op: .45;
@@ -20,14 +20,14 @@
   --line: #dde3f0; --line2: #c6cfe3; --grid: #e6eaf3;
   --text: #1b2440; --text-strong: #0b1020; --muted: #55607f; --dim: #8a93ab;
   --b-job: #b0258f; --b-poll: #4f7a00; --b-paused: #a07800; --b-done: #2f5fd0; --b-blender: #ea7600;
-  --cyan: #0b74b0; --amber: #9a5f00; --violet: #6a3fc8; --green: #0f7a46; --rose: #c8325a; --slate: #5f6b88; --red: #c02626; --indigo: #3b52c4; --mauve: #8a4f86;
+  --cyan: #0b74b0; --amber: #9a5f00; --violet: #6a3fc8; --green: #0f7a46; --rose: #c8325a; --slate: #5f6b88; --red: #c02626; --indigo: #3b52c4; --mauve: #8a4f86; --teal: #0b7d74;
   --win2: #e0640f; --win3: #a87f00;
   --lift-shadow: 0 8px 24px rgb(20 30 60 / .18), 0 0 0 1px var(--cyan);
   --node-fill: #ffffff; --sel-tint: 10%; --halo-op: .06; --pulse: #ffffff; --star: #b9c3da; --star-op: .7;
   --glow: none; --card-shadow: 0 1px 2px rgb(20 30 60 / .08), 0 4px 12px rgb(20 30 60 / .06);
   --crit-bg: #fdecee; --warn-bg: #fdf4e2; --info-bg: #eaf4fb;
 }
-.c-cyan { --c: var(--cyan); } .c-amber { --c: var(--amber); } .c-violet { --c: var(--violet); } .c-green { --c: var(--green); } .c-indigo { --c: var(--indigo); } .c-mauve { --c: var(--mauve); }
+.c-cyan { --c: var(--cyan); } .c-amber { --c: var(--amber); } .c-violet { --c: var(--violet); } .c-green { --c: var(--green); } .c-indigo { --c: var(--indigo); } .c-mauve { --c: var(--mauve); } .c-teal { --c: var(--teal); }
 .c-rose { --c: var(--rose); } .c-slate { --c: var(--slate); } .c-red { --c: var(--red); } .c-win2 { --c: var(--win2); } .c-win3 { --c: var(--win3); }
 
 * { box-sizing: border-box; }
@@ -223,7 +223,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .node .word { letter-spacing: .04em; }
 .s-msg { --s: var(--cyan); } .s-blender { --s: var(--b-blender); } .s-job { --s: var(--b-job); } .s-poll { --s: var(--b-poll); }
 .s-paused { --s: var(--b-paused); } .s-window, .s-hold { --s: var(--amber); } .s-stuck, .s-dead { --s: var(--red); }
-.s-done { --s: var(--b-done); } .s-ask { --s: var(--rose); }
+.s-done { --s: var(--b-done); } .s-review { --s: var(--teal); }   /* done, waiting for the lead's review (2026-11-18) */ .s-ask { --s: var(--rose); }
 .node .stb circle { fill: var(--bg); stroke: var(--s); stroke-width: 1.6; } .node .stb use { color: var(--s); }
 .node .arc { fill: none; stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; }   /* spun by flowStep in app.js */
 .node .flash { fill: none; stroke: var(--c); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center; }

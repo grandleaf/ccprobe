@@ -24,7 +24,8 @@ What you see:
   `184d` for a helper, `Lead` for the lead; under it, the task's title. A badge at its top-left corner says why it is
   not at work, each kind of waiting with its own icon and colour: ✈ cyan waiting for a message, the Blender logo
   waiting on Blender, ⚙ magenta on another job (a build, tests), ↻ lime polling, ⏸ yellow paused by hand, four
-  amber squares waiting for the window, ⧗ amber on hold, a red clock stuck, ✕ red dead, ✓ blue finished, and the
+  amber squares waiting for the window, ⧗ amber on hold, a red clock stuck, ✕ red dead, a teal eye waiting for the lead's review (its task row is done, not yet reviewed: it
+  turns ✓ finished once the lead reviews, accepts or closes it), ✓ blue finished, and the
   lead's rose ? waiting for you. A busy agent has none, only its spinning arc. The status line under the hex uses the
   same icon and colour. Bottom left, a green page: the task has notes; bottom right, a red lock: it holds the window. The lead sits on top. Below it is a grid of rows at fixed heights, 5, 7 or 9 places per row (whichever draws the graph biggest in its
   area: a wide window puts more agents side by side); every agent keeps its place. A new agent goes to the free place nearest the agents it works with (a helper right under the agent it serves, in its column, a place nobody else takes, so an advisor and its task's worker read as a pair;

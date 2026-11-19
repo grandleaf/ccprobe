@@ -416,6 +416,15 @@ class Collector:
                     st = {"key": "ended", "label": "done", "since": st["since"], "sub": "done",
                           "detail": f"task {hn} is done; it was waiting on: {st.get('detail') or 'its job'}"}
                     finished = True
+            # a done row the lead has not reviewed ("to review" in its status: queue.py's short_status since 2026-11-18):
+            # its agent and its advisor wait for that review on the graph, not finished (a project's lead, with the
+            # user: "a worker should not show ✓ finished until the lead has reviewed its task"). Reviewed, accepted or
+            # closed, they finish as before; an earlier agent of the task, one stopped, or one a failed request stopped,
+            # finishes as before too
+            rn = n if n is not None else (_task_of_meta(meta, helps_rows) if role == "helper" else None)
+            rv = _review_state(st, rows.get(rn) if rn is not None else None, rn, retired)
+            if rv:
+                st, finished = rv, False
             agents.append({
                 "id": aid, "name": meta.get("name"), "label": label, "desc": clip(redact(meta.get("description") or ""), 120),
                 "role": role, "task": n, "task_title": row["title"] if row else None, "group": row["group"] if row else None,
@@ -657,6 +666,17 @@ def _notes_of(n, meta, nidx):
     notes file that exists: an unnamed "HP 282: …" worker has none until it writes its first note."""
     nn = n if n in nidx else _task_of_meta(meta, nidx)
     return {"n": nn, "t": nidx[nn]} if nn in nidx else None
+
+
+def _review_state(st, row, n, retired):
+    """The state of an agent whose task row is done but not yet reviewed by the lead ("to review" in its status), or
+    None: an agent at work, an earlier one of the task, one stopped, or one a failed request stopped keeps its own."""
+    if not row or row.get("kind") != "done" or "to review" not in (row.get("status") or "") or retired:
+        return None
+    if st["key"] not in ("ended", "ended_bg", "unknown") or st.get("sub") == "stopped" or st.get("api_error"):
+        return None
+    return {"key": "review", "label": "waiting for the lead's review", "since": st["since"], "sub": "review",
+            "detail": f"task {n} is done; the lead has not reviewed it yet"}
 
 
 def _task_of_meta(meta, rows, primary=False):

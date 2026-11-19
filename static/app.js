@@ -23,6 +23,7 @@ const STATUS = {
   running: ['i-run', 'green'], thinking: ['i-think', 'cyan'], polling: ['i-wait', 'slate'], waiting_window: ['i-window', 'amber'],
   ended: ['i-done', 'slate'], ended_bg: ['i-wait', 'slate'], stuck: ['i-stuck', 'amber'], dead: ['i-dead', 'red'],
   waiting_user: ['i-ask', 'rose'], idle: ['i-done', 'slate'], shell: ['i-wait', 'slate'], unknown: ['i-wait', 'slate'], parked: ['i-park', 'slate'],
+  review: ['i-eye', 'teal'],   // its task is done, the lead has not reviewed it yet (2026-11-18)
 };
 // paused by hand (slate ⏸: stays so until someone resumes it) is not waiting (amber: it goes on by itself)
 // the window too is amber, as it goes on by itself: violet is done's alone (the user, 2026-11-18, of a violet "waiting
@@ -1550,11 +1551,14 @@ function hexWords(n) {
 // another job (⚙), polling (↻), paused by hand (⏸), the window (four squares), on hold (⧗); then stuck, dead,
 // finished and (the lead) waiting for you. None while it works: the spinning arc says so.
 const MARK = { msg: 'i-msg', blender: 'i-blender', job: 'i-gear', poll: 'i-poll', paused: 'i-park', window: 'i-window',
-  hold: 'i-wait', stuck: 'i-stall', dead: 'i-dead', done: 'i-done', ask: 'i-ask' };
+  review: 'i-eye', hold: 'i-wait', stuck: 'i-stall', dead: 'i-dead', done: 'i-done', ask: 'i-ask' };
 function markOf(n, st = n.state || {}) {
   if (st.key === 'dead' || st.api_error) return 'dead';   // stopped on a failed request (the weekly limit): not done
   if (n.role === 'lead') return st.key === 'waiting_user' ? 'ask' : null;
   if (st.key === 'waiting_window') return 'window';
+  // its task is done and waits for the lead's review: an eye in its own teal, not ✓ finished until then (a project's
+  // lead, with the user, 2026-11-18: "a worker should not show ✓ finished until the lead has reviewed its task")
+  if (st.key === 'review') return 'review';
   if (!n.finished && isParked(n)) return st.key === 'parked' ? (st.sub === 'hold' ? 'hold' : 'paused') : n.rowKind === 'paused' ? 'paused' : 'hold';
   if (st.key === 'stuck') return 'stuck';
   if (st.what === 'Blender' && (st.key === 'ended_bg' || st.key === 'polling')) return 'blender';
@@ -2723,7 +2727,10 @@ function rowStatus(r, now, run, wrote) {   // wrote: when the row's State was la
   // a queued row in a table whose max is 0 (this session's limit): held like a paused one, not next in line
   if (r.held) return { ri: ROWKIND.paused[0], rc: ROWKIND.paused[1], html: '<span class="sr">queued, </span>held · max 0' };
   const [ri, rc] = r.kind === 'parked' && /waiting for the window/i.test(r.status) ? STATUS.waiting_window : ROWKIND[r.kind] || ROWKIND.other;
-  const [head, ...extra] = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■\s]+/u, '').split(' · ');
+  const [head0, ...extra] = String(r.status).replace(/^[⏩⏳✋✅⛔❓💤■🔍\s]+/u, '').split(' · ');
+  // a done row the lead has not reviewed reads "🔍 to review 21:44" (queue.py, 2026-11-18): a done row, its eye mark kept
+  const toReview = r.kind === 'done' && /^to review\b/i.test(head0), head = toReview ? head0.replace(/^to review/i, 'done') : head0;
+  if (toReview && !extra.includes('to review')) extra.push('to review');
   const RE_HM = /\b([01]?\d|2[0-3]):[0-5]\d\b/, tail = extra.length ? ' · ' + extra.join(' · ') : '';
   let tm = head.match(RE_HM);
   const lead = tm ? head.slice(0, tm.index).trim() : '', rest = tm ? head.slice(tm.index + tm[0].length) : '';

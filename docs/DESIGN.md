@@ -350,7 +350,11 @@ Each node shows:
   advisor), `blender` the Blender logo in its orange with its own white and blue eye (`state.what` from the job's
   command), `job` ⚙ magenta (any other job), `poll` ↻ lime, `paused` ⏸ yellow, `window` four squares amber, `hold` ⧗
   amber (both violet until 2026-11-18, when done rows took violet: the user, "do you think if we need to change the
-  subtitle's color"), `stuck` a clock red, `dead` ✕ red, `done` ✓ blue, the lead's `ask` ? rose. The status line and the WTS agent
+  subtitle's color"), `stuck` a clock red, `dead` ✕ red, `review` an eye teal (its task row is done
+  and the lead has not reviewed it: "to review" in the row's status, from queue.py's short_status; the worker and the
+  task's advisor stay on the graph, `_review_state`, and finish once the row is reviewed, accepted or closed; the
+  a project's lead, with the user, 2026-11-18: "a worker should not show ✓ finished until the lead has reviewed its
+  task"), `done` ✓ blue, the lead's `ask` ? rose. The status line and the WTS agent
   line show the same mark. The other corners: "!" alerts (red), notes (a green page), the window's lock (red);
 - under the hex, the task's title (a helper: its job, without its name; the lead and a finished agent: their name),
   and for the lead its session title below it;

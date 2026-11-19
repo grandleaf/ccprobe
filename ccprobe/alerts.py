@@ -107,7 +107,7 @@ def compute(sessions, now, mem):
             holder = sl.get("holder")
             held_for = now - (sl.get("since") or now)
             h = agents.get(holder)
-            holder_bad = holder != "lead" and (h is None or h["state"]["key"] in ("ended", "parked", "dead", "stuck"))
+            holder_bad = holder != "lead" and (h is None or h["state"]["key"] in ("ended", "parked", "dead", "stuck", "review"))
             if held_for >= 900 and holder_bad and not w.get("app_running"):
                 add(f"stale-lock:{root}:{sl['name']}", "red", "Stale window lock?" if len(slots) < 2 else f"Stale lock on win{i}?",
                     f"{sl['name']} held by \"{sl.get('who')}\" for {_ago(held_for)}; " +
