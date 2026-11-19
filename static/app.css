@@ -305,7 +305,9 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 .tabs button.on { color: var(--text-strong); border-bottom-color: var(--cyan); }
 .tcount { margin-left: 5px; border-radius: 8px; padding: 0 6px; font-size: 10.5px; background: var(--amber); color: #fff; }
 .tcount.red { background: var(--red); }
-.panel { padding: 14px; overflow: auto; flex: 1; }
+.panel { padding: 14px; overflow: auto; flex: 1; scrollbar-gutter: stable; }
+/* the scroll bar's room is always kept: opening HX (or any long tab) brought the bar in, the rows lost 15px and every
+   title wrapped anew (the user, 2026-11-18: "when I expand and collapse the HX section, I found the HP's layout changes") */
 .ptitle { display: flex; align-items: center; gap: 9px; font-size: 15px; color: var(--text-strong); }
 .ptitle .s { margin-left: auto; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; color: var(--c); }
 .ptitle .s svg, .ico12 { width: 12px; height: 12px; flex: none; }
