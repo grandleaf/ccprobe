@@ -20,11 +20,13 @@ const clip = (s, n) => { s = String(s ?? ''); if (s.length <= n) return s; let c
 
 // ---- status vocabulary: one mapping, icons from the sprite (no emoji in the UI chrome) ----
 const STATUS = {
-  running: ['i-run', 'green'], thinking: ['i-think', 'cyan'], polling: ['i-wait', 'slate'], waiting_window: ['i-window', 'violet'],
+  running: ['i-run', 'green'], thinking: ['i-think', 'cyan'], polling: ['i-wait', 'slate'], waiting_window: ['i-window', 'amber'],
   ended: ['i-done', 'slate'], ended_bg: ['i-wait', 'slate'], stuck: ['i-stuck', 'amber'], dead: ['i-dead', 'red'],
   waiting_user: ['i-ask', 'rose'], idle: ['i-done', 'slate'], shell: ['i-wait', 'slate'], unknown: ['i-wait', 'slate'], parked: ['i-park', 'slate'],
 };
 // paused by hand (slate ⏸: stays so until someone resumes it) is not waiting (amber: it goes on by itself)
+// the window too is amber, as it goes on by itself: violet is done's alone (the user, 2026-11-18, of a violet "waiting
+// for a window" beside the done rows' violet: "do you think if we need to change the subtitle's color")
 // a worker waiting for its advisor's round (waits_for) reads as waiting, like one on its background job, not as done
 const stLook = st => st.key === 'parked' && st.sub === 'hold' ? ['i-wait', 'amber'] : st.waits_for ? STATUS.ended_bg : STATUS[st.key] || STATUS.unknown;
 const ROWKIND = {
@@ -2744,6 +2746,10 @@ function rowStatus(r, now, run, wrote) {   // wrote: when the row's State was la
       html = esc(lead ? lead + ' ' : '') + took + esc(tail);
       // its word goes from the first pill (its colour and icon say it; the tip keeps it), so the first pills keep one width
       two = { l1: whenMD(at, now), l2, extra, sr: lead ? `<span class="sr">${esc(lead)} since </span>` : '' };
+    } else if (/^[a-z ]*$/i.test(lead) && /^\s*\(/.test(rest)) {
+      // a note after the time ("paused 22:03 (owner, 2026-11-17: tokens low"): the two pills as usual, the note in the
+      // tip (the whole status), so one row's note widens no chip (the user, 2026-11-17)
+      two = { l1: whenMD(at, now), l2, extra, sr: `<span class="sr">${esc(lead + ' ' + rest.trim())}, since </span>` };
     }
   } else if (tm && r.kind === 'done' && /^done$/i.test(lead)) {
     sr = '<span class="sr">done at </span>';
@@ -2805,7 +2811,7 @@ function modelTag(m, main) {
 // screen readers and in the tip (the whole status); any other words stay on line 2 after the time
 // Every first pill in the tab has one width, and the second starts with a stopwatch (the user, 2026-11-15: "try to make
 // all the first pill a same size ... think to add an icon ahead of the text of the second pill"; then "for the second
-// pill, do't make them fix size": each is as wide as its length). The font is monospace, so the widest first-line text
+// pill, do't make them fix size": each is as wide as its length). The font is monospace, so the widest stamp ("11/17 22:10")
 // sets the first pills' width in ch (wtsPanel sets --pw1 on the panel once every row is drawn: the page's CSP takes no
 // inline style), and the time sits right in it: the times line up. The extra words go before the second pill, outside it, so they widen no pill: an eye for "to
 // review", the window for "waits for the window", the hammer for "small fix owed", any other word as muted text (each
@@ -2815,7 +2821,10 @@ const visLen = x => String(x).replace(/<[^>]*>/g, '').replace(/&(?:#\d+|\w+);/g,
 function twoPills(two, ri, rc, pk, tip, W) {
   const words = two.extra.flatMap(x => x.split(', ')).filter(Boolean);
   const marks = words.map(x => TAILMARK[x] ? `<span class="mk2">${icon(TAILMARK[x])}<span class="sr">${esc(x)}, </span></span>` : `<span class="xw">${esc(x)}</span>`).join('');
-  W.l1 = Math.max(W.l1, visLen(two.l1));
+  // only the stamp sets the tab's width: a pill with words after it ("11/17 22:10 (checkpoint)") grows alone (the user,
+  // 2026-11-17: "other chips keeps their original defined length, just let the outliner to be long")
+  const stamp = String(two.l1).replace(/<[^>]*>/g, '').match(/^\s*(?:\d{1,2}\/\d{1,2} )?\d{1,2}:\d{2}/);
+  if (stamp) W.l1 = Math.max(W.l1, stamp[0].trim().length);
   const p1 = `<span class="sp${pk}">${icon(ri)}<span class="tx w1">${two.sr}${two.l1}</span></span>`;
   const p2 = two.l2 ? `<span class="sp${pk}">${icon('i-timer')}<span class="tx"><span class="sr">, for </span>${two.l2}</span></span>` : '';
   return `<span class="st2 two c-${rc}" data-tip="${tip}">${p1}${p2 || marks ? `<span class="l2">${marks}${p2}</span>` : ''}</span>`;
@@ -2875,7 +2884,7 @@ function wtsPanel(s) {
         + (a && run?.agent ? `\nits agent ${a.label} since ${whenHM(run.agent, now)} (took over)` : ''));
       const mine = a ? heldBy(w, a.id) : [], holds = mine.length > 0;   // a window's holder: red, as on the graph (lock, line, card)
       const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
-      h += `<div ${r.loose ? '' : `id="row-${r.n}" `}class="wrow ${running.has(r.n) ? 'cur' : ''}${r.loose ? ' loose' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(`Runs on ${r.runs_on}\n\n${r.task}`)}">
+      h += `<div ${r.loose ? '' : `id="row-${r.n}" `}class="wrow ${running.has(r.n) ? 'cur' : ''}${r.loose ? ' loose' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : r.kind === 'done' ? ` fin c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(`Runs on ${r.runs_on}\n\n${r.task}`)}">
         <span class="n">${r.loose ? '—' : r.n}${nb}</span><span class="t">${r.runs_on !== main ? `<span class="mtag">${esc(modelTag(r.runs_on, main))}</span>` : ''}${esc(r.title)}</span>${settings.wtsTwoLine && two && pk ? twoPills(two, ri, rc, pk, stTip, W) : `<span class="st2 c-${rc}${pk}" data-tip="${stTip}">${icon(ri)}<span>${stHtml}</span></span>`}`;
       // the row's agent, on a line of its own: what it is doing now. Named only when it is not the row's own agent
       // ("HP 296" under row 296 says nothing new); none for an agent that is done under a done row (the row says so)
@@ -2891,7 +2900,7 @@ function wtsPanel(s) {
         } else if (a.state.key === 'waiting_window') {
           h += `<span class="obs win s-window"${tip}>${icon('i-window')}${who}${esc(a.state.label)}</span>`;
         } else
-        h += `<span class="obs${mismatch ? ' mismatch' : ''}"${tip}>${who}<span class="${am ? 'mk s-' + am : 'c-' + ac}">${icon(am ? MARK[am] : ai)}</span>${esc(a.state.label)}${mismatch ? ' · does not match the row' : ''}</span>`;
+        h += `<span class="obs${mismatch ? ' mismatch' : !am ? ` act c-${ac}` : ''}"${tip}>${who}<span class="${am ? 'mk s-' + am : 'c-' + ac}">${icon(am ? MARK[am] : ai)}</span>${esc(a.state.label)}${mismatch ? ' · does not match the row' : ''}</span>`;
       } else if (!a && r.owner && r.owner !== (s.host ? s.id.slice(s.host.length + 1) : s.id) && LIVEKIND.includes(r.kind)) {   // a remote session's id has its host in front
         h += `<span class="obs">its agent is in another session (${esc(r.owner.slice(0, 8))})</span>`;
       } else if (!a && r.kind === 'active') {

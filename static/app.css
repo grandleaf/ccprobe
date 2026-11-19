@@ -222,7 +222,7 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .node .word, .node .num { fill: var(--c); text-anchor: middle; dominant-baseline: central; font-family: var(--mono); font-weight: 800; }
 .node .word { letter-spacing: .04em; }
 .s-msg { --s: var(--cyan); } .s-blender { --s: var(--b-blender); } .s-job { --s: var(--b-job); } .s-poll { --s: var(--b-poll); }
-.s-paused { --s: var(--b-paused); } .s-window, .s-hold { --s: var(--violet); } .s-stuck, .s-dead { --s: var(--red); }
+.s-paused { --s: var(--b-paused); } .s-window, .s-hold { --s: var(--amber); } .s-stuck, .s-dead { --s: var(--red); }
 .s-done { --s: var(--b-done); } .s-ask { --s: var(--rose); }
 .node .stb circle { fill: var(--bg); stroke: var(--s); stroke-width: 1.6; } .node .stb use { color: var(--s); }
 .node .arc { fill: none; stroke: var(--c); stroke-width: 2.4; stroke-linecap: round; }   /* spun by flowStep in app.js */
@@ -369,6 +369,9 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 .wrow :is(.st2, .sp).pill.ring { background: none; font-weight: 500; border-color: color-mix(in srgb, var(--c) 60%, transparent); }
 .wrow.live { box-shadow: inset 3px 0 0 var(--c); }
 .wrow.live .n { color: var(--c); font-weight: 600; }
+/* done rows: the same bar in the pill's violet (the user, 2026-11-18: "should also put a purple color bar (same color as
+   the two capsule) to indicate they have been done?"; then, of a half-strength one, "the color looks a little of dull") */
+.wrow.fin { box-shadow: inset 3px 0 0 var(--c); }
 /* ⚙ Two-line WTS rows (on by default; the user, 2026-11-15: "the wTS's dsiplay can make two rows for one item. now it is
    too short, and the text display trimmed"): a title runs onto a second line before it is cut (a live row's still
    wraps in full), and a long status takes two narrower lines, which leaves the title more of the row */
@@ -386,7 +389,7 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 [data-wts2] .wrow .st2.two > .l2 { display: inline-flex; align-items: center; gap: 5px; }
 [data-wts2] .wrow .st2.two > .l2 > .sp.pill { align-self: center; }
 [data-wts2] .wrow .st2.two .sp > .tx { display: inline-block; text-align: right; }
-[data-wts2] .wrow .st2.two .tx.w1 { width: var(--pw1, auto); }   /* the second pill: as wide as its length */
+[data-wts2] .wrow .st2.two .tx.w1 { min-width: var(--pw1, auto); }   /* the tab's stamp width; words after a stamp widen that pill alone */   /* the second pill: as wide as its length */
 [data-wts2] .wrow .st2.two .mk2 { display: inline-flex; color: var(--c); opacity: .85; }
 [data-wts2] .wrow .st2.two .mk2 svg { width: 12px; height: 12px; }
 [data-wts2] .wrow .st2.two .xw { color: var(--muted); font-size: 11px; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -396,6 +399,9 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
   color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
 .wrow .obs { grid-column: 2 / 4; color: var(--muted); font-size: 11px; display: flex; gap: 6px; align-items: center; }
 .wrow .obs.mismatch { color: var(--amber); }
+/* what its agent is doing (▶ build · 21s, … thinking) in that state's colour, as on the graph: green at work, cyan
+   thinking (the user, 2026-11-18: "these color looks dull"); the icon full, the words a little toward the text */
+.wrow .obs.act { color: color-mix(in srgb, var(--c) 78%, var(--text)); } .wrow .obs.act > .c-green, .wrow .obs.act > .c-cyan { color: var(--c); }
 /* a task's helpers and the agents spawned under it: indented lines under the row's own, a tree corner before each */
 .wrow .obs.crew { padding-left: 10px; cursor: pointer; min-width: 0; }
 .wrow .obs.crew.l2 { padding-left: 24px; } .wrow .obs.crew.l3 { padding-left: 38px; }

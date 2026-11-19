@@ -24,7 +24,7 @@ What you see:
   `184d` for a helper, `Lead` for the lead; under it, the task's title. A badge at its top-left corner says why it is
   not at work, each kind of waiting with its own icon and colour: ✈ cyan waiting for a message, the Blender logo
   waiting on Blender, ⚙ magenta on another job (a build, tests), ↻ lime polling, ⏸ yellow paused by hand, four
-  violet squares waiting for the window, ⧗ violet on hold, a red clock stuck, ✕ red dead, ✓ blue finished, and the
+  amber squares waiting for the window, ⧗ amber on hold, a red clock stuck, ✕ red dead, ✓ blue finished, and the
   lead's rose ? waiting for you. A busy agent has none, only its spinning arc. The status line under the hex uses the
   same icon and colour. Bottom left, a green page: the task has notes; bottom right, a red lock: it holds the window. The lead sits on top. Below it is a grid of rows at fixed heights, 5, 7 or 9 places per row (whichever draws the graph biggest in its
   area: a wide window puts more agents side by side); every agent keeps its place. A new agent goes to the free place nearest the agents it works with (a helper right under the agent it serves, in its column, a place nobody else takes, so an advisor and its task's worker read as a pair;
@@ -108,7 +108,7 @@ What you see:
   its agent is actually doing, and amber marks a mismatch. A row in progress reads as its ▶, its start and how long
   so far (`▶ 17:24 · 3h 41m`); paused and asking rows read as their icon too, parked keeps its word, and all say for
   how long; a done row is an outlined violet pill with when it was marked done and how long its agent worked on it
-  (`✓ 21:40 · 1h 59m`). The start and length come from the task's latest run, the newest of: its agent in view, its own
+  (`✓ 21:40 · 1h 59m`) and a violet bar down its left edge, the pill's colour. The start and length come from the task's latest run, the newest of: its agent in view, its own
   agent's first and last reply in the session's whole history (so older MP rows get theirs too), and the row's own
   State writes found in the transcripts (a row done inside another task). The State has HH:MM only: its day is that of
   the row's latest State write, and a day that is not today is shown as month/day (`10/24 15:06`); a done row nothing
@@ -116,13 +116,15 @@ What you see:
   title runs onto a second line before it is cut, and a status with a time becomes two small pills, right aligned on
   the row's two lines: when it started or was done on the first, always with its day (`✓ 11/14 23:42`, today's too), a stopwatch and how long on the
   second (`⏱ 1h 53m`), so the title gets the width back. Every first pill in the tab has one width, the time right
-  aligned in it, so the times line up; a second pill is as wide as its length. "to review" shows as an eye,
+  aligned in it, so the times line up; words after a done time (`11/17 22:10 (checkpoint)`) widen that pill alone,
+  and a note after a paused time goes to the tip; a second pill is as wide as its length. "to review" shows as an eye,
   "waits for the window" as a window and "small fix owed" as a hammer, before the second pill and outside it (the
   words are in the tooltip); a parked row's word leaves its pill (its amber hourglass says it). A status with no time
   keeps one pill. Off,
   each row keeps one line and one pill (a row at work always shows its whole title).
   A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
-  Under a row, a line says what its agent is doing now (`▶ Bash · 2m`); the agent is named only when it is not the
+  Under a row, a line says what its agent is doing now (`▶ Bash · 2m`), in that state's colour (green at work, cyan
+  thinking; quiet states stay muted); the agent is named only when it is not the
   row's own (`hp291 (earlier): stopped by the lead`), and a done row whose agent is done has no line.
   A fourth table, **AG**, holds the lead's own agents (with a worker skill that has it): the agents a lead starts
   itself, outside the queue, one row each, named `ag<N>` so the row and its agent's hex ("AG 3", indigo) go together.
@@ -143,7 +145,7 @@ What you see:
   build lock, each only its name (`win0`, `win1`, `build`) in a pill with a rounded outline: free, outlined in green
   (slate: kept for your shows); held, filled in its colour, its tip saying who holds it, since when and which agent. The row whose agent holds a window is red, as on the graph: a red edge and number, and
   its agent line red with the lock (`holds the window · 4m`, or `holds win1 · 4m` with two slots); an
-  agent waiting for the window has its line in violet with the window. A project whose worker config names a build lock
+  agent waiting for the window has its line in amber with the window (violet is for done rows alone). A project whose worker config names a build lock
   gets a line for it too, and a header chip (who builds, for how long). An agent waiting in the project's waiting line
   for a window (a ticket in `.autopilot/winq`) shows as waiting, not busy. Each table's heading shows the session's own limit
   (`queue.py limit hp 2`; config.json's default when it set none): `3/5` in hand of at most 5, or `max 0`: nothing new

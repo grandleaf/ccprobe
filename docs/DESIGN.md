@@ -348,8 +348,9 @@ Each node shows:
   **mark** (`markOf`, `MARK`), an outlined disc whose ring and icon take the mark's colour. Each kind of waiting has
   its own icon and a colour far from the others: `msg` ✈ cyan (a message: a worker between turns or waiting for its
   advisor), `blender` the Blender logo in its orange with its own white and blue eye (`state.what` from the job's
-  command), `job` ⚙ magenta (any other job), `poll` ↻ lime, `paused` ⏸ yellow, `window` four squares violet, `hold` ⧗
-  violet, `stuck` a clock red, `dead` ✕ red, `done` ✓ blue, the lead's `ask` ? rose. The status line and the WTS agent
+  command), `job` ⚙ magenta (any other job), `poll` ↻ lime, `paused` ⏸ yellow, `window` four squares amber, `hold` ⧗
+  amber (both violet until 2026-11-18, when done rows took violet: the user, "do you think if we need to change the
+  subtitle's color"), `stuck` a clock red, `dead` ✕ red, `done` ✓ blue, the lead's `ask` ? rose. The status line and the WTS agent
   line show the same mark. The other corners: "!" alerts (red), notes (a green page), the window's lock (red);
 - under the hex, the task's title (a helper: its job, without its name; the lead and a finished agent: their name),
   and for the lead its session title below it;
@@ -483,10 +484,15 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
     two pills, one first line, one second line, both right aligned, the first pill show the start date, and the second
     pill shows the time it taken"): line 1 the icon and the start or done time, always with its day (`11/15 18:54`, `11/14 23:42`: today's too, so the first pills read alike), line 2 a
     stopwatch (`i-timer`) and how long (`1h 46m`). Same colours and kinds as the one pill (filled at work, outlined
-    when done) and the same tip. Every first pill in the tab has one width (the user, 2026-11-15: "try to make all the
+    when done) and the same tip. A done row's left edge bar is its pill's violet (`.wrow.fin`; the user, 2026-11-18:
+    "should also put a purple color bar (same color as the two capsule) to indicate they have been done?"; at half
+    strength it read "a little of dull"). Every first pill in the tab has one width (the user, 2026-11-15: "try to make all the
     first pill a same size ... think to add an icron ahead of the text of the second pill"; then "for the second pill,
-    do't make them fix size"): the font is monospace, so `wtsPanel` sets `--pw1` on the panel to the widest first-line
-    text in `ch` (from script: the CSP takes no inline style), and the time sits right in it, so the times line up. A
+    do't make them fix size"): the font is monospace, so `wtsPanel` sets `--pw1` on the panel to the widest stamp
+    (`11/17 22:10`) in `ch` (from script: the CSP takes no inline style) as a `min-width`, and the time sits right in it, so
+    the times line up. Words after a stamp widen that one pill alone (`11/17 22:10 (checkpoint)`; the user, 2026-11-17:
+    "other chips keeps their original defined length, just let the outliner to be long"), and a note after a live row's
+    time (`paused 22:03 (owner, …`) goes to the tip, the row keeping its two pills. A
     second pill is as wide as its length. A task handed to a fresh agent (lp377 to lp377b) counts from the first "in
     progress" of its stretch, not from the newest agent's start (the user, 2026-11-15: "task 377 it started for a very
     long time, when we saw it is only took 9m"; `taskRun`); the tip adds "its agent … since 21:09 (took over)". A row
