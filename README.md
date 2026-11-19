@@ -145,7 +145,8 @@ What you see:
   build lock, each only its name (`win0`, `win1`, `build`) in a pill with a rounded outline: free, outlined in green
   (slate: kept for your shows); held, filled in its colour, its tip saying who holds it, since when and which agent. The row whose agent holds a window is red, as on the graph: a red edge and number, and
   its agent line red with the lock (`holds the window · 4m`, or `holds win1 · 4m` with two slots); an
-  agent waiting for the window has its line in amber with the window (violet is for done rows alone). A project whose worker config names a build lock
+  agent waiting for the window has its line in amber with the window (violet is for done rows alone). A project whose worker config says `"lock": ""` has no shared window
+  and shows none, here or in the status line. A project whose worker config names a build lock
   gets a line for it too, and a header chip (who builds, for how long). An agent waiting in the project's waiting line
   for a window (a ticket in `.autopilot/winq`) shows as waiting, not busy. Each table's heading shows the session's own limit
   (`queue.py limit hp 2`; config.json's default when it set none): `3/5` in hand of at most 5, or `max 0`: nothing new

@@ -225,7 +225,7 @@ function renderHeader(m, s) {
       h += `<span class="chip win slots${win.full ? ' held' : ''}" data-tip="${esc(slots.map((x, i) => `${slotName(w, i)} (${x.name}): ${x.held ? 'held by ' + x.who : 'free'}${x.reserved ? ' · reserved for your shows' : ''}`).join('\n'))}">`
         + slots.map((x, i) => `<span class="slot c-${slotLook(x, i)[0]}">${icon(slotLook(x, i)[1])}<span>${slotName(w, i)}${x.reserved ? ' reserved' : ''}${x.held
           ? ': ' + esc(briefWho(x.who)) + ' · ' + dur(m.now - (x.since || m.now)) : x.reserved ? '' : ' free'}</span></span>`).join('') + '</span>';
-    else h += one.held
+    else if (slots.length) h += one.held   // none: the project has no shared window ("lock": "" in its config.json)
       ? `<span class="chip win held c-red" data-tip="${esc('Window held by ' + one.who)}">${icon('i-lock')}<span>Window: ${esc(shortWho(one.who))} · ${dur(m.now - (one.since || m.now))}</span></span>`
       : one.reserved ? `<span class="chip win held c-slate" data-tip="Kept free for your shows: no worker takes it">${icon('i-lock')}<span>Window reserved</span></span>`
       : `<span class="chip win c-green">${icon('i-unlock')}<span>Window free</span></span>`;

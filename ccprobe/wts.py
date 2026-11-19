@@ -421,7 +421,8 @@ def read(root):
         if hasattr(q, "lock_paths"):
             lock_paths = q.lock_paths()
         else:
-            lock_paths = [os.path.join(root, q.cfg.get("lock", ".autopilot/run.lock"))]
+            lock_paths = [os.path.join(root, r) for r in [q.cfg.get("lock", ".autopilot/run.lock")] if r]
+        # none: "lock": "" says the project has no shared window (a web tool tested in its own browser)
         slots = []
         for path in lock_paths:
             who = q.one_lock_text(path) if hasattr(q, "one_lock_text") else q.lock_text()
@@ -443,7 +444,7 @@ def read(root):
             "caffeinate": caffeinated(m),
             "lock_paths": lock_paths,
             # held: any slot is; full: none is free for a worker (each held or reserved), so an agent that needs one waits
-            "window": {"held": any(x["held"] for x in slots), "full": all(x["held"] or x["reserved"] for x in slots),
+            "window": {"held": any(x["held"] for x in slots), "full": bool(slots) and all(x["held"] or x["reserved"] for x in slots),
                        "slots": slots, "waiters": [],
                        "line": waiting_line(root, q.cfg.get("window_queue") or WINDOW_QUEUE)},
             "groups": groups, "limit_defaults": defaults, "per_session": per_session,
