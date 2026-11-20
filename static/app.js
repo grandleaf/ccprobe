@@ -1108,7 +1108,9 @@ function layout(nodes, s) {
   for (const n of live) S.band.set(n.id, BAND.agents + slot.get(n.id).sub / 10);
   for (const n of fin) S.band.set(n.id, BAND.finished);
   S.order = [...new Set(['lead', ...live.slice().sort((p, q) => slot.get(p.id).sub - slot.get(q.id).sub || slot.get(p.id).col - slot.get(q.id).col).map(n => n.id), ...fin.map(n => n.id)])];
-  return { pos, res: { y: y - 30, collapsed: nodes.filter(n => n.collapsed) } };
+  // the shelf as far below the last row as the first agents' row is below the lead (the user, 2026-11-20: the window
+  // cards were "too close to the second row")
+  return { pos, res: { y, collapsed: nodes.filter(n => n.collapsed) } };
 }
 
 function clearGraph() {
