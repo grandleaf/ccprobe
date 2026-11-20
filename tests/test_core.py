@@ -8,7 +8,7 @@ import unittest
 
 from ccprobe import alerts
 from ccprobe.agents import Transcript, agent_state, lead_state
-from ccprobe.model import _anchor, _holder, _holds, _label_of_meta, _review_state, _role_of_meta, _task_of_meta
+from ccprobe.model import _anchor, _holder, _holds, _label_of_meta, _review_state, _role_of_meta, _task_of_meta, _unique_ids
 from ccprobe.redact import clip, redact
 from ccprobe.tail import Tailer
 
@@ -362,6 +362,13 @@ class AgTests(unittest.TestCase):
     def test_an_unfiled_agent_stays_a_helper(self):
         self.assertEqual(_role_of_meta({"name": "idle1"}, self.rows), "helper")
         self.assertEqual(_role_of_meta({"name": "ag9"}, self.rows), "helper")       # no row 9: not filed
+
+
+class UniqueIdTests(unittest.TestCase):
+    def test_two_processes_on_one_conversation_get_an_id_each(self):   # the user, 2026-11-19: two cards lit at once
+        regs = [{"pid": 89396, "sessionId": "a2d4", "startedAt": 200}, {"pid": 15349, "sessionId": "a2d4", "startedAt": 100},
+                {"pid": 7, "sessionId": "b8aa", "startedAt": 50}, {"pid": 8, "startedAt": 60}]
+        self.assertEqual([s["uid"] for s in _unique_ids(regs)], ["a2d4@89396", "a2d4", "b8aa", "8"])
 
 
 class ReviewTests(unittest.TestCase):

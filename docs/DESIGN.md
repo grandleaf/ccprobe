@@ -26,7 +26,10 @@ some are P1 later, §13.)
 - `~/.claude/sessions/<pid>.json` holds one file per Claude process: `sessionId, cwd, name, version, status`
   (`busy|idle|shell`), `statusUpdatedAt` (ms), `startedAt`. `status` is only a **hint**: it stays `busy` after the lead's
   turn ends while background agents run (audit B3). The same dir holds `<pid>.<hash>.key` files, which ccprobe must
-  **never** read.
+  **never** read. Two processes can share a `sessionId`: one conversation resumed in another folder (`claude --resume
+  <id>`), then continued in its own (`claude --continue`); both write its one transcript. The model's session `id` is
+  unique (`_unique_ids`): the first started keeps the conversation's id, a later one is `<id>@<pid>` (the user,
+  2026-11-19: two rail cards lit at once).
 - tmux: `list-panes -a` gives `pane_pid`. The Claude process's **ppid is `pane_pid`** (verified for all 3 panes).
   `pane_title` is `✳ <title>` whether busy or idle, so it is not a state signal.
 - Transcripts live at `~/.claude/projects/<cwd with / and . → ->/<sessionId>.jsonl`, and the agents at

@@ -2917,7 +2917,7 @@ function wtsPanel(s) {
           h += `<span class="obs win s-window"${tip}>${icon('i-window')}${who}${esc(a.state.label)}</span>`;
         } else
         h += `<span class="obs${mismatch ? ' mismatch' : !am ? ` act c-${ac}` : ''}"${tip}>${who}<span class="${am ? 'mk s-' + am : 'c-' + ac}">${icon(am ? MARK[am] : ai)}</span>${esc(a.state.label)}${mismatch ? ' · does not match the row' : ''}</span>`;
-      } else if (!a && r.owner && r.owner !== (s.host ? s.id.slice(s.host.length + 1) : s.id) && LIVEKIND.includes(r.kind)) {   // a remote session's id has its host in front
+      } else if (!a && r.owner && r.owner !== (s.host ? s.id.slice(s.host.length + 1) : s.id).replace(/@\d+$/, '') && LIVEKIND.includes(r.kind)) {   // a remote session's id has its host in front; a second process on one conversation, @<pid> after it
         h += `<span class="obs">its agent is in another session (${esc(r.owner.slice(0, 8))})</span>`;
       } else if (!a && r.kind === 'active') {
         h += `<span class="obs">no agent seen for this row</span>`;

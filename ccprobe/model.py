@@ -68,8 +68,13 @@ class Collector:
         return self.model
 
     def _sessions(self, out, now):
-        for s in sessions_mod.discover(self.tmux):
-            sid = s.get("sessionId") or str(s["pid"])
+        regs = list(sessions_mod.discover(self.tmux))
+        # two processes on one conversation (resumed in another folder, then continued in its own: the user, 2026-11-19,
+        # two sessions "are highlighted in the left pane"): one id each. The first started keeps
+        # the conversation's id, so its selection holds; a later one is <id>@<pid>
+        _unique_ids(regs)
+        for s in regs:
+            sid = s["uid"]
             if not s["alive"]:
                 first = self.dead_since.setdefault(sid, now)
                 if now - first > DEAD_KEEP_S:
@@ -77,7 +82,7 @@ class Collector:
             else:
                 self.dead_since.pop(sid, None)
             if not os.path.exists(s["transcript"]):
-                found = glob.glob(os.path.join(sessions_mod.CLAUDE, "projects", "*", f"{sid}.jsonl"))
+                found = glob.glob(os.path.join(sessions_mod.CLAUDE, "projects", "*", f"{s.get('sessionId') or sid}.jsonl"))
                 if found:   # the projects-dir name rule did not hold (long paths are hashed): find it by session id
                     s["transcript"] = found[0]
                     s["subagents"] = os.path.join(found[0][:-6], "subagents")
@@ -203,7 +208,7 @@ class Collector:
 
     # --- one session ----------------------------------------------------------------------------------------
     def session_model(self, s, now):
-        sid = s.get("sessionId") or str(s["pid"])
+        sid = s.get("uid") or s.get("sessionId") or str(s["pid"])
         main = self.transcript(s["transcript"], MAIN_BACKFILL, MAIN_MAX) if os.path.exists(s["transcript"]) else None
         if main:
             self.where[(sid, "lead")] = (s["transcript"], s["cwd"])
@@ -684,6 +689,18 @@ def _notes_of(n, meta, nidx):
     notes file that exists: an unnamed "HP 282: …" worker has none until it writes its first note."""
     nn = n if n in nidx else _task_of_meta(meta, nidx)
     return {"n": nn, "t": nidx[nn]} if nn in nidx else None
+
+
+def _unique_ids(regs):
+    """Each registered session's id in the model (`uid`): its conversation's id, or <id>@<pid> for a later process on a
+    conversation another one runs too (the first started keeps the plain id); its pid when it has none."""
+    firsts = {}
+    for s in sorted(regs, key=lambda x: x.get("startedAt") or 0):
+        firsts.setdefault(s.get("sessionId"), s["pid"])
+    for s in regs:
+        real = s.get("sessionId")
+        s["uid"] = (real if firsts.get(real) == s["pid"] else f"{real}@{s['pid']}") if real else str(s["pid"])
+    return regs
 
 
 def _review_state(st, row, n, retired):
