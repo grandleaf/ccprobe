@@ -423,7 +423,7 @@ class Collector:
             # finishes as before too
             rn = n if n is not None else (_task_of_meta(meta, helps_rows) if role == "helper" else None)
             rv = _review_state(st, rows.get(rn) if rn is not None else None, rn, retired)
-            if rv:
+            if rv and not meta.get("stoppedByUser"):      # you stopped it by hand: stopped, as a TaskStop
                 st, finished = rv, False
             agents.append({
                 "id": aid, "name": meta.get("name"), "label": label, "desc": clip(redact(meta.get("description") or ""), 120),
@@ -435,6 +435,20 @@ class Collector:
                 "talked": talked.get(aid, 0), "anchor": None, "helps": n if n is not None else _task_of_meta(meta, helps_rows), "notes": notes,
             })
         by_id = {a["id"]: a for a in agents}
+
+        # of a task's helpers waiting for the lead's review, only the newest round waits: an earlier advisor (adv389 before
+        # adv389b) finished with its round, as before (2026-11-19, the code review)
+        newest = {}
+        for a in agents:
+            if a["role"] == "helper" and a["state"]["key"] == "review":
+                b = newest.get(a["helps"])
+                if b is None or (a["born"] or 0) > (b["born"] or 0):
+                    newest[a["helps"]] = a
+        for a in agents:
+            if a["role"] == "helper" and a["state"]["key"] == "review" and newest.get(a["helps"]) is not a:
+                a["state"] = {"key": "ended", "label": "done", "since": a["state"]["since"], "sub": "done",
+                              "detail": f"an earlier round of task {a['helps']}"}
+                a["finished"] = True
 
         # a worker whose turn ended while another agent on its task is at work (its advisor's round) waits for it: its
         # round is not over, whatever Claude Code's meta says (the next message revives it)
@@ -537,7 +551,8 @@ class Collector:
         return {
             "id": sid, "pid": s["pid"], "alive": s["alive"], "name": s.get("name"), "project": os.path.basename(s["cwd"].rstrip("/")),
             "cwd": s["cwd"], "title": (main.title if main else None) or _pane_title(s), "version": s.get("version"),
-            "status": s.get("status") if s["alive"] else "dead", "status_since": (s.get("statusUpdatedAt") or 0) / 1000,
+            # Claude Code's "shell" shows as idle, as the lead's own state does (agents.lead_state; 2026-11-19)
+            "status": ("idle" if s.get("status") == "shell" else s.get("status")) if s["alive"] else "dead", "status_since": (s.get("statusUpdatedAt") or 0) / 1000,
             "started": (s.get("startedAt") or 0) / 1000, "tmux": s["tmux"], "perm_mode": main.perm_mode if main else None,
             "has_transcript": main is not None, "history_from": now - HISTORY_S,
             "lead": lead, "agents": agents, "edges": list(edges.values()), "messages": msgs, "events": events, "wts": wpub,
@@ -634,7 +649,10 @@ def state_run(ws):
     reopened at 21:16 read "started 11/14 22:22 · 22h 57m"; a task at work writes its State far more often)."""
     start, done, open_, last = None, None, None, None
     for t, what in sorted(ws):
-        if what in ("in progress", "in hand") and open_ is not None and last and t - last[0] >= STRETCH_GAP:
+        # the gap counts only after a work write: a row paused or parked for hours and resumed keeps its start
+        # (2026-11-19, the code review); an unseen "done" always follows one
+        if what in ("in progress", "in hand") and open_ is not None and last and last[1] in ("in progress", "in hand") \
+                and t - last[0] >= STRETCH_GAP:
             open_ = None
         last = [t, what]
         if what in ("in progress", "in hand"):

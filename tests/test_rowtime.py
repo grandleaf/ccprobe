@@ -44,6 +44,8 @@ class RowTimeTests(unittest.TestCase):
         h = 3600
         self.assertEqual(state_run({(0, "in progress"), (6 * h, "in progress"), (23 * h, "in progress")})["open"], 23 * h)
         self.assertEqual(state_run({(0, "in progress"), (2 * h, "in progress"), (2 * h + 900, "in progress")})["open"], 0)
+        # a row paused for hours and resumed keeps its start: the gap counts only after a work write (2026-11-19)
+        self.assertEqual(state_run({(0, "in progress"), (h, "paused"), (8 * h, "in progress")})["open"], 0)
 
     def test_primary_agents(self):
         from ccprobe.model import _task_of_meta

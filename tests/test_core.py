@@ -177,6 +177,15 @@ class StateTests(Base):
         st = lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now)
         self.assertEqual(st["key"], "idle")
 
+    def test_a_shell_session_reads_idle(self):   # the user, 2026-11-19: Claude Code's "shell" showed a cyan dot, not idle
+        self.w.add(text(self.now - 300, "Here it is.", stop="end_turn"),
+                   {"type": "system", "subtype": "turn_duration", "timestamp": iso(self.now - 299)})
+        shell = {"alive": True, "status": "shell", "statusUpdatedAt": (self.now - 299) * 1000}
+        self.assertEqual(lead_state(self.tr(), shell, self.now)["key"], "idle")
+        self.assertEqual(lead_state(None, shell, self.now)["label"], "idle")
+        self.w.add(tool_use(self.now - 70, "b1", "Bash", {"command": "make"}))     # at work in a tool: the transcript says so
+        self.assertEqual(lead_state(self.tr(), shell, self.now)["key"], "running")
+
     def test_lead_waits_for_user_only_on_a_question(self):
         self.w.add(tool_use(self.now - 300, "toolu_q1", "AskUserQuestion", {"questions": []}))
         st = lead_state(self.tr(), {"alive": True, "status": "busy"}, self.now)

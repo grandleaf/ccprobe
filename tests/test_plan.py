@@ -86,8 +86,9 @@ class PlanTests(unittest.TestCase):
         self.save({"fetched_at": 1794615400, "limits": rows}, self.upath)
         got = self.read()
         week = next(w for w in got["windows"] if w["key"] == "seven_day")
-        # the same window, no seen_at (an older status line): the file's time, so the status line's is the newer
-        self.assertEqual((week["used"], week["src"], week["seen"]), (23.0, "status line", 1794615600))
+        # the same window, no seen_at (an older status line): the file's time, so the status line's is the newer; but a
+        # point lower is the two rounding apart (2026-11-18), so the endpoint's 24 stays, seen as of the newer reading
+        self.assertEqual((week["used"], week["src"], week["seen"]), (24.0, "usage", 1794615600))
         self.assertEqual([w["key"] for w in got["windows"]], ["five_hour", "seven_day", "seven_day_fable"])
         self.assertEqual(got["seen"], 1794615600)
         # a later window wins whatever its figure: the week reset, the status line has the new one
@@ -112,6 +113,20 @@ class PlanTests(unittest.TestCase):
         os.utime(self.path, (1794798700, 1794798700))
         week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
         self.assertEqual((week["used"], week["src"]), (3.0, "status line"))
+
+    def test_a_point_lower_is_rounding_not_a_reset(self):
+        # the user, 2026-11-18: the app said 100%, ccprobe 99%: the status line's 99 came after the endpoint's 100
+        self.save({"fetched_at": 1795071659, "limits": [{"kind": "weekly_all", "percent": 100, "resets_at": "2026-11-19T14:59:59.98+00:00"}]},
+                  self.upath)
+        self.save({"rate_limits": {"seven_day": {"used_percentage": 99, "resets_at": 1795100400, "seen_at": 1795071972}}})
+        os.utime(self.path, (1795071972, 1795071972))
+        week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
+        self.assertEqual((week["used"], week["src"]), (100.0, "usage"))
+        # two points lower is a real change: the newer stands
+        self.save({"rate_limits": {"seven_day": {"used_percentage": 98, "resets_at": 1795100400, "seen_at": 1795071980}}})
+        os.utime(self.path, (1795071980, 1795071980))
+        week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
+        self.assertEqual((week["used"], week["src"]), (98.0, "status line"))
 
     def test_bad_usage_rows_give_nothing(self):
         for bad in ("not json", "[]", '{"limits": []}', '{"limits": {}, "fetched_at": 1}',

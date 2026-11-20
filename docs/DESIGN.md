@@ -166,7 +166,8 @@ Kept per transcript (main or agent), updated from new entries only:
 | `unknown` | unknown | the parser could not tell |
 
 **The lead** (the main transcript): `dead` if the pid is dead; registry `idle` → `waiting_user` ("waiting for you");
-`shell` → `shell`; `busy` → `running` (pending tool) or `thinking`.
+`shell` is no state of its own: the transcript decides, so an ended turn reads `idle`, and the rail's dot is idle's
+amber (the user, 2026-11-19: a cyan dot for an idle session); `busy` → `running` (pending tool) or `thinking`.
 
 ### 5.6 Context gauge
 `ctx_max` = 1 000 000 by default (the Opus 5.5 / Fable sessions here run 1M windows; one compaction shows `preTokens`
@@ -598,7 +599,7 @@ Times are epoch seconds. The page does all formatting.
 |---|---|
 | B1: a hand-back's result and mid-turn text | `agents.py`: only conversational entries move `last_kind`. A result for a call never seen pending is ignored. Text is an end only with `end_turn`. One time ladder, built from entry timestamps plus `api-request` lines, replaces file growth: thinking under 3 min, then "thinking · quiet Nm", then stuck? from 10 min. |
 | B2: `origin` entries | `_user` treats any `user` entry with `origin.kind` as a receipt, the same as `queued_command`. `bg_pending` is cleared from `<tool-use-id>` in either form. |
-| B3: the lead's state | `lead_state` comes from the transcript. `turn_duration`, `end_turn` or a hand-back means `waiting_user`; a pending tool means running ("…or waiting for your approval?" after 60 s); otherwise the ladder. The registry is used only for `shell`, dead and the no-entries fallback. |
+| B3: the lead's state | `lead_state` comes from the transcript. `turn_duration`, `end_turn` or a hand-back means `waiting_user`; a pending tool means running ("…or waiting for your approval?" after 60 s); otherwise the ladder. The registry is used only for dead and the no-entries fallback (`shell` there counts as idle). |
 | M1: lock holder and waiters | The holder is the transcript whose Bash last wrote a literal `echo "…" > …/who` prefix that the current `who` starts with. Fallbacks: `lead…`, then a `meta.name` match on the first word, then `MP/LP/HP/task N` → the bound agent. A holder in its lock loop shows as "holds the window · Nm" and is never a waiter. Each window slot gets its own holder this way; with two slots the state says "holds win1" (0-based, as the worker skill names them) or "holds both windows"; a slot with a `<lock>.reserved` file is kept for the user's shows, and the stale-lock alert is per slot. |
 | M2: false alerts | Each rule is rewritten as the audit says (`alerts.py`). `orphan-row` checks related live agents and the lead. `stale-row` fires only on failed writes. `usage-limit` is a state, which also suppresses `stuck`. `waiting-free` counts only polling waiters in a running group. `caffeinate` fires only when work is running. `hp-state` drops the deliberate-stop clause and gets grace periods. `stale-lock` is not raised while the app runs. |
 | M3: `__pycache__` | `sys.dont_write_bytecode` during the import, `BaseException` caught, and the previous module kept on a failed reload. |

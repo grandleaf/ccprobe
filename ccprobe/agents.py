@@ -579,9 +579,12 @@ def lead_state(tr, session, now):
     """The lead from its own transcript (the registry's busy/idle is only a hint: audit B3)."""
     if not session.get("alive"):
         return {"key": "dead", "label": "session ended", "since": tr.last_ts if tr else 0, "detail": ""}
-    if session.get("status") == "shell":
-        return {"key": "shell", "label": "in a shell", "since": (session.get("statusUpdatedAt") or 0) / 1000, "detail": ""}
+    # Claude Code's "shell" (a session whose turn has ended, its own word for it unclear) is no state of its own: the
+    # transcript says what the lead does, so an ended turn reads idle (the user, 2026-11-19: "why the left side panel it
+    # has a teal dot, not yellow/orange?" ... "yes, show it as idle")
     if tr is None:
+        if session.get("status") in ("idle", "shell"):
+            return {"key": "idle", "label": "idle", "since": (session.get("statusUpdatedAt") or 0) / 1000, "detail": ""}
         return {"key": "unknown", "label": session.get("status") or "?", "since": 0, "detail": ""}
     p = tr.oldest_pending()
     # Claude Code itself says idle (for 30 s, so not a momentary flip): a turn that ended without leaving an entry
@@ -608,8 +611,8 @@ def lead_state(tr, session, now):
     if tr.last_kind in ("turn_end", "end", "handback"):      # its turn is over: idle until you write
         return {"key": "idle", "label": "idle", "since": tr.last_ts, "detail": ""}
     if tr.last_kind is None:
-        return {"key": "idle" if session.get("status") == "idle" else "unknown",
-                "label": "idle" if session.get("status") == "idle" else "no recent entries", "since": tr.last_ts, "detail": ""}
+        quiet = session.get("status") in ("idle", "shell")
+        return {"key": "idle" if quiet else "unknown", "label": "idle" if quiet else "no recent entries", "since": tr.last_ts, "detail": ""}
     if reg_idle:
         return {"key": "idle", "label": "idle", "since": (session.get("statusUpdatedAt") or 0) / 1000,
                 "detail": "the last turn ended without a reply (interrupted?)"}

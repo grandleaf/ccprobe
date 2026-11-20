@@ -1071,7 +1071,10 @@ function layout(nodes, s) {
       if (isAstray(n)) { mem.agents.set(k, old); slot.set(n.id, { sub: old.sub, col: old.col }); }
     }
   }
-  if (tidy || (upkeep && now - mem.lastReorder > REORDER_MS)) {
+  // the untangling has its own once-per-arrangement mark: an arrangement that went quiet within REORDER_MS of the last
+  // swap still gets its try once that time is up (the upkeep's own mark is set by then)
+  const reorder = quiet && mem.reorderSig !== upSig() && now - mem.lastReorder > REORDER_MS;
+  if (tidy || reorder) {
     const saved = [...mem.agents.values()].map(e => [e, e.col]);
     const gain = untangleRow(mem.agents, g.keyOf, live, E, id => (sync(), at(id)));
     if (gain >= (tidy ? 1 : 2)) mem.lastReorder = now;
@@ -1080,6 +1083,7 @@ function layout(nodes, s) {
   }
   if (tidy) mem.lastReorder = now;
   if (upkeep || tidy) mem.upSig = upSig();   // done for this arrangement
+  if (reorder || tidy) mem.reorderSig = upSig();
   const key = JSON.stringify([...mem.agents].map(([k, e]) => [k, e.sub, e.col]));
   if (vain) mem.vainFlow = key;   // a flow here saves no row: it is not something Tidy can do
   // can Tidy do anything? (a row with a gap or off centre, a reserved slot, or a helper away from its anchor)
@@ -2087,7 +2091,9 @@ $('panel').addEventListener('scroll', () => {
 }, { passive: true });
 try {
   const p = JSON.parse(sessionStorage.getItem('ccprobe.place') || 'null');
-  if (p && p.sid && (S.sid == null || p.sid === S.sid)) {   // none stored when the page picked the session itself
+  // this tab's own place (sessionStorage is per tab) wins over ccprobe.sid, which every tab shares: two tabs on two
+  // sessions each reload where they were (2026-11-19, the code review)
+  if (p && p.sid) {
     S.sid = p.sid; S.tab = p.tab || null; S.sel = p.sel || 'lead';
     for (const [k, v] of p.places || []) PS.places.set(k, { want: v, clampedAt: 0 });
   }
@@ -2116,6 +2122,9 @@ function renderPanel() {
   // keep the reader's place (PS): the section header at the top of the view stays where it was, and focus stays put
   const pane = $('panel'), py = pane.getBoundingClientRect().top, fk = want || document.activeElement?.dataset?.k;
   const key = placeKey(), m = placeOf(key), same = key === PS.key && !m.clampedAt;
+  // the same place, not cut short: where the pane is now is the reader's, even when its scroll event has not run yet
+  // (a rebuild between the two snapped the WTS tab, which has no [data-k] anchors, back to the last event's place)
+  if (same) m.want = pane.scrollTop;
   let anchor = null;
   if (same && pane.scrollTop > 0) for (const el of pane.querySelectorAll('[data-k]')) { const y = el.getBoundingClientRect().top - py; if (y <= 1) anchor = { k: el.dataset.k, y }; else break; }
   pane.innerHTML = h; S.panelHtml = h; PS.key = key;
@@ -2742,21 +2751,21 @@ function rowStatus(r, now, run, wrote) {   // wrote: when the row's State was la
   if (r.kind === 'active' && run?.born) {
     sr = '<span class="sr">in progress, started </span>';
     html = `${whenHM(run.born, now)} · <b>${dur(now - run.born)}</b>` + esc(tail);
-    two = { l1: whenMD(run.born, now), l2: `<b>${dur(now - run.born)}</b>`, extra };
+    two = { l1: whenMD(run.born), l2: `<b>${dur(now - run.born)}</b>`, extra };
   } else if (tm && LIVEKIND.includes(r.kind)) {
     const at = atHM(tm[0], wrote, now), took = `${whenHM(at, now)} · <b>${dur(now - at)}</b>`, l2 = `<b>${dur(now - at)}</b>`;
     // a word its own icon already says goes (in progress ▶, paused ⏸, needs the user ?); one an icon shares stays (parked)
     const said = r.kind === 'active' || (r.kind === 'paused' && /^paused$/i.test(lead)) || (r.kind === 'asks' && /^needs the user$/i.test(lead));
-    if (r.kind === 'active') { sr = '<span class="sr">in progress, started </span>'; html = took + esc(tail); two = { l1: whenMD(at, now), l2, extra }; }
-    else if (said && !rest.trim()) { sr = `<span class="sr">${esc(lead)} since </span>`; html = took + esc(tail); two = { l1: whenMD(at, now), l2, extra }; }
+    if (r.kind === 'active') { sr = '<span class="sr">in progress, started </span>'; html = took + esc(tail); two = { l1: whenMD(at), l2, extra }; }
+    else if (said && !rest.trim()) { sr = `<span class="sr">${esc(lead)} since </span>`; html = took + esc(tail); two = { l1: whenMD(at), l2, extra }; }
     else if (/^[a-z ]*$/i.test(lead) && !rest.trim()) {
       html = esc(lead ? lead + ' ' : '') + took + esc(tail);
       // its word goes from the first pill (its colour and icon say it; the tip keeps it), so the first pills keep one width
-      two = { l1: whenMD(at, now), l2, extra, sr: lead ? `<span class="sr">${esc(lead)} since </span>` : '' };
+      two = { l1: whenMD(at), l2, extra, sr: lead ? `<span class="sr">${esc(lead)} since </span>` : '' };
     } else if (/^[a-z ]*$/i.test(lead) && /^\s*\(/.test(rest)) {
       // a note after the time ("paused 22:03 (owner, 2026-11-17: tokens low"): the two pills as usual, the note in the
       // tip (the whole status), so one row's note widens no chip (the user, 2026-11-17)
-      two = { l1: whenMD(at, now), l2, extra, sr: `<span class="sr">${esc(lead + ' ' + rest.trim())}, since </span>` };
+      two = { l1: whenMD(at), l2, extra, sr: `<span class="sr">${esc(lead + ' ' + rest.trim())}, since </span>` };
     }
   } else if (tm && r.kind === 'done' && /^done$/i.test(lead)) {
     sr = '<span class="sr">done at </span>';
@@ -2766,7 +2775,7 @@ function rowStatus(r, now, run, wrote) {   // wrote: when the row's State was la
       // from the run's start to its last step, or to the row's "done" if that came first (a lead may mark it later)
       const at = atHM(tm[0], near, now), end = Math.min(at, run?.last_ts || Infinity), spent = run?.born && end > run.born ? end - run.born : 0;
       html = whenHM(at, now) + (spent ? ` · <b>${dur(spent)}</b>` : '') + esc(rest + tail);
-      two = { l1: whenMD(at, now) + esc(rest), l2: spent ? `<b>${dur(spent)}</b>` : '', extra };
+      two = { l1: whenMD(at) + esc(rest), l2: spent ? `<b>${dur(spent)}</b>` : '', extra };
     }
   }
   return { ri, rc, html: sr + html, two: two && Object.assign({ sr }, two) };

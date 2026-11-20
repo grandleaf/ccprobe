@@ -132,14 +132,18 @@ def _order(w):
 
 def merge(*lists):
     """One reading per window: for the same reset (an hour apart at most: the endpoint's time has fractions) the newer
-    figure (`at`; a tie: the higher), seen as of the newer reading; else the one with the later reset."""
+    figure (`at`; a tie: the higher), seen as of the newer reading; else the one with the later reset. A newer figure a
+    point lower or less is the two sources rounding apart, not a reset (that drops it far more): the higher stays (the
+    user, 2026-11-18: "the ccprobe interface says 99% used, but the claude app says 100% used": the status line's 99
+    had come after the usage endpoint's 100)."""
     by = {}
     for w in (w for ws in lists for w in ws):
         o = by.get(w["key"])
         if o is None:
             by[w["key"]] = w
         elif o["resets_at"] and w["resets_at"] and abs(o["resets_at"] - w["resets_at"]) < HOUR:
-            top = w if (w["at"], w["used"], w["seen"]) > (o["at"], o["used"], o["seen"]) else o
+            new, old = (w, o) if (w["at"], w["used"], w["seen"]) > (o["at"], o["used"], o["seen"]) else (o, w)
+            top = old if 0 < old["used"] - new["used"] <= 1 else new
             by[w["key"]] = {**top, "seen": max(o["seen"], w["seen"])}
         elif (w["resets_at"] or 0) > (o["resets_at"] or 0):
             by[w["key"]] = w
