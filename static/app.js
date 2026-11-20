@@ -2245,19 +2245,29 @@ function filesHtml(id, d) {
 
 // ---- what an agent did: the last few tools (the detail's), or every step it took ("all steps": /api/steps reads its
 // transcript, then only what it gains; its tool calls and what it said), newest first ----
-S.steps = new Map();   // sid/agent -> { d: {steps (oldest first), n, cut, from}, at, busy, last }
+// both caches keep the latest used and drop the oldest past a few (a tab left open for days while you read many agents
+// and messages: the code review, 2026-11-19)
+function lruTouch(m, k, max) {   // k (if there) becomes the newest; the oldest go past max
+  if (m.has(k)) { const v = m.get(k); m.delete(k); m.set(k, v); }
+  for (const old of m.keys()) { if (m.size <= max) break; if (old !== k) m.delete(old); }
+}
+const STEPS_KEEP = 8, MSG_KEEP = 150, MSG_OPEN_KEEP = 100, MSG_RETRY_MS = 30000;
+S.steps = new Map();   // sid/agent -> { d: {steps (oldest first), n, cut, from}, at, busy, last }; the latest used last
 function wantSteps(s, id, last) {
-  const k = s.id + '/' + id, e = S.steps.get(k), age = e ? Date.now() - e.at : Infinity;
+  const k = s.id + '/' + id;
+  lruTouch(S.steps, k, STEPS_KEEP);
+  const e = S.steps.get(k), age = e ? Date.now() - e.at : Infinity;
   if (e && (e.busy || age < 4000 || (e.last >= last && age < 30000))) return e.d;
   // from 15 minutes before its newest step on: a call that fails long after it was made (parallel calls) is marked
   // on an older step, which comes again so (the code review, 2026-11-19)
   const have = e?.d?.steps || [], after = have.length && have[have.length - 1].t ? Math.floor(have[have.length - 1].t - 900) : null;
   S.steps.set(k, Object.assign({}, e, { busy: true }));
+  lruTouch(S.steps, k, STEPS_KEEP);
   fetch(`/api/steps?s=${encodeURIComponent(s.id)}&a=${encodeURIComponent(id)}${after ? '&after=' + after : ''}`, { cache: 'no-store' })
     .then(r => r.ok ? r.json() : null).catch(() => null).then(d => {
       // from `after` on only: those steps replace the ones the page had from then
       const nd = d && after ? Object.assign({}, d, { steps: have.filter(x => (x.t || 0) < after).concat(d.steps).slice(-2000) }) : d;
-      S.steps.set(k, { d: nd || e?.d || null, at: Date.now(), busy: false, last });
+      if (S.steps.has(k)) S.steps.set(k, { d: nd || e?.d || null, at: Date.now(), busy: false, last });   // not if dropped meanwhile
       if (S.tab === 'agent') renderPanel();
     });
   return e?.d;
@@ -2301,13 +2311,19 @@ function toolsHtml(s, n, d, fin) {
 
 // ---- messages: one line each; a click opens its whole text (/api/message, asked for when opened) ----
 S.msgOpen = new Set();   // sid|message id
-S.msgText = new Map();   // sid|message id -> its text (undefined: on its way; null: not to be had)
+S.msgText = new Map();   // sid|message id -> { text (undefined: on its way; null: not to be had), at }; the latest used last
 function wantMsg(sid, mid) {
-  const k = sid + '|' + mid;
-  if (S.msgText.has(k)) return S.msgText.get(k);
-  S.msgText.set(k, undefined);
+  const k = sid + '|' + mid, e = S.msgText.get(k);
+  lruTouch(S.msgText, k, MSG_KEEP);
+  // one not to be had (gone from view, the link down) is asked for again a little later: it may be back
+  if (e && !(e.text === null && Date.now() - e.at > MSG_RETRY_MS)) return e.text;
+  S.msgText.set(k, { text: undefined, at: Date.now() });
+  lruTouch(S.msgText, k, MSG_KEEP);
   fetch(`/api/message?s=${encodeURIComponent(sid)}&m=${encodeURIComponent(mid)}`, { cache: 'no-store' })
-    .then(r => r.ok ? r.json() : null).catch(() => null).then(d => { S.msgText.set(k, d ? d.text : null); if (S.tab === 'agent') renderPanel(); });
+    .then(r => r.ok ? r.json() : null).catch(() => null).then(d => {
+      if (S.msgText.has(k)) S.msgText.set(k, { text: d ? d.text : null, at: Date.now() });   // not if dropped meanwhile
+      if (S.tab === 'agent') renderPanel();
+    });
   return undefined;
 }
 function msgsHtml(s, n, isLead) {
@@ -3409,7 +3425,7 @@ $('panel').addEventListener('click', e => {
   const mg = e.target.closest('[data-msg]');
   if (mg && !e.target.closest('[data-select]')) {
     const k = S.sid + '|' + mg.dataset.msg;
-    if (!S.msgOpen.delete(k)) S.msgOpen.add(k);
+    if (!S.msgOpen.delete(k)) { S.msgOpen.add(k); for (const old of S.msgOpen) { if (S.msgOpen.size <= MSG_OPEN_KEEP) break; S.msgOpen.delete(old); } }
     return renderPanel();
   }
   const f = e.target.closest('[data-fold]');

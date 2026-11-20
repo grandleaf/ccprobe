@@ -975,5 +975,8 @@ task they say what was done far better than the transcript, so ccprobe shows the
   Each step is a tool call (as the recent tools show it, a failed one marked) or the first line of a thing it said;
   the newest 2000 are kept. The page asks again at most every 4 s while the agent moves (every 30 s otherwise), for
   steps from 15 minutes before its newest on (a parallel call that fails late marks an older step), and shows the newest 100, "older" for the rest, a line for each other day.
+- **The page's caches** keep the latest used and drop the oldest: the steps of the last 8 agents shown, the text of
+  the last 150 messages opened (one not to be had is asked for again after 30 s: it may be back in view), the last 100
+  messages left open. A tab left open for days does not grow.
 - **Remote:** both questions go down the SSH pipe like the others (`message`, `steps`).
 
