@@ -265,6 +265,8 @@ body.sorting, body.sorting * { cursor: grabbing !important; user-select: none; }
 .edge.flashy { stroke-width: 3; opacity: 1; }
 .edge.faint { opacity: .3; }                       /* a message line that is no longer hot */
 .edge.dim, .edge.hot.dim { opacity: .12; }         /* an agent is selected: lines that are not its own step back */
+.node .fable circle { fill: var(--bg); stroke: var(--mauve); stroke-width: 1.6; }
+.node .fable text { fill: var(--mauve); font-size: 12px; font-weight: 700; text-anchor: middle; font-family: var(--mono); }
 .node .lockm circle { fill: var(--bg); stroke: var(--lk, var(--red)); stroke-width: 1.6; }
 .node .lockm use { color: var(--lk, var(--red)); }
 .lk-win2 { --lk: var(--win2); } .lk-win3 { --lk: var(--win3); }   /* on a holder's lock mark, line and WTS row */

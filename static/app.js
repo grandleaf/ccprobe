@@ -15,6 +15,7 @@ const tfmt = n => {
   for (const [d, u] of [[1e3, 'k'], [1e6, 'M'], [1e9, 'B']]) { const x = n / d; if (x < 999.5 || u === 'B') return (x < 99.95 ? x.toFixed(1) : Math.round(x)) + u; }
 };
 const exact = n => Math.round(n || 0).toLocaleString('en-US').replace(/,/g, '\u2009');
+const isFable = m => /^(claude-)?fable/i.test(m || '');
 const modelName = m => (m || '').replace(/^claude-/, '').replace(/\[.*\]$/, '').replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/^\w/, c => c.toUpperCase());
 const clip = (s, n) => { s = String(s ?? ''); if (s.length <= n) return s; let c = s.slice(0, n - 1); const sp = c.lastIndexOf(' '); if (sp > n * .6) c = c.slice(0, sp); return c.trimEnd() + '…'; };
 
@@ -370,7 +371,7 @@ const briefWho = who => shortWho(who).replace(/\s+pid=\d+$/, '').replace(/\s+\d{
 // the window slots (two game windows side by side, or the one lock): which ones an agent holds, and their names
 const winSlots = w => w?.window?.slots || [];
 const heldBy = (w, id) => winSlots(w).flatMap((x, i) => x.held && x.holder === id ? [i] : []);
-const heldSince = (w, idx) => Math.min(...idx.map(i => winSlots(w)[i].since || Infinity));
+const heldSince = (w, idx) => Math.min(...idx.map(i => winSlots(w)[i]?.since || Infinity));
 const slotName = (w, i) => winSlots(w).length > 1 ? `win${i}` : 'Window';   // 0-based, as the worker skill names them
 const SLOTCOL = ['red', 'win2', 'win3'];   // a held slot's colour: red, orange, gold (then round again)
 const slotCol = i => SLOTCOL[i % SLOTCOL.length];
@@ -1511,9 +1512,11 @@ function makeNode(id) {
   p.stat = el('g', { class: 'stat' }, g); p.sico = el('use', { width: 12, height: 12 }, p.stat); p.stxt = el('text', {}, p.stat);
   p.barbg = el('rect', { class: 'barbg', height: 4, rx: 2 }, g); p.bar = el('rect', { class: 'bar', height: 4, rx: 2 }, g);
   p.meta = el('text', { class: 'meta' }, g);
+  // the Fable mark, on the hex's right shoulder: an outlined disc like the others, "f" in mauve, for an
+  // agent on a Fable model (the user, 2026-11-19: "juse use one character like "f"")
+  p.fable = el('g', { class: 'fable' }, g); el('circle', { r: 9 }, p.fable); el('text', { y: 4 }, p.fable).textContent = 'f';
   p.badge = el('g', { class: 'badge' }, g); el('circle', { r: 8 }, p.badge); p.badgeT = el('text', { y: 4 }, p.badge);
   p.lockm = el('g', { class: 'lockm' }, g); el('circle', { r: 9 }, p.lockm); el('use', { href: '#i-lock', x: -5.5, y: -6, width: 11, height: 11 }, p.lockm);
-  el('title', {}, p.lockm).textContent = 'Holds the window';
   // the notes mark: a ring in the agent's colour; hover lights it, a click opens the notes (as a double-click does)
   p.notem = el('g', { class: 'notem' }, g);
   const nm = el('g', { class: 'nm' }, p.notem); el('circle', { r: 9 }, nm); el('use', { href: '#i-doc', x: -5.5, y: -5.5, width: 11, height: 11 }, nm);
@@ -1523,8 +1526,17 @@ function makeNode(id) {
   g.addEventListener('dblclick', ev => { ev.stopPropagation(); const nt = notesOf(); if (nt) openReader(nt.n); });
   p.notem.addEventListener('click', ev => { ev.stopPropagation(); const nt = notesOf(); if (!nt) return; if (S.sel !== id) select(id); openReader(nt.n); });
   p.notem.addEventListener('dblclick', ev => ev.stopPropagation());   // its click already opened them
-  p.notem.addEventListener('mouseenter', () => { const nt = notesOf(); if (nt) showTip(p.notem, `Task ${nt.n}'s notes · updated ${hhmm(nt.t)}\nclick to read`); });
-  p.notem.addEventListener('mouseleave', () => showTip(g, nodeTip(id)));
+  // a badge's tip says what that badge means, not the whole agent (the user, 2026-11-19: "just show the info regards the
+  // lengend, not the task"); back on the hex, the agent's tip again
+  const legend = (m, text) => {
+    m.addEventListener('mouseenter', () => { const s = cur(), n = s && nodeById(s, id); if (n) showTip(m, text(s, n)); });
+    m.addEventListener('mouseleave', ev => g.contains(ev.relatedTarget) ? showTip(g, nodeTip(id)) : hideTip());
+  };
+  legend(p.stb, markTip);
+  legend(p.badge, alertTip);
+  legend(p.lockm, lockTip);
+  legend(p.fable, (s, n) => `f: runs on ${modelName(n.model)}`);
+  legend(p.notem, (s, n) => n.notes ? `Task ${n.notes.n}'s notes · updated ${hhmm(n.notes.t)}\nclick to read` : '');
   g.addEventListener('keydown', ev => {
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
     ev.preventDefault();
@@ -1571,6 +1583,34 @@ function markOf(n, st = n.state || {}) {
   if (n.finished || st.key === 'ended' && st.sub === 'done') return 'done';
   if (st.key === 'ended' || st.waits_for) return 'msg';   // a task's worker between turns, or waiting for its advisor
   return null;
+}
+// what each mark means, for its badge's tip: [name, meaning]
+const MARKTIP = {
+  msg: ['Waiting for a message', 'between turns: it goes on when a message comes (the lead\'s, or its advisor\'s answer).'],
+  blender: ['Waiting on Blender', 'a Blender job it started is still running.'],
+  job: ['On another job', 'a job it started in the background (a build, tests) is still running.'],
+  poll: ['Polling', 'a loop that sleeps and looks again, until what it waits for is ready.'],
+  paused: ['Paused by hand', 'its task is paused (by you or the lead): it starts nothing new until it is resumed.'],
+  window: ['Waiting for the window', 'another agent holds the shared window (the app): it goes on when the lock is free.'],
+  hold: ['On hold', 'its task is parked, waiting or on hold.'],
+  review: ['Waiting for the lead\'s review', 'its task is done; it turns ✓ finished once the lead reviews, accepts or closes it.'],
+  stuck: ['Maybe stuck', 'silent for 10 minutes with no tool or message to wait on, or a command past its timeout.'],
+  dead: ['Dead', 'its process is gone, or it stopped on a failed request (such as a usage limit).'],
+  done: ['Finished', 'its work is done.'],
+  ask: ['Waiting for you', 'the lead asked you something and waits for your answer.'],
+};
+function markTip(s, n) {
+  const st = n.state || {}, m = MARKTIP[markOf(n, st)];
+  return m ? [`${m[0]}: ${m[1]}`, st.label ? 'now: ' + st.label : '', st.detail ? clip(st.detail, 120) : ''].filter(Boolean).join('\n') : '';
+}
+function alertTip(s, n) {
+  const al = liveAlerts(S.model).filter(a => a.session === s.id && a.agent === n.id && a.sev !== 'info');
+  return al.length ? [`${al.length} alert${al.length > 1 ? 's' : ''} on this agent (the Alerts tab lists them)`, ...al.map(a => '• ' + a.title)].join('\n') : '';
+}
+function lockTip(s, n) {
+  if (!n.holds?.length) return '';
+  const t = heldSince(s.wts, n.holds);
+  return `${holdsText(s.wts, n.holds).replace(/^h/, 'H')}${isFinite(t) ? ' · ' + dur(S.model.now - t) : ''}\nThe shared window's lock: other agents wait until it lets go.`;
 }
 function updateNode(p, n, pos, now, nAlerts) {
   const { x, y, r } = pos;
@@ -1637,8 +1677,12 @@ function updateNode(p, n, pos, now, nAlerts) {
   } else { p.meta.style.display = 'none'; yy -= 12; }
   p.badge.style.display = nAlerts ? '' : 'none';
   setA(p.badge, { transform: `translate(${(r * .8).toFixed(1)},${(-r * .75).toFixed(1)})` }); setT(p.badgeT, '!');
+  const fable = isFable(n.model);
+  p.fable.style.display = fable ? '' : 'none';
+  // on the right shoulder (the user, 2026-11-19: "put it in the right shoulder"); the "!" badge sits just above it,
+  // so while it shows, the "f" moves down to the right side's middle
+  if (fable) setA(p.fable, { transform: nAlerts ? `translate(${(r + 1).toFixed(1)},0)` : `translate(${(r * .866 + 1).toFixed(1)},${(-r * .5 - .5).toFixed(1)})` });
   p.lockm.style.display = n.holds?.length ? '' : 'none';   // holds a window (its card is on the shelf, joined by a red line)
-  if (n.holds?.length) setT(p.lockm.lastChild, holdsText(cur()?.wts, n.holds).replace(/^h/, 'H'));
   setA(p.lockm, { class: 'lockm' + lkClass(n.holds?.[0] || 0) });   // in its window's colour
   p.notem.style.display = n.notes ? '' : 'none';    // its task has notes: a double-click reads them
   setA(p.notem, { transform: `translate(${(-r * .8).toFixed(1)},${(r * .72).toFixed(1)})` });
@@ -2057,7 +2101,8 @@ function nodeTip(id) {
   const st = n.state || {}, tk = n.tokens, v = tk?.v;
   // its tokens so far, named as on the Tokens tab: in = fresh input (input + cache writes)
   const tok = tk && tk.n ? `tokens: ${tfmt(v[3])} out · ${tfmt(v[0] + v[1])} in · ${tfmt(v[2])} cache read\n  in = ${tfmt(v[0])} input + ${tfmt(v[1])} cache write · ${exact(tk.n)} replies` : '';
-  return [n.label || s.project, st.label, n.task ? `task ${n.task}: ${n.task_title || ''}` : '', n.ctx ? `context ${kfmt(n.ctx)} / ${kfmt(n.ctx_max)}` : '',
+  const mdl = modelName(n.model);
+  return [(n.label || s.project) + (mdl ? ` (${mdl})` : ''), st.label, n.task ? `task ${n.task}: ${n.task_title || ''}` : '', n.ctx ? `context ${kfmt(n.ctx)} / ${kfmt(n.ctx_max)}` : '',
     tok, st.detail ? 'now: ' + st.detail : '', 'last active ' + ago(n.last_ts, S.model.now), n.notes ? `double-click: task ${n.notes.n}'s notes` : ''].filter(Boolean).join('\n');
 }
 

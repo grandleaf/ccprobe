@@ -362,6 +362,12 @@ Each node shows:
   a project's lead, with the user, 2026-11-18: "a worker should not show ✓ finished until the lead has reviewed its
   task"), `done` ✓ blue, the lead's `ask` ? rose. The status line and the WTS agent
   line show the same mark. The other corners: "!" alerts (red), notes (a green page), the window's lock (red);
+- on the hex's right shoulder, an outlined mauve disc with `f` for an agent on a Fable model (`isFable`; on the top
+  point it looked odd: the user, 2026-11-19); while the "!" badge shows, the `f` moves down to the right side's middle;
+- tips: the hex's own tip starts with its name and model, `HP 35 (Fable 5.2)`. Each badge has a tip of its own, about
+  that badge only (`legend` in `makeNode`): the status mark's name and meaning (`MARKTIP`) with the state's words, the
+  alerts on the agent, the window it holds and for how long, its notes, its Fable model (the user, 2026-11-19: "just
+  show the info regards the lengend, not the task");
 - under the hex, the task's title (a helper: its job, without its name; the lead and a finished agent: their name),
   and for the lead its session title below it;
 - a status line with its icon;
