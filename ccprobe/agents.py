@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 
 from .redact import clip, redact
-from .tail import Tailer
+from .tail import SKIP_PREFIXES, Tailer
 
 RE_NOTIFY_ID = re.compile(r"<tool-use-id>(toolu_[A-Za-z0-9_]+)</tool-use-id>")
 RE_TASK_ID = re.compile(r"<task-id>([A-Za-z0-9_-]+)</task-id>")
@@ -105,6 +105,37 @@ def _text_of(content):
     return ""
 
 
+MSG_MAX = 8000          # a message's text as kept for /api/message
+
+
+def msg_text(text):
+    return clip(redact(str(text or "")).replace(HOME, "~"), MSG_MAX)
+
+
+def read_brief(path):
+    """({t, text}, the whole text) of a transcript's first prompt, (None, "") for none, False when the file cannot be
+    read. The text shown is cut at 4000; the whole (to 64 KB) is for the documents it names."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(1 << 16)
+            if b"\n" not in head:
+                head += f.read(1 << 19)
+    except OSError:
+        return False
+    for raw in head.split(b"\n")[:5]:
+        try:
+            d = json.loads(raw)
+        except ValueError:
+            continue
+        if d.get("type") == "user":
+            text = _text_of((d.get("message") or {}).get("content")).strip()
+            if text:
+                whole = redact(text[:1 << 16]).replace(HOME, "~")
+                return {"t": ts_of(d), "text": clip(whole, 4000)}, whole
+            break
+    return None, ""
+
+
 class Transcript:
     """One transcript (a session's main one, or an agent's), reduced incrementally."""
 
@@ -150,6 +181,7 @@ class Transcript:
         self.bg_task = {}                      # background task id -> tool_use_id
         self.history = collections.deque(maxlen=14)   # recent tools with their full command, for the panel
         self._brief = False                    # not read yet (the head of the file, once)
+        self.brief_full = ""                   # the whole first prompt (to 64 KB): the documents it names (model.task_docs)
 
     def update(self):
         entries = self.tail.read()
@@ -266,7 +298,7 @@ class Transcript:
             if tid:
                 self.handbacks.add(tid)
             self.messages.append({"t": t, "kind": "handback", "to": None, "to_id": None,
-                                  "summary": first_line(inp.get("message", ""), 140), "tid": tid})
+                                  "summary": first_line(inp.get("message", ""), 140), "tid": tid, "text": msg_text(inp.get("message"))})
             self.last_kind = "handback"
             self.handed_back = True
             return
@@ -296,7 +328,8 @@ class Transcript:
             if tid in self.pending:
                 self.pending[tid]["stop"] = str(stop_id)
         if name == "SendMessage":
-            self.messages.append({"t": t, "kind": "send", "to": str(inp.get("to") or ""), "to_id": None, "summary": arg, "tid": tid})
+            self.messages.append({"t": t, "kind": "send", "to": str(inp.get("to") or ""), "to_id": None, "summary": arg, "tid": tid,
+                                  "text": msg_text(inp.get("message"))})
         if cmd:
             m = RE_QSTATE.search(cmd)
             if m:
@@ -436,25 +469,10 @@ class Transcript:
         """{t, text}: the prompt the agent was started with (the file's first user entry), read once from the head."""
         if self._brief is not False:
             return self._brief
-        self._brief = None
-        try:
-            with open(self.path, "rb") as f:
-                head = f.read(1 << 16)
-                if b"\n" not in head:
-                    head += f.read(1 << 19)
-        except OSError:
-            self._brief = False                # try again next time: the file may be back
-            return None
-        for raw in head.split(b"\n")[:5]:
-            try:
-                d = json.loads(raw)
-            except ValueError:
-                continue
-            if d.get("type") == "user":
-                text = _text_of((d.get("message") or {}).get("content"))
-                if text.strip():
-                    self._brief = {"t": ts_of(d), "text": clip(redact(text.strip()).replace(HOME, "~"), 4000)}
-                break
+        got = read_brief(self.path)
+        if got is False:
+            return None                        # try again next time: the file may be back
+        self._brief, self.brief_full = got if got else (None, "")
         return self._brief
 
     def detail(self, now, rel=None):
@@ -647,3 +665,95 @@ def read_meta(path):
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+# ---- every step an agent took, for the panel's "all steps" (the user, 2026-11-19: "if want want to know what the status
+# of the agent, e,g, it is doing what, and what is the curreent progress or steps"). Read on demand from the file itself
+# (the tailer keeps the last 14 steps, and only since its backfill), then only what the file gains ----
+STEPS_BACK = 32 << 20       # a longer file is read from this far before its end (a lead's can be a GB)
+STEPS_MAX = 2000            # the newest kept
+STEP_LINE_MAX = 8 << 20     # a longer line is not decoded (a huge Write)
+STEP_NEEDLES = (b'"tool_use"', b'"tool_result"', b'"type":"text"')
+
+
+class StepLog:
+    """One transcript's steps, oldest first: each tool call ({t, tool, arg, d, cmd, err}) and each thing it said ("said")."""
+
+    def __init__(self, path):
+        self.path = path
+        self.ino = None
+        self.offset = 0
+        self.partial = b""
+        self.steps = []
+        self.calls = collections.OrderedDict()   # tool_use id -> its step (a failed result marks it)
+        self.cut = False                         # the file's start was not read: older steps are missing
+        self.used = time.time()
+
+    def read(self):
+        self.used = time.time()
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            return
+        skip = False
+        if self.ino != st.st_ino or st.st_size < self.offset:      # first sight, replaced or truncated
+            self.__init__(self.path)
+            self.ino = st.st_ino
+            self.offset = max(0, st.st_size - STEPS_BACK)
+            self.cut = skip = self.offset > 0
+        if st.st_size <= self.offset:
+            return
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                data = f.read(st.st_size - self.offset)
+        except OSError:
+            return
+        self.offset += len(data)
+        lines = (self.partial + data).split(b"\n")
+        self.partial = lines.pop()
+        if skip and lines:
+            lines = lines[1:]                    # read from the middle of a line
+        for line in lines:
+            if len(line) > STEP_LINE_MAX or line.startswith(SKIP_PREFIXES) or not any(k in line for k in STEP_NEEDLES):
+                continue
+            try:
+                self._entry(json.loads(line))
+            except (ValueError, AttributeError, TypeError):
+                continue
+        if len(self.steps) > STEPS_MAX:
+            del self.steps[:len(self.steps) - STEPS_MAX]
+            self.cut = True
+
+    def _entry(self, d):
+        typ = d.get("type")
+        content = (d.get("message") or {}).get("content")
+        if typ not in ("assistant", "user") or not isinstance(content, list):
+            return
+        t = ts_of(d)
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            if typ == "user":
+                if c.get("type") == "tool_result" and c.get("is_error") and c.get("tool_use_id") in self.calls:
+                    self.calls[c["tool_use_id"]]["err"] = True
+            elif c.get("type") == "tool_use":
+                name, inp = str(c.get("name") or "?"), c.get("input") if isinstance(c.get("input"), dict) else {}
+                step = {"t": t, "tool": name, "arg": tool_arg(name, inp), "d": bool(name == "Bash" and str(inp.get("description") or "").strip())}
+                if name == "Bash" and inp.get("command"):
+                    step["cmd"] = clean_cmd(inp["command"], 300)
+                elif name == "SendMessage":
+                    step["to"] = clip(str(inp.get("to") or ""), 40)
+                self.steps.append(step)
+                if c.get("id"):
+                    self.calls[c["id"]] = step
+                    if len(self.calls) > 300:
+                        self.calls.popitem(last=False)
+            elif c.get("type") == "text" and str(c.get("text") or "").strip():
+                self.steps.append({"t": t, "tool": "said", "arg": first_line(c["text"], 200)})
+
+    def since(self, after=None):
+        """{steps (oldest first), n, cut}: every step kept, or from `after` (a time) on, so a page that has the rest asks
+        only for what is new (a step at `after` comes again: its failure may have been marked since)."""
+        steps = self.steps if after is None else [x for x in self.steps if (x["t"] or 0) >= after]
+        return {"steps": steps, "n": len(self.steps), "cut": self.cut, "from": self.steps[0]["t"] if self.steps else None}

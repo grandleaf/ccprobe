@@ -49,6 +49,19 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.L.days[tokens.day_of(t)], [3, 110, 2100, 57])
         self.assertTrue(self.L.done)
 
+    def test_how_an_agent_ended(self):
+        t = time.time()
+        r1 = reply("msg_1", t, 2, 100, 250000, 50, "tool_use")
+        r1["message"]["content"] = [{"type": "tool_use", "name": "SendMessage", "input": {"to": "main", "summary": "plan", "message": "Plan:\n1. read"}}]
+        r2 = reply("msg_2", t + 9, 1, 10, 285000, 7, "tool_use")
+        r2["message"]["content"] = [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": "Hand-over at 285k.\nThe rest."}}]
+        r3 = reply("msg_3", t + 5, 1, 1, 1, 1, "tool_use")
+        r3["message"]["content"] = [{"type": "tool_use", "name": "SendMessage", "input": {"to": "crit7", "message": "not the lead"}}]
+        self.add(r1, r3, r2)
+        self.L.read(self.lock)
+        self.assertEqual(self.L.ctx, 285011)                         # its context at its last reply
+        self.assertEqual((self.L.end["kind"], self.L.end["text"]), ("handback", "Hand-over at 285k."))
+
     def test_quoted_usage_in_a_tool_result_is_not_counted(self):
         t = time.time()
         # an Agent tool's result carries the subagent's usage as an object: that is the subagent's, counted in its file

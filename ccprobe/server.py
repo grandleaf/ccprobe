@@ -1,4 +1,5 @@
-"""HTTP: the page, /api/state (JSON), /api/agent (one agent's panel detail), /api/history (a queue's closed rows),
+"""HTTP: the page, /api/state (JSON), /api/agent (one agent's panel detail), /api/message (one message's whole text),
+/api/steps (one agent's every step), /api/history (a queue's closed rows),
 /api/notes and /api/notes-pic (a task's notes and
 the pictures they name, by task number and index) and /api/events (SSE). Loopback only, token-gated, no file-path endpoint."""
 import hashlib
@@ -131,6 +132,15 @@ def make_handler(collector, token, port, use_token=True, host=None):
                                   {"X-Ccprobe-Code": code_sig()})      # the polling page's copy of the code event
             if path == "/api/agent":                # one agent's panel detail (asked for only while it is on screen)
                 d = collector.agent_detail(q.get("s", [""])[0], q.get("a", [""])[0])
+                return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
+            if path == "/api/message":              # one message's whole text, by its id in the model (never a path)
+                d = collector.message(q.get("s", [""])[0], q.get("m", [""])[0])
+                return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
+            if path == "/api/steps":                # one agent's every step (asked for on "all steps"), from a time on
+                after = q.get("after", [""])[0]
+                if after and not re.fullmatch(r"\d{1,12}(?:\.\d{1,6})?", after):
+                    return self._send(400, "text/plain", "bad request\n")
+                d = collector.steps(q.get("s", [""])[0], q.get("a", [""])[0], float(after) if after else None)
                 return self._send(200 if d is not None else 404, "application/json", json.dumps(d, default=str))
             if path == "/api/feed":                 # the Events tab's list (asked for only while the tab is open)
                 d = collector.feed_for(q.get("s", [""])[0])

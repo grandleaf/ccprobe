@@ -2243,20 +2243,71 @@ function filesHtml(id, d) {
   return h;
 }
 
+// ---- what an agent did: the last few tools (the detail's), or every step it took ("all steps": /api/steps reads its
+// transcript, then only what it gains; its tool calls and what it said), newest first ----
+S.steps = new Map();   // sid/agent -> { d: {steps (oldest first), n, cut, from}, at, busy, last }
+function wantSteps(s, id, last) {
+  const k = s.id + '/' + id, e = S.steps.get(k), age = e ? Date.now() - e.at : Infinity;
+  if (e && (e.busy || age < 4000 || (e.last >= last && age < 30000))) return e.d;
+  const have = e?.d?.steps || [], after = have.length ? have[have.length - 1].t : null;
+  S.steps.set(k, Object.assign({}, e, { busy: true }));
+  fetch(`/api/steps?s=${encodeURIComponent(s.id)}&a=${encodeURIComponent(id)}${after ? '&after=' + after : ''}`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null).catch(() => null).then(d => {
+      // from `after` on only: the step at `after` comes again (a failure may have been marked since)
+      const nd = d && after ? Object.assign({}, d, { steps: have.filter(x => (x.t || 0) < after).concat(d.steps).slice(-2000) }) : d;
+      S.steps.set(k, { d: nd || e?.d || null, at: Date.now(), busy: false, last });
+      if (S.tab === 'agent') renderPanel();
+    });
+  return e?.d;
+}
+function stepRow(e) {
+  if (e.tool === 'said') return `<div class="ev said"><span class="tm">${hhmm(e.t, 1)}</span><span class="tl t-said">said</span><span class="a desc" data-tip="${esc(e.arg)}">${esc(e.arg)}</span></div>`;
+  const tip = [e.d ? e.arg : '', e.cmd ? '$ ' + e.cmd : e.arg].filter(Boolean).join('\n') + (e.err ? '\nfailed' : '');
+  // a file by its folder and name (the tip has the whole path)
+  const arg = e.tool === 'SendMessage' && e.to ? `→ ${e.to}: ${e.arg}` : /^(?:Read|Edit|Write|MultiEdit|NotebookEdit)$/.test(e.tool) && /^[~/]/.test(e.arg) ? midPath(e.arg, 40) : e.arg;
+  return `<div class="ev${e.err ? ' fail' : ''}"><span class="tm">${hhmm(e.t, 1)}</span><span class="tl t-${toolCls(e.tool)}">${esc(e.tool)}</span><span class="a${e.d ? ' desc' : ''}" data-tip="${esc(tip)}">${e.err ? icon('i-x') : ''}${esc(arg)}</span></div>`;
+}
+function stepsHtml(s, id, n, now) {
+  const d = wantSteps(s, id, n.last_ts || 0);
+  if (!d) return `<div class="empty-note">${d === undefined ? 'loading…' : 'could not be read'}</div>`;
+  const list = d.steps.slice().reverse(), all = isOpen(id, 'steps-all', false), rows = all ? list : list.slice(0, 100);
+  let h = '', day = sameDay(rows[0]?.t || now, now) ? new Date(now * 1000).toDateString() : '';
+  for (const e of rows) {   // a line for each other day, so a time reads right
+    const dd = new Date((e.t || now) * 1000).toDateString();
+    if (dd !== day) { day = dd; h += `<div class="evday">${whenMD(e.t || now).split(' ')[0]}</div>`; }
+    h += stepRow(e);
+  }
+  if (!rows.length) h += '<div class="empty-note">none yet</div>';
+  if (list.length > 100) h += `<button class="linkbtn more" data-fold="steps-all" data-k="m-steps-all">${all ? 'the newest 100' : `+${list.length - 100} older`}</button>`;
+  if (d.cut && (all || list.length <= 100)) h += `<div class="pmeta">read from ${whenHM(d.from, now)}: what came before is not read</div>`;
+  return h;
+}
 function toolsHtml(s, n, d, fin) {
+  const id = n.id && n.id !== 'lead' ? n.id : 'lead', now = S.model.now;
   const skip = ['SendMessage', 'SubagentHandback', 'Agent'];
   const rows = (d?.history || (n.recent || []).slice().reverse()).filter(e => !skip.includes(e.tool)).slice(0, 6);
-  const row = e => {
-    const tip = [e.d ? e.arg : '', e.cmd ? '$ ' + e.cmd : e.arg].filter(Boolean).join('\n') + (e.err ? '\nfailed' : '');
-    return `<div class="ev${e.err ? ' fail' : ''}"><span class="tm">${hhmm(e.t, 1)}</span><span class="tl t-${toolCls(e.tool)}">${esc(e.tool)}</span><span class="a${e.d ? ' desc' : ''}" data-tip="${esc(tip)}">${e.err ? icon('i-x') : ''}${esc(e.arg)}</span></div>`;
-  };
+  const all = isOpen(id, 'steps', false), sd = all ? S.steps.get(s.id + '/' + id)?.d : null;
+  const body = () => all ? stepsHtml(s, id, n, now) : rows.map(stepRow).join('') || '<div class="empty-note">none in view</div>';
+  const more = `<button class="linkbtn more" data-fold="steps" data-k="m-steps">${all ? 'just the last few' : 'all steps'}</button>`;
+  const title = all ? `Steps${sd ? ' · ' + sd.n : ''}` : fin ? `Last tools · ${rows.length}` : 'Recent tools';
   if (fin) {
-    const open = isOpen(n.id, 'tools', false);
-    return foldBtn('tools', open, `Last tools · ${rows.length}`, rows.length ? hhmm(rows[0].t) : '') + (open ? rows.map(row).join('') : '');
+    const open = isOpen(id, 'tools', false);
+    return foldBtn('tools', open, title, rows.length ? hhmm(rows[0].t) : '') + (open ? body() + more : '');
   }
-  return secH('tools', 'Recent tools') + (rows.map(row).join('') || '<div class="empty-note">none in view</div>');
+  return secH('tools', title) + body() + more;
 }
 
+// ---- messages: one line each; a click opens its whole text (/api/message, asked for when opened) ----
+S.msgOpen = new Set();   // sid|message id
+S.msgText = new Map();   // sid|message id -> its text (undefined: on its way; null: not to be had)
+function wantMsg(sid, mid) {
+  const k = sid + '|' + mid;
+  if (S.msgText.has(k)) return S.msgText.get(k);
+  S.msgText.set(k, undefined);
+  fetch(`/api/message?s=${encodeURIComponent(sid)}&m=${encodeURIComponent(mid)}`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null).catch(() => null).then(d => { S.msgText.set(k, d ? d.text : null); if (S.tab === 'agent') renderPanel(); });
+  return undefined;
+}
 function msgsHtml(s, n, isLead) {
   const me = isLead ? 'lead' : n.id;
   const all = (s.messages || []).filter(m => m.from === me || m.to === me).slice(-30).reverse();
@@ -2265,7 +2316,10 @@ function msgsHtml(s, n, isLead) {
   let h = secH('msgs', 'Messages');
   h += msgs.map(m => { const out = m.from === me; const other = out ? m.to : m.from;
     const verb = m.kind === 'spawn' ? (out ? 'spawned' : 'spawned by') : m.kind === 'handback' ? (out ? 'handback →' : 'handback ←') : (out ? '→' : '←');
-    return `<div class="ev"><span class="tm">${hhmm(m.t, 1)}</span><span class="tl t-SendMessage">${verb}</span><span class="a" data-tip="${esc(m.summary)}"><button class="linkbtn" data-select="${esc(other)}">${esc(nameOf(other))}</button> · ${esc(m.summary)}</span></div>`; }).join('') || '<div class="empty-note">none in view</div>';
+    const k = s.id + '|' + m.id, on = S.msgOpen.has(k), txt = on ? wantMsg(s.id, m.id) : null;
+    return `<div class="ev msg${on ? ' open' : ''}"><span class="tm">${hhmm(m.t, 1)}</span><button class="tl t-SendMessage mtog" data-msg="${esc(m.id)}" aria-expanded="${on}" data-k="g-${esc(m.id)}" data-tip="${on ? 'close it' : 'its whole text'}">${icon('i-chev', 'chev')}${verb}</button>`
+      + `<span class="a" data-msg="${esc(m.id)}" data-tip="${esc(m.summary)}"><button class="linkbtn" data-select="${esc(other)}">${esc(nameOf(other))}</button> · ${esc(m.summary)}</span></div>`
+      + (on ? `<div class="msgtext prose">${txt === undefined ? 'loading…' : txt == null ? '<span class="pmeta">no longer in view</span>' : dimPaths(prose(txt))}</div>` : ''); }).join('') || '<div class="empty-note">none in view</div>';
   if (all.length > 5) h += `<button class="linkbtn more" data-fold="msgs-all" data-k="m-msgs">${open ? 'show less' : `+${all.length - 5} more`}</button>`;
   return h;
 }
@@ -2298,7 +2352,7 @@ function mdInline(s, refs) {
   const pic = (txt, ref) => { const i = refs?.get(ref); return i == null ? null : put(`<button class="piclink" data-pic="${i}">${icon('i-image')}${esc(txt)}</button>`); };
   let t = String(s).replace(/`([^`\n]+)`/g, (_, c) => { const r = c.match(RE_PICREF); return (r && pic(c, r[0])) || put(`<code>${esc(c)}</code>`); });
   if (refs?.size) t = t.replace(RE_PICREF, r => pic(r, r) || r);
-  t = esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+  t = esc(t).replace(/\*\*([^\s*][\s\S]*?)\*\*/g, '<b>$1</b>')   // across a wrapped line too
     .replace(/(^|[\s(])\*(?!\s)([^*\n]+?)\*(?=$|[\s).,;:!?])/g, '$1<i>$2</i>')
     .replace(/\[([^\]\n]+)\]\(([^)\s\u0001\u0002]+)\)/g, '<span class="mdlink" data-tip="$2">$1</span>');   // a kept span never goes in the tip
   return t.replace(/\u0001(\d+)\u0002/g, (_, i) => keep[+i]);
@@ -2419,7 +2473,12 @@ function mdDoc(d, doc) {
 // "Task 181 (HP): a menu that closes … Notes by hp181, 2026-10-25" → "a menu that closes …"
 const notesTitle = t => { const x = String(t).replace(/^task\s*\d+\s*(?:\((?:HP|MP|LP)\))?\s*(?:notes)?\s*[:·—-]?\s*/i, '').replace(/\.?\s*notes by [^.]*$/i, '')
   .replace(/\s*\((?:by\s+)?(?:hp|mp|lp)\d+[a-z]?\b[^)]*\)\s*$/i, '').replace(/\s*\(\d{4}-\d\d-\d\d\)\s*$/, '').trim(); return x.startsWith('(') ? '' : x; };
-const docLabel = x => x.kind === 'notes' ? 'Notes' : 'Brief' + ((x.name.match(/^\d+-(.+)-brief\.md$/) || [])[1] ? ' · ' + x.name.match(/^\d+-(.+)-brief\.md$/)[1] : '');
+const docLabel = x => {
+  if (x.kind === 'notes') return 'Notes';
+  if (x.kind === 'status' || x.kind === 'journal') return `${x.kind === 'status' ? 'Status' : 'Journal'}${docFolder(x.path) ? ' · ' + docFolder(x.path) : ''}`;
+  const m = x.name.match(/^\d/) ? x.name.match(/^\d+-(.+)-brief\.md$/) : x.name.match(/^(.+)-brief\.md$/);   // "181-redo2-brief.md", "future-stages-brief.md"
+  return 'Brief' + (m ? ' · ' + m[1] : '');
+};
 
 // the Agent tab: the notes folded to their sections, the outcome open; "Read" opens the whole of it over the graph
 function notesHtml(s, n, fin) {
@@ -2455,7 +2514,7 @@ function notesHtml(s, n, fin) {
 
 // the reader: over the graph (the widest place), the panel stays beside it; Esc or × closes it
 S.reader = null;   // { sid, n, doc, pic }
-function openReader(n, doc = 0, pic = null) { S.reader = { sid: S.sid, n, doc, pic }; S.readerKey = null; hideTip(); syncReader(); $('reader').querySelector('.rdx')?.focus({ preventScroll: true }); }
+function openReader(n, doc = 0, pic = null, find = null) { S.reader = { sid: S.sid, n, doc, pic, find }; S.readerKey = null; hideTip(); syncReader(); $('reader').querySelector('.rdx')?.focus({ preventScroll: true }); }
 function closeReader() { const was = S.reader; S.reader = null; syncReader(); if (was) document.querySelector(`#panel [data-notes="${was.n}"]`)?.focus({ preventScroll: true }); }
 function syncReader() {
   const R = S.reader, el = $('reader');
@@ -2481,6 +2540,13 @@ function syncReader() {
   S.readerKey = key; el.hidden = false; $('stage').classList.add('reading');
   el.innerHTML = readerHtml(s, R, d);
   if (keepAt) el.querySelector('.rdbody').scrollTop = top;
+  if (R.find && d) { headTo(el, R.find); R.find = null; }   // opened at a part (Progress: where the task stands)
+}
+// the reader scrolled to the heading whose words are `text` (as mdPlain gives them: compared on letters and digits)
+function headTo(el, text) {
+  const norm = t => String(t).replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase(), want = norm(text), b = el.querySelector('.rdbody');
+  const hit = [...el.querySelectorAll('.rdart h2, .rdart .mdh')].find(x => norm(x.textContent) === want);
+  if (hit && b) b.scrollTop += hit.getBoundingClientRect().top - b.getBoundingClientRect().top - 8;
 }
 function readerStatus(s, n) {
   const row = rowIndex(s).get(n), st = row && rowState(s, row, S.model.now);
@@ -2537,6 +2603,83 @@ function readerKey(e) {   // true when the reader took the key
   return false;
 }
 
+// ---- the Task section's whole State (the row's first 300 characters ride in the model; the whole comes with the
+// agent's detail) and every agent the task had: its own agents (a designer handing over to a fresh one at its context
+// limit) and its helpers (a critic), newest first, each with when it ran and how it ended (the user, 2026-11-19) ----
+function stateHtml(id, text) {
+  if (!text) return '';
+  const open = isOpen(id, 'tstate', false), long = text.length > 240 || text.split('\n').length > 3;
+  return `<div class="tstate${open || !long ? '' : ' clamp3'}">${dimPaths(esc(text))}</div>`
+    + (long ? `<button class="linkbtn more" data-fold="tstate" data-k="m-tstate">${open ? 'less' : 'the whole State'}</button>` : '');
+}
+function teamHtml(id, team, row, now) {
+  if (!team || team.length < 2) return '';          // itself alone: nothing to list
+  const open = isOpen(id, 'team', true), all = isOpen(id, 'team-all', false), own = team.filter(x => x.own).length;
+  let h = foldBtn('team', open, `Agents · ${team.length}`, own && own < team.length ? `${own} its own · ${team.length - own} helping` : '');
+  if (!open) return h;
+  const col = x => x.own ? GROUPCOL[row.group] || 'slate' : ROLECOL.helper;
+  const rowOf = x => {
+    const t1 = x.live ? now : x.last || x.first, end = x.live ? x.state || 'at work' : x.stopped ? 'stopped by you'
+      : x.end?.kind === 'handback' ? 'handed back' : x.done ? 'finished' : x.state || 'ended';
+    const when = whenHM(x.first, now) + (x.live ? '' : '–' + (sameDay(x.first, t1) ? hhmm(t1) : whenHM(t1, now)));
+    const tip = [x.desc, [modelName(x.model), x.replies ? x.replies + ' replies' : '', x.out ? tfmt(x.out) + ' out' : ''].filter(Boolean).join(' · '),
+      x.ctx ? `its context at its last reply: ${kfmt(x.ctx)}` : '', x.end ? `${x.end.kind === 'handback' ? 'its hand-back' : 'its last word to the lead'}, ${whenHM(x.end.t, now)}: ${x.end.text}` : '',
+      x.shown ? 'click: show it' : 'no longer in view'].filter(Boolean).join('\n');
+    const nm = x.shown ? `<button class="linkbtn nm c-${col(x)}" data-select="${esc(x.id)}">${esc(x.name)}</button>` : `<span class="nm c-${col(x)}">${esc(x.name)}</span>`;
+    return `<div class="tmrow${x.id === id ? ' me' : ''}${x.live ? ' live' : ''}" data-tip="${esc(tip)}">${nm}<span class="tw">${when}</span><span class="td">${dur(t1 - x.first)}</span>`
+      + `<span class="te">${esc(end)}${x.ctx ? ' · ' + kfmt(x.ctx) : ''}</span>${x.end && !x.live ? `<span class="tn">${esc(x.end.text)}</span>` : ''}</div>`;
+  };
+  h += '<div class="team">' + (all ? team : team.slice(0, 6)).map(rowOf).join('') + '</div>';
+  if (team.length > 6) h += `<button class="linkbtn more" data-fold="team-all" data-k="m-team">${all ? 'the newest 6' : `+${team.length - 6} more`}</button>`;
+  return h;
+}
+
+// ---- Progress: the part of the task's own status file that says where it stands now (a long task keeps
+// .autopilot/<folder>/status.md, named in its agents' briefs: model._docs_pass). Which part: the heading with the newest
+// date ("Update 2026-11-19 21:00 (lp42b)", "State, 2026-10-30 20:21"); with none, the last "where it stands",
+// "handover" or "status" heading; else the first section. "Read" opens the whole file in the reader at that part ----
+const RE_HDATE = /(\d{4})-(\d\d)-(\d\d)(?:[ T,]+(?:at\s+)?(\d{1,2}):(\d\d))?/;
+const RE_HNOW = /where (?:it|things|the work) stands?|standing|hand-?over|hand-?off|\bstate\b|\bstatus\b|\bupdate\b|progress/i;
+function curSection(doc) {
+  if (doc._cur) return doc._cur;
+  const lines = doc.text.replace(/\r/g, '').split('\n'), heads = [];
+  let fence = false;
+  lines.forEach((l, i) => {
+    if (/^\s*```/.test(l)) fence = !fence;
+    const m = !fence && l.match(/^(#{1,4})\s+(.*?)\s*#*\s*$/);
+    if (m) heads.push({ i, lv: m[1].length, h: m[2] });
+  });
+  const parts = heads.filter((x, k) => !(k === 0 && x.lv === 1 && !lines.slice(0, x.i).some(l => l.trim())));   // not the title
+  let pick = null, best = '';
+  for (const x of parts) {
+    const m = x.h.match(RE_HDATE);
+    const k = m && `${m[1]}${m[2]}${m[3]}${m[4] ? m[4].padStart(2, '0') + m[5] : '0000'}`;
+    if (k && k >= best) { best = k; pick = x; }     // a tie goes to the later one (a part's own "where it stands")
+  }
+  pick = pick || parts.filter(x => RE_HNOW.test(x.h)).pop() || parts.find(x => x.lv <= 2) || null;
+  const end = pick && heads.find(x => x.i > pick.i && x.lv <= pick.lv);
+  const body = (pick ? lines.slice(pick.i + 1, end ? end.i : lines.length) : lines).slice(0, 400);
+  return (doc._cur = { h: pick ? pick.h : '', html: mdBlocks(body, null, [], 'pg'), long: body.filter(l => l.trim()).length > 14 });
+}
+const docFolder = p => { const seg = String(p || '').split('/'); return seg.length > 1 ? seg[seg.length - 2] : ''; };
+const docShort = p => String(p || '').split('/').slice(-2).join('/');
+function progressHtml(s, n, id, now) {
+  const pg = n.progress;
+  if (!pg) return '';
+  const d = wantNotes(s.id, pg.n, Math.max(notesT(s, pg.n) || 0, pg.t || 0));
+  const i = d?.docs ? d.docs.findIndex(x => x.path === pg.path) : -1, doc = i >= 0 ? d.docs[i] : null;
+  let h = secH('prog', 'Progress', doc ? `<span data-tip="${esc(pg.path)}">${esc(docShort(pg.path))}</span> · updated ${whenHM(doc.mtime, now)}` : esc(docShort(pg.path)));
+  if (!doc) return h + `<div class="empty-note">${d === undefined ? 'loading…' : 'could not be read'}</div>`;
+  const c = curSection(doc), open = isOpen(id, 'prog', false);
+  h += `<div class="notes prog">${c.h ? `<div class="ntitle">${mdInline(c.h, null)}</div>` : ''}<div class="md${open || !c.long ? '' : ' pclamp'}">${c.html}</div></div>`;
+  if (c.long) h += `<button class="linkbtn more" data-fold="prog" data-k="m-prog">${open ? 'show less' : 'show all of this part'}</button>`;
+  // the reader: this file at this part, then the task's other documents (a journal at its newest entry)
+  const at = x => { const h0 = x === doc ? c.h : x.kind === 'journal' ? curSection(x).h : ''; return h0 ? ` data-find="${esc(mdPlain(h0))}"` : ''; };
+  const others = d.docs.map((x, j) => [x, j]).filter(([x]) => x !== doc && x.kind !== 'notes');
+  return h + `<div class="nfoot"><button class="linkbtn" data-notes="${pg.n}" data-doc="${i}"${at(doc)} data-k="n-prog">${icon('i-doc')}Read ${esc(doc.name)}</button>`
+    + others.map(([x, j]) => `<button class="linkbtn" data-notes="${pg.n}" data-doc="${j}"${at(x)}>${esc(docLabel(x))}</button>`).join('') + '</div>';
+}
+
 function agentPanel(s, id) {
   const now = S.model.now;
   const n = nodeById(s, id) || nodeById(s, 'lead');
@@ -2549,7 +2692,8 @@ function agentPanel(s, id) {
   const col = isLead ? 'cyan' : ROLECOL[n.role] || 'violet';
   const fin = !isLead && (n.finished || st.key === 'dead');
   const pct = n.ctx_max ? n.ctx / n.ctx_max : 0, lvl = pct >= .9 ? 'crit' : pct >= .8 ? 'warn' : '';
-  const row = !isLead && n.task != null ? rowIndex(s).get(n.task) : null;
+  // its task: its own row's, or (a helper, a critic) the one it helps
+  const tn = isLead ? null : n.task ?? n.helps, row = tn != null ? rowIndex(s).get(tn) : null;
   const label = isLead ? s.project : n.label;
   const nameOf = x => x === 'lead' ? 'lead' : ((s.agents || []).find(a => a.id === x)?.label || x.slice(0, 7));
   const tk = isLead ? s.lead?.tokens : n.tokens;
@@ -2570,7 +2714,10 @@ function agentPanel(s, id) {
   }
   const context = () => secH('ctx', 'Context') + pbar(pct, lvl)
     + `<div class="ctxl"><span>${n.ctx ? kfmt(n.ctx) + ' / ' + kfmt(n.ctx_max) + ' · ' + Math.round(pct * 100) + '%' : 'not known yet'}${(n.compactions || []).length ? ' · compacted ' + n.compactions.length + '×' : ''}</span>${out}</div>`;
-  const task = () => row ? secH('task', 'Task') + `<div class="taskcell${fin ? ' one' : ''}"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}${fin ? '' : (x => `<div class="pmeta rst c-${x.rc}">${icon(x.ri)}${x.html}</div>`)(rowState(s, row, now))}</div>` : '';
+  const mine = d?.task_n === tn;   // the detail is of this task (it may lag a moment behind a new selection)
+  const task = () => row ? secH('task', 'Task') + `<div class="taskcell${fin ? ' one' : ''}"><b>${row.n}</b> <span class="pmeta">${esc(row.group)}</span> ${esc(row.title)}${fin ? '' : (x => `<div class="pmeta rst c-${x.rc}">${icon(x.ri)}${x.html}</div>`)(rowState(s, row, now))}`
+    + stateHtml(aid, mine ? d.task_state : null) + '</div>' + teamHtml(aid, mine ? d.team : null, row, now) : '';
+  const progress = () => progressHtml(s, n, aid, now);
   const brief = () => textFold(aid, 'brief', `Brief${d?.brief?.t ? ' · ' + hhmm(d.brief.t) : ''}`, d?.brief, false, true);
   const report = () => textFold(aid, 'rep', `Report${d?.rounds > 1 ? ' · round ' + d.rounds : ''} · ${hhmm(d?.report?.t)}${fin ? ' · final' : ''}`, d?.report, fin, false);
   const said = () => n.said ? secH('said', 'Last said') + `<div class="said">${esc(n.said)}</div>` : '';
@@ -2579,9 +2726,9 @@ function agentPanel(s, id) {
     for (const x of (s.lead?.notices || [])) h += `<div class="alert amber"><div class="ad">${hhmm(x.t)} · ${esc(x.text)}</div></div>`;
     h += said() + context() + filesHtml(aid, d) + toolsHtml(s, n, d, false) + msgsHtml(s, n, true);
   } else if (fin) {
-    h += report() + notesHtml(s, n, true) + filesHtml(aid, d) + troubleHtml(d?.trouble) + task() + brief() + toolsHtml(s, n, d, true) + msgsHtml(s, n, false);
+    h += report() + progress() + notesHtml(s, n, true) + filesHtml(aid, d) + troubleHtml(d?.trouble) + task() + brief() + toolsHtml(s, n, d, true) + msgsHtml(s, n, false);
   } else {
-    h += nowBlock(s, n, st, d, now, sc) + (n.role === 'helper' ? said() : '') + task() + brief() + context() + report()
+    h += nowBlock(s, n, st, d, now, sc) + (n.role === 'helper' ? said() : '') + task() + progress() + brief() + context() + report()
       + notesHtml(s, n, false) + filesHtml(aid, d) + toolsHtml(s, n, d, false) + msgsHtml(s, n, false);
   }
   return h;
@@ -3252,13 +3399,22 @@ $('panel').addEventListener('click', e => {
   }
   const nb = e.target.closest('[data-notes],[data-pic]');   // a task's notes: the reader over the graph
   if (nb) {
-    if (nb.dataset.notes) return openReader(+nb.dataset.notes, +(nb.dataset.doc || 0));
+    if (nb.dataset.notes) return openReader(+nb.dataset.notes, +(nb.dataset.doc || 0), null, nb.dataset.find || null);
     const nn = nb.closest('[data-nn]');
     if (nn) return openReader(+nn.dataset.nn, 0, +nb.dataset.pic);
   }
+  const mg = e.target.closest('[data-msg]');
+  if (mg && !e.target.closest('[data-select]')) {
+    const k = S.sid + '|' + mg.dataset.msg;
+    if (!S.msgOpen.delete(k)) S.msgOpen.add(k);
+    return renderPanel();
+  }
   const f = e.target.closest('[data-fold]');
   if (f) {
-    const id = S.sel === 'lead' || !S.sel ? 'lead' : S.sel, part = f.dataset.fold, v = !isOpen(id, part, false);
+    // a fold says whether it is open (one open by default, the Agents on a task, closes on the first click); a "more"
+    // link is closed by default
+    const id = S.sel === 'lead' || !S.sel ? 'lead' : S.sel, part = f.dataset.fold;
+    const v = !(f.hasAttribute('aria-expanded') ? f.getAttribute('aria-expanded') === 'true' : isOpen(id, part, false));
     S.open[id + '.' + part] = v; S.foldPref[part] = v; store.set('ccprobe.folds', S.foldPref);
     return renderPanel();
   }

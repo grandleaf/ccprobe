@@ -87,6 +87,10 @@ def serve_stdio(opts):
         try:
             if op == "agent":
                 body = col.agent_detail(*args)
+            elif op == "message":
+                body = col.message(*args)
+            elif op == "steps":
+                body = col.steps(*args)
             elif op == "feed":
                 body = col.feed_for(*args)
             elif op == "notes":
@@ -338,6 +342,14 @@ class Hub:
     def agent_detail(self, sid, aid):
         r, rid = self._route(sid)
         return r.ask("agent", rid, aid) if r else self.local.agent_detail(sid, aid)
+
+    def message(self, sid, mid):
+        r, rid = self._route(sid)
+        return r.ask("message", rid, mid) if r else self.local.message(sid, mid)
+
+    def steps(self, sid, aid, after=None):
+        r, rid = self._route(sid)
+        return r.ask("steps", rid, aid, after) if r else self.local.steps(sid, aid, after)
 
     def feed_for(self, sid):
         r, rid = self._route(sid)

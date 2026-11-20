@@ -19,7 +19,7 @@ import threading
 import time
 from datetime import datetime
 
-from .agents import ts_of
+from .agents import HOME, first_line, ts_of
 
 KINDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 NEEDLE = b'"usage":{'
@@ -71,6 +71,8 @@ class Ledger:
         self.compactions = 0
         self.model = None
         self.first = self.last = None      # the first and last reply's time (how long an agent worked)
+        self.ctx = 0                       # its context at its last reply (an agent that stopped at its limit)
+        self.end = None                    # {t, kind, text}: its last hand-back or message to the lead (how it ended)
         self.qwrites = set()               # (time, row, what) for each write to a WTS row's State
         self.minutes = {}                  # minute start -> [4], the last SERIES_S only
         self.days = {}                     # local date -> [4]
@@ -174,8 +176,16 @@ class Ledger:
             self.recent[key] = entry
             if len(self.recent) > RECENT_IDS:
                 self.recent.popitem(last=False)
+        if vec[0] + vec[1] + vec[2]:
+            self.ctx = vec[0] + vec[1] + vec[2]
         for b in msg.get("content") if isinstance(msg.get("content"), list) else []:
-            cmd = (b.get("input") or {}).get("command") if isinstance(b, dict) and b.get("type") == "tool_use" else None
+            inp = (b.get("input") or {}) if isinstance(b, dict) and b.get("type") == "tool_use" else {}
+            name = b.get("name") if inp else None
+            if name == "SubagentHandback" or (name == "SendMessage" and str(inp.get("to") or "") in ("main", "lead")):
+                if not self.end or t >= self.end["t"]:
+                    self.end = {"t": t, "kind": "handback" if name == "SubagentHandback" else "message",
+                                "text": first_line(inp.get("message") or inp.get("summary") or "", 160).replace(HOME, "~")}
+            cmd = inp.get("command") if isinstance(inp, dict) else None
             if isinstance(cmd, str) and "--text" in cmd:
                 for m in RE_QWRITE.finditer(cmd):
                     self.qwrites.add((t, int(m.group(1)), m.group(2).lower()))

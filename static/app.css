@@ -699,3 +699,30 @@ div.npart { padding: 6px 0 2px; border-top: 1px solid var(--line2); }
 .fe .fnotes { display: inline-flex; align-items: center; gap: 4px; }
 .fe .fnotes svg { width: 11px; height: 11px; }
 .fe.ended .fi { opacity: .6; }
+
+/* ---- the Agent tab's task detail (2026-11-19): the whole State, every agent on the task, the task's own progress,
+   whole messages, every step ---- */
+.tstate { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.taskcell .linkbtn.more { margin-top: 2px; }
+.team { display: grid; gap: 0; }
+.tmrow { display: grid; grid-template-columns: minmax(70px, auto) 1fr auto; gap: 0 10px; align-items: baseline; padding: 4px 0 3px 8px;
+  border-bottom: 1px dashed var(--line); border-left: 2px solid transparent; font-size: 11.5px; }
+.tmrow .nm { font-weight: 600; text-align: left; color: var(--c); white-space: nowrap; }
+.tmrow .tw { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tmrow .td { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.tmrow .te { grid-column: 1 / 4; color: var(--muted); }
+.tmrow.live .te { color: var(--green); }
+.tmrow .tn { grid-column: 1 / 4; color: var(--muted); opacity: .8; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmrow.me { border-left-color: var(--cyan); background: color-mix(in srgb, var(--cyan) 6%, transparent); }
+.notes.prog > .md { padding: 0 0 4px; font-size: 12px; }
+.pclamp { max-height: 17em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+.ev .mtog { display: inline-flex; align-items: center; gap: 3px; text-align: left; overflow: hidden; white-space: nowrap; }
+.ev .mtog .chev { width: 9px; height: 9px; flex: none; color: var(--muted); transition: transform .15s; }
+.ev.msg.open .mtog .chev { transform: rotate(90deg); }
+.ev.msg .a { cursor: pointer; }
+.ev.msg:hover .a { color: var(--text); }
+.msgtext { margin: 2px 0 8px 70px; font-size: 12px; max-height: 40em; overflow-y: auto; }
+.t-said { color: var(--text-strong); }
+.ev.said .a { white-space: normal; }
+.evday { color: var(--muted); font-size: 10.5px; letter-spacing: .8px; padding: 6px 0 2px; border-bottom: 1px solid var(--line2); }
+@media (prefers-reduced-motion: reduce) { .ev .mtog .chev { transition: none; } }

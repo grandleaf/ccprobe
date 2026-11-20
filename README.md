@@ -87,8 +87,20 @@ What you see:
   was started with, and **Report:** its latest hand-back (round N; first for a finished agent), both folded to a few
   lines with "show all". **Files changed:** the files it edited, with edits and +/− lines; files a shared working tree
   shows changed by others sit apart, folded ("seen in shared tree"). Recent tools show descriptions, with failed calls
-  marked. Folds remember your choice per agent, and your last choice becomes the default. The detail comes from
-  `/api/agent` for the one agent on screen, so the page's data stays small. **Notes:** an agent that worked on a WTS
+  marked; **all steps** lists every step it took, newest first: each tool call and each thing it said, read from its
+  transcript (a very long one from its last 32 MB), with a line for each other day. **Messages:** one line each; click
+  one for its whole text (a plan the agent sent the lead, the lead's orders, a hand-back). **Task:** its row (a
+  helper's, such as a critic's, is the task it helps), the whole State under the status, and **Agents**: every agent
+  the task had, newest first, its own (a designer that handed over to a fresh one at its context limit) and its
+  helpers, each with when it ran, how it ended (at work, handed back, finished, stopped by you), its context at its
+  last reply, and the first line of its hand-back; click one to show it. **Progress:** a long task that keeps its own
+  status file (a stage rebuild's or a design task's `.autopilot/<folder>/status.md`, named in its agents' briefs)
+  shows the part of it that says where the task stands now: the heading with the newest date ("Update 2026-11-19
+  21:00 (lp42b)"), else the last "where it stands", "handover" or "status" heading. "Read status.md" opens the whole
+  file in the reader at that part, with the task's other documents as tabs (a critic's own status file, the journal
+  beside it at its newest entry, the lead's brief file). Folds remember your choice per agent, and your last choice
+  becomes the default. The detail comes from `/api/agent` for the one agent on screen, so the page's data stays small.
+  **Notes:** an agent that worked on a WTS
   task with a notes file (the worker's `.autopilot/worker/<N>.md`) shows them under its report, cut into their
   sections: the outcome (the fix, what changed, results, the final state, what is left open) open, the rest one line
   each; notes in parts (redo 2, redo 3) show the latest part and fold the earlier ones. Open for a finished agent,
@@ -123,7 +135,8 @@ What you see:
   words are in the tooltip); a parked row's word leaves its pill (its amber hourglass says it). A status with no time
   keeps one pill. Off,
   each row keeps one line and one pill (a row at work always shows its whole title).
-  A row with notes has a page icon beside its number: click it (or a row with no agent) to read them.
+  A row with notes, or with documents of its own (a status file its agents keep), has a page icon beside its number:
+  click it (or a row with no agent) to read them.
   Under a row, a line says what its agent is doing now (`▶ Bash · 2m`), in that state's colour (green at work, cyan
   thinking; quiet states stay muted); the agent is named only when it is not the
   row's own (`hp291 (earlier): stopped by the lead`), and a done row whose agent is done has no line.

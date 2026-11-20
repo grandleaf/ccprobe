@@ -255,7 +255,9 @@ is no longer checked against the queue or the worker: the Events tab and the que
 - `Host` must be `127.0.0.1:<port>` or `localhost:<port>` (this guards against DNS rebinding). There are no CORS headers.
   Responses set `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and the CSP `default-src 'self'; img-src 'self'
   data:; style-src 'self'; script-src 'self'; connect-src 'self'`.
-- Routes: `/` (index.html), `/static/<allow-listed name>`, `/api/state` (JSON), `/api/events` (SSE), `/api/health`.
+- Routes: `/` (index.html), `/static/<allow-listed name>`, `/api/state` (JSON), `/api/events` (SSE), `/api/health`;
+  the panel's questions, each by session and an id or task number from the model: `/api/agent`, `/api/message`,
+  `/api/steps`, `/api/feed`, `/api/history`, `/api/notes`, `/api/notes-pic` (§19, §21, §27).
   **There is no file-path endpoint.**
 - **Redaction:** before anything enters the model, `sk-ant-…`, `sk-…`, `ghp_…`, `Bearer …`, `token=…`,
   `password=…` and `Authorization:` values become `‹redacted›`. Arguments are cut to 110 chars.
@@ -745,8 +747,9 @@ it out. What it is doing, what it was asked, what it reported, what it changed, 
   counted as failures), and the most repeated identical command (3× or more). Counts, never alarms: many "exit 1" are
   an empty grep. The last error's line skips a bare "Exit code N" and a Python traceback's header.
 - **Background jobs:** `run_in_background` calls until their task notification (matched by tool-use id or task id).
-- **Layout** (UI advisor): a live agent shows Now, task + Brief, context, Report, files, recent tools, messages; a
-  finished one leads with its Report, then files, trouble, task + Brief, a folded "Last tools", messages; the lead keeps
+- **Layout** (UI advisor): a live agent shows Now, task (with its agents) + Progress + Brief, context, Report, files,
+  recent tools, messages; a finished one leads with its Report and Progress, then files, trouble, task + Brief, a
+  folded "Last tools", messages (§27); the lead keeps
   its session, pane and permissions lines. Folds keep their state per agent (`S.open`), and the last choice per part
   is the default (`ccprobe.folds`). Rebuilds keep the header at the top of the view in place, and keep focus.
 
@@ -927,3 +930,50 @@ task they say what was done far better than the transcript, so ccprobe shows the
   ago`). Its week figure is now the newest saved reading (rate-limits.json), not the session's own, which an idle
   session keeps from its last reply. The writer also clears `.tmp` files older than 10 minutes (left when a status
   line was cancelled between writing and renaming).
+
+## 27. A task's progress, its agents, whole messages, every step (2026-11-19)
+
+- **The ask:** "when I click the agent tab, if want want to know what the status of the agent, e,g, it is doing what,
+  and what is the curreent progress or steps, do we have that information (or some more information can reveal the
+  detail of the task) to show so I can monitor the status in detail of a task", then "do 1-5". What a long task's
+  agents leave on disk says far more than the last six tools: its own status file, every agent it has had, the plan an
+  agent sends the lead. Their reasoning is not there to show: the thinking in a transcript is saved empty, and many
+  agents write no text between tool calls.
+- **A task's own documents** (`wts.task_docs`). A long task (a stage rebuild, a design task that runs for days through
+  a line of fresh agents) keeps its own folder's `status.md` (newest part on top, or a log, newest last) and
+  `journal.md`, not the worker's `<N>.md`, and the lead may brief it in `.autopilot/worker/<name>-brief.md`. Every
+  agent's brief names them: the paths it names that end in `status.md` / `progress.md` (with their folder: a bare
+  `status.md` is said in passing), the `journal.md` beside each, and briefs in the worker folder; only regular files
+  inside the project (resolved, so no link out). The collector keeps them per task while it runs (`task_docs`, the
+  task's own agents' first, so the designer's status file comes before a critic's), each agent's brief looked at again
+  every 30 s (a file may be written later), and for an open task with no agent in view (ccprobe started since), its
+  newest agent's brief, every 5 minutes. The brief is now read whole (to 64 KB) for this; the panel still shows 4 KB.
+  `/api/notes` serves them after the notes (kind `status`, `journal`, `brief`, each with its path in the project), and
+  a row's `notes` time is the newest change of either, so the WTS page icon and the reader cover them.
+- **Progress** (the Agent tab, under Task): the agent's own status file (the first its brief names: a critic's is its
+  own), the part that says where the task stands now: the heading (`#` to `####`) with the newest date
+  (`YYYY-MM-DD` and maybe `HH:MM`; a tie goes to the later heading, a part's own "where it stands"), else the last
+  heading with "where it stands", "standing", "handover", "state", "status", "update" or "progress", else the first
+  section; to the next heading as high. Rendered with the notes' Markdown renderer, clipped at about 17 lines with
+  "show all of this part". "Read <file>" opens the reader on that document at that heading (matched on its letters and
+  digits), the task's other documents as tabs and as links under it (a journal at its newest entry). The renderer's
+  bold now spans a wrapped line (a status file wraps at 120).
+- **Task:** shown for a helper too (the task it helps). The whole State (the model carries its first 300 characters;
+  `wts.read` keeps the rest apart, `states`, served with `/api/agent` as `task_state`, to 8 KB), clamped to 3 lines.
+  **Agents:** every agent the task had (`/api/agent`'s `team`, from the token books, which read every agent file of the
+  session: its own agents by name or description, its helpers by a name for the task, and the agents they spawned),
+  newest first, the first 6 and "more": name (a button when it is in view), when it ran, for how long, how it ended
+  (its state while in view; else stopped by you, handed back, finished, ended), its context at its last reply (the
+  ledger's `ctx`: an agent that stopped at its limit says so) and the first line of its last hand-back or message to
+  the lead (the ledger's `end`).
+- **Messages:** the reducer keeps each message's whole text (8 KB, redacted) beside its summary; the model still
+  carries only the summary. A click on a message asks `GET /api/message?s=&m=<its id in the model>` (`<from>><to>@<time
+  to the ms>`, checked by pattern; a spawn's text is the brief it started with) and opens it under the line.
+- **All steps:** `GET /api/steps?s=&a=[&after=<time>]` reads the agent's transcript itself (`agents.StepLog`: from its
+  start, or its last 32 MB; lines that cannot hold a tool call or text, such as request blobs, are skipped before
+  decoding), then only what the file gains; the twelve asked for lately are kept, each dropped after 10 minutes unused.
+  Each step is a tool call (as the recent tools show it, a failed one marked) or the first line of a thing it said;
+  the newest 2000 are kept. The page asks again at most every 4 s while the agent moves (every 30 s otherwise), for
+  steps from its newest on, and shows the newest 100, "older" for the rest, a line for each other day.
+- **Remote:** both questions go down the SSH pipe like the others (`message`, `steps`).
+

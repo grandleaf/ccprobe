@@ -2,8 +2,10 @@
 import os
 import unittest
 
-from ccprobe.agents import HOME, clean_cmd, tool_arg
-from test_core import Base, iso, result, tool_use
+from ccprobe import agents
+from ccprobe.agents import HOME, StepLog, clean_cmd, read_brief, tool_arg
+from ccprobe.model import Collector
+from test_core import Base, iso, result, text, tool_use
 
 
 def first_prompt(t, text):
@@ -84,6 +86,82 @@ class DetailTests(Base):
                     "origin": {"kind": "task-notification"}, "prompt": "<task-notification><task-id>bgx1</task-id><status>completed</status></task-notification>"}})
         tr.update()
         self.assertEqual(tr.detail(self.now)["bg"], [])
+
+
+    def test_the_brief_whole_for_the_documents_it_names(self):
+        long = "You are lp42c. " + "word " * 1000 + "Then read .autopilot/future/status.md."
+        self.w.add(first_prompt(self.now - 100, long))
+        tr = self.tr()
+        self.assertTrue(tr.brief()["text"].endswith("…"))                  # shown cut at 4000
+        self.assertTrue(tr.brief_full.endswith(".autopilot/future/status.md."))
+        self.assertEqual(read_brief(self.path)[1], tr.brief_full)
+        self.assertIs(read_brief(self.path + ".none"), False)
+
+    def test_messages_keep_their_whole_text(self):
+        msg = "lp42c plan: (1) read the sources\n(2) archive\n(3) edits " + "x" * 9000
+        self.w.add(tool_use(self.now - 20, "m1", "SendMessage", {"to": "main", "summary": "lp42c plan", "message": msg}),
+                   tool_use(self.now - 10, "h1", "SubagentHandback", {"message": "Done.\nAll of it. token=abcd1234secret"}))
+        tr = self.tr()
+        send, back = list(tr.messages)
+        self.assertEqual((send["summary"], send["text"].split("\n")[0]), ("lp42c plan", "lp42c plan: (1) read the sources"))
+        self.assertLessEqual(len(send["text"]), agents.MSG_MAX)
+        self.assertEqual(back["summary"], "Done.")
+        self.assertNotIn("abcd1234secret", back["text"])
+
+    def test_message_by_its_id(self):
+        self.w.add(first_prompt(self.now - 100, "You are crit7."),
+                   tool_use(self.now - 20.5, "m1", "SendMessage", {"to": "main", "summary": "plan", "message": "the whole plan"}))
+        c, tr = Collector(), self.tr()
+        c.trs[self.path] = tr
+        c.where[("s1", "a1")] = (self.path, "/repo")
+        t = tr.messages[0]["t"]
+        self.assertEqual(c.message("s1", f"a1>lead@{t:.3f}")["text"], "the whole plan")
+        self.assertEqual(c.message("s1", "lead>a1@spawn")["text"], "You are crit7.")      # a spawn's: the brief it got
+        for bad in (f"a1>lead@{t + 1:.3f}", "a1>lead", "../x>lead@1.000", f"a2>lead@{t:.3f}"):
+            self.assertIsNone(c.message("s1", bad), bad)
+        steps = c.steps("s1", "a1")
+        self.assertEqual([x["tool"] for x in steps["steps"]], ["SendMessage"])
+        self.assertIsNone(c.steps("s1", "nobody"))
+
+    def test_task_docs_kept_in_order(self):
+        c = Collector()
+        c._add_docs("/r", 7, [("a/journal.md", "journal"), ("b-brief.md", "brief")])
+        c._add_docs("/r", 7, [("a/status.md", "status"), ("a/journal.md", "journal")])
+        self.assertEqual(c.task_docs[("/r", 7)], [("a/status.md", "status"), ("a/journal.md", "journal"), ("b-brief.md", "brief")])
+
+
+class StepLogTests(Base):
+    def test_every_step_and_what_it_said(self):
+        self.w.add({"type": "api-request-blob", "body": {"messages": [{"type": "tool_use", "name": "Bash"}]}},
+                   tool_use(self.now - 50, "b1", "Bash", {"command": "cd /x && make", "description": "Build it"}),
+                   result(self.now - 49, "b1", err=True),
+                   text(self.now - 40, "Building failed; trying again.\nMore."),
+                   tool_use(self.now - 30, "r1", "Read", {"file_path": HOME + "/p/a.md"}),
+                   tool_use(self.now - 20, "m1", "SendMessage", {"to": "main", "summary": "done", "message": "all"}))
+        log = StepLog(self.path)
+        log.read()
+        got = log.since()
+        self.assertEqual([(x["tool"], x["arg"]) for x in got["steps"]],
+                         [("Bash", "Build it"), ("said", "Building failed; trying again."), ("Read", "~/p/a.md"), ("SendMessage", "done")])
+        self.assertEqual((got["n"], got["cut"], got["steps"][0]["cmd"], got["steps"][0].get("err")), (4, False, "make", True))
+        self.assertEqual(got["steps"][3]["to"], "main")
+        self.w.add(tool_use(self.now - 10, "g1", "Grep", {"pattern": "boss"}))
+        log.read()                                   # only what the file gained
+        self.assertEqual([x["tool"] for x in log.since(after=got["steps"][3]["t"])["steps"]], ["SendMessage", "Grep"])
+
+    def test_a_long_file_from_its_last_part(self):
+        old = agents.STEPS_BACK
+        agents.STEPS_BACK = 2000
+        try:
+            self.w.add(*[tool_use(self.now - 100 + i, f"b{i}", "Bash", {"command": "ls", "description": f"step {i}"}) for i in range(40)])
+            log = StepLog(self.path)
+            log.read()
+            got = log.since()
+            self.assertTrue(got["cut"])
+            self.assertEqual(got["steps"][-1]["arg"], "step 39")
+            self.assertLess(got["n"], 40)
+        finally:
+            agents.STEPS_BACK = old
 
 
 class WhatTests(unittest.TestCase):

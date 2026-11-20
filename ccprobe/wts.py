@@ -287,24 +287,91 @@ def _read_doc(root, path):
             "text": redact(raw.decode("utf-8", "replace"))}
 
 
-def notes(root, n):
-    """Task n's notes and briefs, newest brief last; None when it has neither."""
+def notes(root, n, extra=()):
+    """Task n's documents, None when it has none: the worker's notes (<N>.md), then the documents its agents' briefs
+    name (`extra`: [(path in the project, kind)], from task_docs: its status files, their journals, the lead's briefs
+    for it), then its <N>-brief.md briefs, oldest first. Each carries its kind and its path in the project."""
     wd = worker_dir(root)
-    docs = []
-    d = _read_doc(root, os.path.join(wd, f"{n}.md"))
-    if d:
-        docs.append(dict(d, kind="notes"))
+    real = os.path.realpath(root)
+    docs, seen = [], set()
+
+    def put(path, kind):
+        rp = os.path.realpath(path)
+        d = _read_doc(root, path) if rp not in seen else None
+        if d:
+            seen.add(rp)
+            docs.append(dict(d, kind=kind, path=os.path.relpath(rp, real)))
+
+    put(os.path.join(wd, f"{n}.md"), "notes")
+    for rel, kind in extra:
+        if kind in ("status", "journal"):
+            put(os.path.join(root, rel), kind)
     try:
         names = [x for x in os.listdir(wd) if re.match(rf"^{n}(?:-[\w.-]+)?-brief\.md$", x)]
     except OSError:
         names = []
-    briefs = [x for x in (_read_doc(root, os.path.join(wd, x)) for x in names) if x]
-    docs += [dict(x, kind="brief") for x in sorted(briefs, key=lambda x: x["mtime"])]
+    paths = sorted((os.path.join(wd, x) for x in names), key=lambda p: _mtime(p))
+    for path in paths + [os.path.join(root, rel) for rel, kind in extra if kind == "brief"]:
+        put(path, "brief")
     if not docs:
         return None
     pics = [{"i": i, "refs": refs, "name": os.path.basename(p), "size": size}
             for i, (refs, p, size) in enumerate(_doc_pics(root, n, docs[0]) if docs[0]["kind"] == "notes" else [])]
     return {"n": n, "docs": docs, "pics": pics}
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0
+
+
+# ---- the documents that say how a long task stands, found from the paths its agents' briefs name (the user,
+# 2026-11-19: "what is the curreent progress or steps"): a stage rebuild or a design task keeps its own folder's
+# status.md and journal.md (`.autopilot/<folder>/`), not the worker's <N>.md, and the lead may brief it in a file of its
+# own (`.autopilot/worker/<name>-brief.md`). Only regular files inside the project, read as the notes are. ----
+RE_MD = re.compile(r"(?<![\w.~/-])(?:~/|/)?(?:[\w.-]+/)*[\w.-]*[\w-]\.md\b")
+RE_STATUS_NAME = re.compile(r"^(?:[\w.-]*[-_])?(?:status|progress)\.md$", re.I)
+DOCS_MAX = 8
+
+
+def task_docs(root, text):
+    """[(path in the project, kind)] the text names: kind "status" (a status.md or progress.md, as named), "journal"
+    (the journal.md beside one) or "brief" (a brief in the worker folder, "<name>-brief.md"). A status file counts only
+    as a path with its folder. The caller keeps the answer a while (a file named may be written later)."""
+    if not text:
+        return []
+    real, wd = os.path.realpath(root), os.path.realpath(worker_dir(root))
+    status, briefs, seen = [], [], set()
+    for m in RE_MD.finditer(text):
+        p = m.group(0)
+        name = os.path.basename(p)
+        # a bare "status.md" in a brief is the task folder's own, said in passing: only a path with its folder counts
+        is_status, is_brief = bool(RE_STATUS_NAME.match(name)) and "/" in p, name.endswith("-brief.md")
+        if not (is_status or is_brief):
+            continue
+        rp = os.path.realpath(os.path.expanduser(p) if p.startswith(("~/", "/")) else os.path.join(root, p))
+        if rp in seen or not rp.startswith(real + os.sep) or not os.path.isfile(rp) or (is_brief and os.path.dirname(rp) != wd):
+            continue
+        seen.add(rp)
+        (status if is_status else briefs).append(rp)
+        if len(seen) >= DOCS_MAX:
+            break
+    journals = []
+    for rp in status:
+        j = os.path.realpath(os.path.join(os.path.dirname(rp), "journal.md"))
+        if j not in seen and j.startswith(real + os.sep) and os.path.isfile(j):
+            seen.add(j)
+            journals.append(j)
+    rel = lambda x: os.path.relpath(x, real)
+    return [(rel(x), "status") for x in status] + [(rel(x), "journal") for x in journals] + [(rel(x), "brief") for x in briefs]
+
+
+def docs_mtime(root, docs):
+    """The newest change among a task's documents ([(path in the project, kind)]), looked at most every 3 s."""
+    key = ("docs_t", root, tuple(rel for rel, _ in docs))
+    return _cached(key, 3, lambda: max((_mtime(os.path.join(root, rel)) for rel, _ in docs), default=0) or None)
 
 
 def notes_pic(root, n, i):
@@ -397,7 +464,7 @@ def read(root):
         pinned = q.pinned()
         nidx = notes_index(root)
         state = q.read_state()
-        groups = {}
+        groups, states = {}, {}
         for pri in getattr(m, "PRIS", PRIS):
             mine = [r for r in rows if r["pri"] == pri and r["n"] not in pinned]
             by_n = {r["n"]: r for r in mine}
@@ -411,6 +478,8 @@ def read(root):
                             "task": _clip(redact(_plain(r["task"])) if r else "", 600), "notes": nidx.get(int(n)),
                             # an AG row's agent lives in one lead session: the one that filed it
                             "owner": q.owner(int(n)) if pri == "AG" and hasattr(q, "owner") else ""})
+                if r:
+                    states[int(n)] = _clip(redact(r["state"]), STATE_MAX)    # whole, for the Agent tab (not in the model)
             groups[pri] = out
         # History (the user, 2026-11-14: "any accepted, or aborted task goes to there"): queue.py orders it, newest first;
         # the newest few ride along, the rest come from /api/history when asked
@@ -447,7 +516,7 @@ def read(root):
             "window": {"held": any(x["held"] for x in slots), "full": bool(slots) and all(x["held"] or x["reserved"] for x in slots),
                        "slots": slots, "waiters": [],
                        "line": waiting_line(root, q.cfg.get("window_queue") or WINDOW_QUEUE)},
-            "groups": groups, "limit_defaults": defaults, "per_session": per_session,
+            "groups": groups, "states": states, "limit_defaults": defaults, "per_session": per_session,
             "limits": apply_limits(defaults, groups),    # a lead's own limits replace these (model: session_limits)
             "worker_model": q.cfg.get("worker_model"),
             "history": [_hist(h, nidx) for h in hist[:HISTORY_SHOWN]] if hist is not None else None,
@@ -461,6 +530,7 @@ def read(root):
 
 
 HISTORY_SHOWN = 50      # closed rows in every update; the rest only when the page asks (one project has over 300)
+STATE_MAX = 8000        # a row's whole State, as the Agent tab's Task section shows it (the model carries its first 300)
 
 
 def _hist(h, nidx):

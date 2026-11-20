@@ -1,4 +1,5 @@
 """One collector tick: sessions + transcripts + WTS → the JSON model the page draws (DESIGN.md §10)."""
+import collections
 import glob
 import hashlib
 import json
@@ -13,7 +14,7 @@ from . import plan as plan_mod
 from . import sessions as sessions_mod
 from . import tokens as tokens_mod
 from . import wts as wts_mod
-from .agents import Transcript, agent_state, lead_state, read_meta
+from .agents import StepLog, Transcript, agent_state, lead_state, read_brief, read_meta
 from .redact import clip, redact
 
 VERSION = "1.0.0"
@@ -34,6 +35,9 @@ RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|AG|task)\s*(\d{1,4})(?:[a-z]|r\d{1,2})?\b
 HOT_S = 60
 DEAD_KEEP_S = 600
 LIVE = ("running", "thinking", "polling", "waiting_window")
+RE_MSG_ID = re.compile(r"([\w-]{1,64})>([\w-]{1,64})@(spawn|\d{1,12}\.\d{3})")   # a message's id in the model
+DOCS_S = 30             # how long the documents an agent's brief names are kept before a fresh look
+TEAM_MAX = 300          # agents listed for one task
 
 
 class Collector:
@@ -57,6 +61,15 @@ class Collector:
         self.last_error = None
         self.books = tokens_mod.Books(os.path.join(sessions_mod.CLAUDE, "projects"))   # token counts, on their own thread
         self.feed = feed_mod.Feed()   # the Events tab: what changed from tick to tick
+        # a task's own documents (wts.task_docs), learnt from its agents' briefs and kept while ccprobe runs, so they
+        # stay found after its agents leave the view: (root, task) -> [(path in the project, kind)]
+        self.task_docs = {}
+        self.docs_tried = {}     # (root, task) -> when an open task with no agent in view last had its briefs read
+        self.doc_cache = {}      # transcript path -> (when, the documents its brief names)
+        self.teams = {}          # session id -> {task: every agent it had}, for the Agent tab's Task section
+        self.row_states = {}     # session id -> {task: its whole State}
+        self.steplogs = collections.OrderedDict()   # transcript path -> StepLog, the few asked for lately
+        self.steps_lock = threading.Lock()
 
     # --- the tick -------------------------------------------------------------------------------------------
     def tick(self):
@@ -95,6 +108,10 @@ class Collector:
                             "tmux": s.get("tmux"), "version": s.get("version"), "status_since": 0})
 
     def _finish(self, out, t0, now):
+        shown = {x["id"] for x in out}
+        for d in (self.teams, self.row_states):
+            for k in [k for k in d if k not in shown]:
+                del d[k]
         rank = lambda x: -sum(1 for a in [x.get("lead") or {}] + (x.get("agents") or []) if (a.get("state") or {}).get("key") in LIVE)
         out.sort(key=lambda x: (not x.get("alive"), rank(x), x.get("project") or ""))
         alerts = alerts_mod.compute(out, now, self.mem)
@@ -141,7 +158,51 @@ class Collector:
             d["report"] = None                    # the lead's first prompt is just where the session began
         else:
             d["brief"] = tr.brief()               # a file read (once): outside the lock
+            n = self._task_n(sid, aid)
+            if n is not None:                     # its task: the whole State and every agent the task had
+                d["task_n"] = n
+                d["task_state"] = (self.row_states.get(sid) or {}).get(n)
+                d["team"] = (self.teams.get(sid) or {}).get(n)
         return d
+
+    def _task_n(self, sid, aid):
+        """The task an agent in the model works on: its own row's, else the one it helps."""
+        with self.lock:
+            s = next((x for x in (self.model or {}).get("sessions", []) if x["id"] == sid), None)
+            a = next((x for x in (s or {}).get("agents") or [] if x["id"] == aid), None)
+        return None if a is None else a["task"] if a.get("task") is not None else a.get("helps")
+
+    def message(self, sid, mid):
+        """One message's whole text {t, kind, text}, by its id in the model ("<from>><to>@<time>"; a spawn's text is the
+        brief the agent was started with). None when it is not in view."""
+        m = RE_MSG_ID.fullmatch(mid or "")
+        if not m:
+            return None
+        src, to, at = m.groups()
+        with self.tr_lock:
+            hit = self.where.get((sid, to if at == "spawn" else src))
+            tr = self.trs.get(hit[0]) if hit else None
+            if tr is None:
+                return None
+            if at != "spawn":
+                x = next((x for x in reversed(tr.messages) if f"{x['t']:.3f}" == at), None)
+                return {"t": x["t"], "kind": x["kind"], "text": x.get("text") or x["summary"]} if x else None
+        b = tr.brief()                            # a file read (once): outside the lock
+        return {"t": b["t"], "kind": "spawn", "text": b["text"]} if b else None
+
+    def steps(self, sid, aid, after=None):
+        """Every step of one agent (or the lead) in view, from its transcript (agents.StepLog); from `after` on if given."""
+        with self.tr_lock:
+            hit = self.where.get((sid, aid))
+        if not hit:
+            return None
+        with self.steps_lock:
+            log = self.steplogs.pop(hit[0], None) or StepLog(hit[0])
+            self.steplogs[hit[0]] = log
+            while len(self.steplogs) > 12:
+                self.steplogs.popitem(last=False)
+            log.read()
+            return log.since(after)
 
     def _root(self, sid):
         with self.lock:
@@ -149,9 +210,10 @@ class Collector:
         return (s.get("wts") or {}).get("root") if s else None
 
     def notes(self, sid, n):
-        """Task n's notes, briefs and the pictures they name (None when the session has no queue or the task none)."""
+        """Task n's notes, its own documents, briefs and the pictures the notes name (None when the session has no
+        queue or the task none)."""
         root = self._root(sid)
-        return wts_mod.notes(root, n) if root else None
+        return wts_mod.notes(root, n, self.task_docs.get((root, n)) or ()) if root else None
 
     def history(self, sid):
         """Every closed row of the session's queue, newest first (None when it has no queue)."""
@@ -199,7 +261,13 @@ class Collector:
         return d
 
     def _gc(self):
-        cutoff = time.time() - 120
+        now = time.time()
+        for p in [p for p, (t, _) in self.doc_cache.items() if now - t > 600]:
+            del self.doc_cache[p]
+        with self.steps_lock:
+            for p in [p for p, log in self.steplogs.items() if now - log.used > 600]:
+                del self.steplogs[p]
+        cutoff = now - 120
         with self.tr_lock:
             for p in [p for p, tr in self.trs.items() if getattr(tr, "seen_at", 0) < cutoff]:
                 del self.trs[p]
@@ -513,9 +581,14 @@ class Collector:
                 key = _ekey(a["id"], mate["id"])
                 edges.setdefault(key, {"key": key, "from": a["id"], "to": mate["id"], "kind": "msg", "hot": False, "last": 0})["keep"] = True
 
+        # how each task stands, in its own words: the status file (its journal, the lead's brief) its agents' briefs name
+        docs_t = self._docs_pass(w["root"], rows, cands, agents, trs, now) if wok else {}
+        if wok:
+            self.row_states[sid] = w.get("states") or {}
+
         wpub = None
         if w:
-            wpub = {k: v for k, v in w.items() if k not in ("lock_paths", "limit_defaults", "per_session", "closed")}
+            wpub = {k: v for k, v in w.items() if k not in ("lock_paths", "limit_defaults", "per_session", "closed", "states")}
             wpub["lock_names"] = list(lock_names)
             if w.get("build"):
                 wpub["build"] = dict(w["build"], who=redact(w["build"]["who"] or "") or None)
@@ -527,8 +600,10 @@ class Collector:
                 own = wts_mod.read_session(w["root"], s.get("sessionId") or "") if w.get("per_session") else {}
                 wpub["limits"] = wts_mod.apply_limits(w["limit_defaults"], w["groups"], own)
                 held = wts_mod.held_rows(wpub["limits"], w["groups"])
-                wpub["groups"] = {g: [dict(r, agent=agent_of_row.get(r["n"]), held=r["n"] in held) for r in rs]
-                                  for g, rs in w["groups"].items()}
+                # a row's notes: the newest change of its <N>.md or of its own documents (the reader shows both)
+                wpub["groups"] = {g: [dict(r, agent=agent_of_row.get(r["n"]), held=r["n"] in held,
+                                           notes=max([x for x in (r["notes"], docs_t.get(r["n"])) if x], default=None))
+                                      for r in rs] for g, rs in w["groups"].items()}
                 # the keep-awake is this lead's own (the worker skill since 2026-11-08: one per Claude session); another
                 # session's keeps the Mac awake only until that session is done
                 aw = wts_mod.session_awake(s.get("pid"))
@@ -564,6 +639,49 @@ class Collector:
             "tokens": tok,
         }
 
+    # --- a task's own documents ------------------------------------------------------------------------------
+    def _docs_pass(self, root, rows, cands, agents, trs, now):
+        """Each task's own documents (wts.task_docs) from its agents' briefs, the task's own agents first (its status
+        file before a critic's), and each agent's status file (`progress`). Returns {task: their newest change}."""
+        have = set()
+        for a in sorted(agents, key=lambda a: (a["role"] == "helper", -(a["born"] or 0))):
+            tr, n = trs[a["id"]], a["helps"]
+            docs = self._docs_of(root, tr.path, lambda: (tr.brief(), tr.brief_full)[1], now)
+            st = next((rel for rel, k in docs if k == "status"), None)
+            a["progress"] = {"n": n, "path": st} if st and n is not None else None
+            if docs and n is not None:
+                self._add_docs(root, n, docs)
+                have.add(n)
+        # an open task none of whose agents is in view (ccprobe started since): its newest agent's brief, now and then
+        for n, r in rows.items():
+            if r["kind"] in wts_mod.OPEN and n not in have and (root, n) not in self.task_docs \
+                    and now - self.docs_tried.get((root, n), 0) > 300:
+                self.docs_tried[(root, n)] = now
+                c = next((c for c in reversed(cands) if _task_of_meta(c["meta"], rows) == n), None)
+                if c:
+                    docs = self._docs_of(root, c["path"], lambda: (read_brief(c["path"]) or (None, ""))[1], now)
+                    if docs:
+                        self._add_docs(root, n, docs)
+        out = {n: wts_mod.docs_mtime(root, docs) for (rt, n), docs in self.task_docs.items() if rt == root and docs}
+        for a in agents:
+            if a["progress"]:
+                a["progress"]["t"] = out.get(a["progress"]["n"])
+        return out
+
+    def _docs_of(self, root, path, text, now):
+        hit = self.doc_cache.get(path)
+        if hit and now - hit[0] < DOCS_S:
+            return hit[1]
+        docs = wts_mod.task_docs(root, text())
+        self.doc_cache[path] = (now, docs)
+        return docs
+
+    def _add_docs(self, root, n, docs):
+        cur = self.task_docs.get((root, n), [])
+        merged = cur + [d for d in docs if d not in cur]
+        order = {"status": 0, "journal": 1, "brief": 2}
+        self.task_docs[(root, n)] = sorted(merged, key=lambda d: order.get(d[1], 3))[:wts_mod.DOCS_MAX]
+
     # --- token statistics -----------------------------------------------------------------------------------
     def session_tokens(self, s, cands, by_id, rows, now):
         """The session's token counts: the lead and every agent it ever had (not only those in view), by agent, by
@@ -585,7 +703,7 @@ class Collector:
             if aid not in task and meta.get("parentAgentId") in own_task:
                 task[aid] = own_task[meta["parentAgentId"]]
         total, today, replies, compactions, ready = [0, 0, 0, 0], [0, 0, 0, 0], 0, 0, True
-        per, tasks, minutes, writes = [], {}, {}, {}
+        per, tasks, minutes, writes, teams = [], {}, {}, {}, {}
         lead_own = None
         with self.books.lock:
             for aid, path, meta, c in nodes:
@@ -618,6 +736,15 @@ class Collector:
                     t = tasks.setdefault(pn, {"v": [0, 0, 0, 0], "agents": 0})
                     if not t.get("run") or L.first > t["run"][0]:
                         t["run"] = [L.first, L.last]
+                if n is not None and aid != "lead":     # every agent a task had, for its Task section (/api/agent)
+                    st = a["state"] if a else None
+                    teams.setdefault(n, []).append({
+                        "id": aid, "name": meta.get("name") or (a["label"] if a else _label_of_meta(meta, rows, aid)),
+                        "own": primary.get(aid) == n, "desc": clip(redact(meta.get("description") or ""), 100),
+                        "first": L.first, "last": L.last, "replies": L.replies, "out": v[3], "ctx": L.ctx, "model": L.model,
+                        "shown": bool(a), "live": bool(a) and not a["finished"], "state": st["label"] if st else None,
+                        "skey": st["key"] if st else None, "end": L.end,
+                        "stopped": bool(meta.get("stoppedByUser")), "done": bool(meta.get("finished"))})
                 per.append({"id": aid, "label": "lead" if aid == "lead" else a["label"] if a else _label_of_meta(meta, rows, aid),
                             "role": role, "task": n, "shown": aid == "lead" or bool(a),
                             "finished": bool(a and a["finished"]) or (aid != "lead" and not a), **own})
@@ -630,6 +757,10 @@ class Collector:
         # each row's own State writes, by whoever made them (an agent may do a row as part of another task: 119 inside
         # 141): its last "in progress" stretch, from its first such write to the first "done" after it
         row_writes = {str(n): state_run(ws) for n, ws in writes.items()}   # apart from tasks: no empty "By task" rows
+        for team in teams.values():
+            team.sort(key=lambda x: -(x["first"] or 0))      # the newest first
+            del team[TEAM_MAX:]
+        self.teams[s.get("uid") or s.get("sessionId") or str(s["pid"])] = teams
         t0 = int((now - tokens_mod.SERIES_S) // 60 * 60)
         # per minute and role: [minute, role, fresh in (input + cache write), cache read, output]
         series = [[(m - t0) // 60, ri, v[0] + v[1], v[2], v[3]] for (m, ri), v in sorted(minutes.items()) if m >= t0 and any(v)]
