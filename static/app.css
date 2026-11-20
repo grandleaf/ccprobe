@@ -726,3 +726,6 @@ div.npart { padding: 6px 0 2px; border-top: 1px solid var(--line2); }
 .ev.said .a { white-space: normal; }
 .evday { color: var(--muted); font-size: 10.5px; letter-spacing: .8px; padding: 6px 0 2px; border-bottom: 1px solid var(--line2); }
 @media (prefers-reduced-motion: reduce) { .ev .mtog .chev { transition: none; } }
+/* Progress's own "show all": violet (the done pills' colour), so it is found at a glance among the cyan links */
+.linkbtn.progmore { color: var(--violet); font-weight: 600; }
+.linkbtn.progmore:hover { color: color-mix(in srgb, var(--violet) 75%, var(--text-strong)); }

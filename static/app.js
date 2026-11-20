@@ -2249,11 +2249,13 @@ S.steps = new Map();   // sid/agent -> { d: {steps (oldest first), n, cut, from}
 function wantSteps(s, id, last) {
   const k = s.id + '/' + id, e = S.steps.get(k), age = e ? Date.now() - e.at : Infinity;
   if (e && (e.busy || age < 4000 || (e.last >= last && age < 30000))) return e.d;
-  const have = e?.d?.steps || [], after = have.length ? have[have.length - 1].t : null;
+  // from 15 minutes before its newest step on: a call that fails long after it was made (parallel calls) is marked
+  // on an older step, which comes again so (the code review, 2026-11-19)
+  const have = e?.d?.steps || [], after = have.length && have[have.length - 1].t ? Math.floor(have[have.length - 1].t - 900) : null;
   S.steps.set(k, Object.assign({}, e, { busy: true }));
   fetch(`/api/steps?s=${encodeURIComponent(s.id)}&a=${encodeURIComponent(id)}${after ? '&after=' + after : ''}`, { cache: 'no-store' })
     .then(r => r.ok ? r.json() : null).catch(() => null).then(d => {
-      // from `after` on only: the step at `after` comes again (a failure may have been marked since)
+      // from `after` on only: those steps replace the ones the page had from then
       const nd = d && after ? Object.assign({}, d, { steps: have.filter(x => (x.t || 0) < after).concat(d.steps).slice(-2000) }) : d;
       S.steps.set(k, { d: nd || e?.d || null, at: Date.now(), busy: false, last });
       if (S.tab === 'agent') renderPanel();
@@ -2672,7 +2674,8 @@ function progressHtml(s, n, id, now) {
   if (!doc) return h + `<div class="empty-note">${d === undefined ? 'loading…' : 'could not be read'}</div>`;
   const c = curSection(doc), open = isOpen(id, 'prog', false);
   h += `<div class="notes prog">${c.h ? `<div class="ntitle">${mdInline(c.h, null)}</div>` : ''}<div class="md${open || !c.long ? '' : ' pclamp'}">${c.html}</div></div>`;
-  if (c.long) h += `<button class="linkbtn more" data-fold="prog" data-k="m-prog">${open ? 'show less' : 'show all of this part'}</button>`;
+  // in violet, apart from the panel's other "show all" links: the one visited most (the user, 2026-11-19)
+  if (c.long) h += `<button class="linkbtn more progmore" data-fold="prog" data-k="m-prog">${open ? 'show less' : 'show all of this part'}</button>`;
   // the reader: this file at this part, then the task's other documents (a journal at its newest entry)
   const at = x => { const h0 = x === doc ? c.h : x.kind === 'journal' ? curSection(x).h : ''; return h0 ? ` data-find="${esc(mdPlain(h0))}"` : ''; };
   const others = d.docs.map((x, j) => [x, j]).filter(([x]) => x !== doc && x.kind !== 'notes');

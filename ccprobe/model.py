@@ -35,6 +35,9 @@ RE_WHO_ROW = re.compile(r"^(?:MP|LP|HP|AG|task)\s*(\d{1,4})(?:[a-z]|r\d{1,2})?\b
 HOT_S = 60
 DEAD_KEEP_S = 600
 LIVE = ("running", "thinking", "polling", "waiting_window")
+# queue.py's short_status for a done row the lead has not reviewed: "🔍 to review 22:50", or "🔍 <head> · to review";
+# not the words anywhere ("✅ sent to review board")
+RE_TO_REVIEW = re.compile(r"(?:^|[🔍·])\s*to review\b")
 RE_MSG_ID = re.compile(r"([\w-]{1,64})>([\w-]{1,64})@(spawn|\d{1,12}\.\d{3})")   # a message's id in the model
 DOCS_S = 30             # how long the documents an agent's brief names are kept before a fresh look
 TEAM_MAX = 300          # agents listed for one task
@@ -48,6 +51,7 @@ class Collector:
         self.trs = {}            # transcript path -> Transcript
         self.metas = {}          # meta path -> (mtime, dict)
         self.dead_since = {}     # session id -> first time seen dead
+        self.uids = {}           # pid -> its id in the model, kept while it is registered (_unique_ids)
         self.mem = alerts_mod.Memory()
         self.lock = threading.Lock()
         self.tr_lock = threading.Lock()   # held while a reducer changes; /api/agent reads one between updates
@@ -85,7 +89,7 @@ class Collector:
         # two processes on one conversation (resumed in another folder, then continued in its own: the user, 2026-11-19,
         # two sessions "are highlighted in the left pane"): one id each. The first started keeps
         # the conversation's id, so its selection holds; a later one is <id>@<pid>
-        _unique_ids(regs)
+        self.uids = {s["pid"]: s["uid"] for s in _unique_ids(regs, self.uids)}
         for s in regs:
             sid = s["uid"]
             if not s["alive"]:
@@ -196,11 +200,12 @@ class Collector:
             hit = self.where.get((sid, aid))
         if not hit:
             return None
-        with self.steps_lock:
+        with self.steps_lock:                     # the map only: a read (up to 32 MB) must not hold up the tick's _gc
             log = self.steplogs.pop(hit[0], None) or StepLog(hit[0])
             self.steplogs[hit[0]] = log
             while len(self.steplogs) > 12:
                 self.steplogs.popitem(last=False)
+        with log.lock:
             log.read()
             return log.since(after)
 
@@ -483,8 +488,9 @@ class Collector:
             # or closed: done, not "waiting on its job" for ever (the user, 2026-11-15: "task 378 is done, why we show its
             # advisor adv378 is still there?"; its job never reported back). A worker waiting on its build is "finished"
             # in its meta too until the job wakes it, so the flag alone does not tell
+            helps = n if n is not None else _task_of_meta(meta, helps_rows)
             if st["key"] == "ended_bg" and role == "helper" and (meta.get("finished") or meta.get("stoppedByUser")):
-                hn = n if n is not None else _task_of_meta(meta, helps_rows)
+                hn = helps
                 if hn is not None and (rows.get(hn) or {}).get("kind") not in wts_mod.OPEN:
                     st = {"key": "ended", "label": "done", "since": st["since"], "sub": "done",
                           "detail": f"task {hn} is done; it was waiting on: {st.get('detail') or 'its job'}"}
@@ -493,9 +499,11 @@ class Collector:
             # its agent and its advisor wait for that review on the graph, not finished (a project's lead, with the
             # user: "a worker should not show ✓ finished until the lead has reviewed its task"). Reviewed, accepted or
             # closed, they finish as before; an earlier agent of the task, one stopped, or one a failed request stopped,
-            # finishes as before too
-            rn = n if n is not None else (_task_of_meta(meta, helps_rows) if role == "helper" else None)
-            rv = _review_state(st, rows.get(rn) if rn is not None else None, rn, retired)
+            # finishes as before too. The row's own agent (n: the newest bound to it) is no earlier one: an HP worker
+            # whose row is done is no longer among `workers`, so `retired` alone would finish it whenever another HP row
+            # is open (the code review of c76987e)
+            rn = n if n is not None else (helps if role == "helper" else None)
+            rv = _review_state(st, rows.get(rn) if rn is not None else None, rn, superseded or (retired and n is None))
             if rv and not meta.get("stoppedByUser"):      # you stopped it by hand: stopped, as a TaskStop
                 st, finished = rv, False
             agents.append({
@@ -505,20 +513,21 @@ class Collector:
                 "state": st, "ctx": tr.ctx, "ctx_max": self.ctx_max, "said": tr.said, "recent": list(tr.recent),
                 "last_ts": tr.last_ts, "born": c["birth"], "finished": finished,
                 "qstate": list(tr.qstate)[-3:], "compactions": [x[0] for x in tr.compactions if now - x[0] <= self.window_s],
-                "talked": talked.get(aid, 0), "anchor": None, "helps": n if n is not None else _task_of_meta(meta, helps_rows), "notes": notes,
+                "talked": talked.get(aid, 0), "anchor": None, "helps": helps, "notes": notes,
             })
         by_id = {a["id"]: a for a in agents}
 
         # of a task's helpers waiting for the lead's review, only the newest round waits: an earlier advisor (adv389 before
-        # adv389b) finished with its round, as before (2026-11-19, the code review)
+        # adv389b) finished with its round, as before (2026-11-19, the code review). A row's own agent (its done HP
+        # worker, a helper by role once it leaves `workers`) is not an advisor round: it always waits
         newest = {}
-        for a in agents:
-            if a["role"] == "helper" and a["state"]["key"] == "review":
-                b = newest.get(a["helps"])
-                if b is None or (a["born"] or 0) > (b["born"] or 0):
-                    newest[a["helps"]] = a
-        for a in agents:
-            if a["role"] == "helper" and a["state"]["key"] == "review" and newest.get(a["helps"]) is not a:
+        rounds = [a for a in agents if a["role"] == "helper" and a["task"] is None and a["state"]["key"] == "review"]
+        for a in rounds:
+            b = newest.get(a["helps"])
+            if b is None or (a["born"] or 0) > (b["born"] or 0):
+                newest[a["helps"]] = a
+        for a in rounds:
+            if newest.get(a["helps"]) is not a:
                 a["state"] = {"key": "ended", "label": "done", "since": a["state"]["since"], "sub": "done",
                               "detail": f"an earlier round of task {a['helps']}"}
                 a["finished"] = True
@@ -662,7 +671,9 @@ class Collector:
                     docs = self._docs_of(root, c["path"], lambda: (read_brief(c["path"]) or (None, ""))[1], now)
                     if docs:
                         self._add_docs(root, n, docs)
-        out = {n: wts_mod.docs_mtime(root, docs) for (rt, n), docs in self.task_docs.items() if rt == root and docs}
+        # only the tasks on screen (task_docs keeps every task seen while ccprobe runs: no stat of a long-closed one's)
+        want = set(rows) | {a["progress"]["n"] for a in agents if a["progress"]}
+        out = {n: wts_mod.docs_mtime(root, docs) for (rt, n), docs in self.task_docs.items() if rt == root and docs and n in want}
         for a in agents:
             if a["progress"]:
                 a["progress"]["t"] = out.get(a["progress"]["n"])
@@ -822,22 +833,28 @@ def _notes_of(n, meta, nidx):
     return {"n": nn, "t": nidx[nn]} if nn in nidx else None
 
 
-def _unique_ids(regs):
+def _unique_ids(regs, before=None):
     """Each registered session's id in the model (`uid`): its conversation's id, or <id>@<pid> for a later process on a
-    conversation another one runs too (the first started keeps the plain id); its pid when it has none."""
-    firsts = {}
-    for s in sorted(regs, key=lambda x: x.get("startedAt") or 0):
-        firsts.setdefault(s.get("sessionId"), s["pid"])
-    for s in regs:
+    conversation another one runs too (the first started keeps the plain id); its pid when it has none. `before`
+    ({pid: uid}, the last tick's) keeps a process's id while it stays registered: the second process does not turn
+    into the plain id (losing its selection) when the first one's registration goes."""
+    before, taken = before or {}, set()
+    for s in sorted(regs, key=lambda x: (before.get(x["pid"]) is None, x.get("startedAt") or 0)):
         real = s.get("sessionId")
-        s["uid"] = (real if firsts.get(real) == s["pid"] else f"{real}@{s['pid']}") if real else str(s["pid"])
+        if not real:
+            s["uid"] = str(s["pid"])
+            continue
+        was = before.get(s["pid"])
+        s["uid"] = was if was in (real, f"{real}@{s['pid']}") and was not in taken else real if real not in taken \
+            else f"{real}@{s['pid']}"
+        taken.add(s["uid"])
     return regs
 
 
 def _review_state(st, row, n, retired):
     """The state of an agent whose task row is done but not yet reviewed by the lead ("to review" in its status), or
     None: an agent at work, an earlier one of the task, one stopped, or one a failed request stopped keeps its own."""
-    if not row or row.get("kind") != "done" or "to review" not in (row.get("status") or "") or retired:
+    if not row or row.get("kind") != "done" or not RE_TO_REVIEW.search(row.get("status") or "") or retired:
         return None
     if st["key"] not in ("ended", "ended_bg", "unknown") or st.get("sub") == "stopped" or st.get("api_error"):
         return None

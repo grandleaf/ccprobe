@@ -8,6 +8,7 @@ import collections
 import json
 import os
 import re
+import threading
 import time
 from datetime import datetime
 
@@ -472,7 +473,7 @@ class Transcript:
         got = read_brief(self.path)
         if got is False:
             return None                        # try again next time: the file may be back
-        self._brief, self.brief_full = got if got else (None, "")
+        self._brief, self.brief_full = got
         return self._brief
 
     def detail(self, now, rel=None):
@@ -688,6 +689,7 @@ class StepLog:
         self.calls = collections.OrderedDict()   # tool_use id -> its step (a failed result marks it)
         self.cut = False                         # the file's start was not read: older steps are missing
         self.used = time.time()
+        self.lock = threading.Lock()             # one read at a time; other logs (and the tick) are not held up
 
     def read(self):
         self.used = time.time()
@@ -697,7 +699,9 @@ class StepLog:
             return
         skip = False
         if self.ino != st.st_ino or st.st_size < self.offset:      # first sight, replaced or truncated
+            lock = self.lock
             self.__init__(self.path)
+            self.lock = lock                     # held by this read's caller
             self.ino = st.st_ino
             self.offset = max(0, st.st_size - STEPS_BACK)
             self.cut = skip = self.offset > 0

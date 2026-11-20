@@ -370,6 +370,11 @@ class UniqueIdTests(unittest.TestCase):
                 {"pid": 7, "sessionId": "b8aa", "startedAt": 50}, {"pid": 8, "startedAt": 60}]
         self.assertEqual([s["uid"] for s in _unique_ids(regs)], ["a2d4@89396", "a2d4", "b8aa", "8"])
 
+    def test_a_later_process_keeps_its_id_when_the_first_goes(self):
+        regs = [{"pid": 89396, "sessionId": "a2d4", "startedAt": 200}]
+        self.assertEqual(_unique_ids(regs, {89396: "a2d4@89396", 15349: "a2d4"})[0]["uid"], "a2d4@89396")
+        self.assertEqual(_unique_ids([{"pid": 5, "sessionId": "c1", "startedAt": 9}], {5: "a2d4"})[0]["uid"], "c1")   # resumed another
+
 
 class ReviewTests(unittest.TestCase):
     """A done row the lead has not reviewed keeps its agents up, waiting for that review (2026-11-18)."""
@@ -391,6 +396,10 @@ class ReviewTests(unittest.TestCase):
         self.assertIsNone(_review_state({"key": "running", "since": 5}, self.todo, 389, False))                # still at work
         self.assertIsNone(_review_state({"key": "ended", "sub": "stopped", "since": 5}, self.todo, 389, False))
         self.assertIsNone(_review_state({"key": "ended", "api_error": "weekly limit", "since": 5}, self.todo, 389, False))
+        self.assertIsNone(_review_state(st, {"kind": "done", "status": "✅ sent to review board 22:50"}, 389, False))   # words, not the mark
+
+    def test_a_review_mark_after_the_head(self):
+        self.assertEqual(_review_state({"key": "ended", "since": 5}, {"kind": "done", "status": "🔍 merged 22:50 · to review"}, 389, False)["key"], "review")
 
 
 class AlertTests(unittest.TestCase):

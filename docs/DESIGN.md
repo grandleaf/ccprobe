@@ -974,6 +974,6 @@ task they say what was done far better than the transcript, so ccprobe shows the
   decoding), then only what the file gains; the twelve asked for lately are kept, each dropped after 10 minutes unused.
   Each step is a tool call (as the recent tools show it, a failed one marked) or the first line of a thing it said;
   the newest 2000 are kept. The page asks again at most every 4 s while the agent moves (every 30 s otherwise), for
-  steps from its newest on, and shows the newest 100, "older" for the rest, a line for each other day.
+  steps from 15 minutes before its newest on (a parallel call that fails late marks an older step), and shows the newest 100, "older" for the rest, a line for each other day.
 - **Remote:** both questions go down the SSH pipe like the others (`message`, `steps`).
 
