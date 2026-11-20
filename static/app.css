@@ -726,6 +726,8 @@ div.npart { padding: 6px 0 2px; border-top: 1px solid var(--line2); }
 .msgtext { margin: 2px 0 8px 70px; font-size: 12px; max-height: 40em; overflow-y: auto; }
 .t-said { color: var(--text-strong); }
 .ev.said .a { white-space: normal; }
+/* a tool row's words wrap onto a second line instead of being cut (the user, 2026-11-20); they are 110 characters at most */
+.ev:not(.msg) .a { white-space: normal; overflow-wrap: anywhere; }
 .evday { color: var(--muted); font-size: 10.5px; letter-spacing: .8px; padding: 6px 0 2px; border-bottom: 1px solid var(--line2); }
 @media (prefers-reduced-motion: reduce) { .ev .mtog .chev { transition: none; } }
 /* Progress's own "show all": violet (the done pills' colour), so it is found at a glance among the cyan links */
