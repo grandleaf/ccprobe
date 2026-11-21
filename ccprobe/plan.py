@@ -130,6 +130,14 @@ def _order(w):
     return ({"five_hour": 0, "seven_day": 1}.get(w["key"], 2), w["key"])
 
 
+def _held(new, old):
+    """Is a newer status line figure more than a point under the server's own (the usage rows, fetched within the
+    hour before it)? Then it waits for the server to agree. One session passed on 10% for a week the others and the
+    server had at 69%, and its readings were the newer every other minute (the user, 2026-11-20: "my weekly shows 10,
+    then 69 then 10, then 69"). Inside one week use only grows, save a reset by hand, which the next fetch shows."""
+    return new["src"] == "status line" and old["src"] == "usage" and new["at"] - old["at"] < HOUR and old["used"] - new["used"] > 1
+
+
 def merge(*lists):
     """One reading per window: for the same reset (an hour apart at most: the endpoint's time has fractions) the newer
     figure (`at`; a tie: the higher), seen as of the newer reading; else the one with the later reset. A newer figure a
@@ -143,7 +151,7 @@ def merge(*lists):
             by[w["key"]] = w
         elif o["resets_at"] and w["resets_at"] and abs(o["resets_at"] - w["resets_at"]) < HOUR:
             new, old = (w, o) if (w["at"], w["used"], w["seen"]) > (o["at"], o["used"], o["seen"]) else (o, w)
-            top = old if 0 < old["used"] - new["used"] <= 1 else new
+            top = old if 0 < old["used"] - new["used"] <= 1 or _held(new, old) else new
             by[w["key"]] = {**top, "seen": max(o["seen"], w["seen"])}
         elif (w["resets_at"] or 0) > (o["resets_at"] or 0):
             by[w["key"]] = w

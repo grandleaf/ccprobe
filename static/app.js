@@ -2945,6 +2945,9 @@ function taskRun(s, n, a, kind) {
   if (!own || !wr) return own || wr;
   return (wr.last_ts ?? wr.born) > own.last_ts ? wr : own;   // writes after the agent's last step: a later stretch
 }
+// a done row the lead has not reviewed yet ("🔍 to review 00:20"): its edge bar breathes slowly until it is reviewed (the
+// user, 2026-11-21: "make it flash slowly to indicate it self is done, but waiting for the lead review")
+const RE_TO_REVIEW_ROW = /^[🔍\s]*to review\b/iu;
 function rowStatus(r, now, run, wrote) {   // wrote: when the row's State was last written, if known
   // a queued row in a table whose max is 0 (this session's limit): held like a paused one, not next in line
   if (r.held) return { ri: ROWKIND.paused[0], rc: ROWKIND.paused[1], html: '<span class="sr">queued, </span>held · max 0' };
@@ -3113,7 +3116,7 @@ function wtsPanel(s) {
         + (a && run?.agent ? `\nits agent ${a.label} since ${whenHM(run.agent, now)} (took over)` : ''));
       const mine = a ? heldBy(w, a.id) : [], holds = mine.length > 0;   // a window's holder: red, as on the graph (lock, line, card)
       const nb = r.notes ? `<button class="nbtn" data-notes="${r.n}" aria-label="Task ${r.n}'s notes" data-tip="Task ${r.n}'s notes · updated ${hhmm(r.notes)}">${icon('i-doc')}</button>` : '';
-      h += `<div ${r.loose ? '' : `id="row-${r.n}" `}class="wrow ${running.has(r.n) ? 'cur' : ''}${r.loose ? ' loose' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : r.kind === 'done' ? ` fin c-${rc}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(`Runs on ${r.runs_on}\n\n${r.task}`)}">
+      h += `<div ${r.loose ? '' : `id="row-${r.n}" `}class="wrow ${running.has(r.n) ? 'cur' : ''}${r.loose ? ' loose' : ''}${a || r.notes ? ' bound' : ''}${live ? ` live c-${rc}` : r.kind === 'done' ? ` fin c-${rc}${RE_TO_REVIEW_ROW.test(r.status) ? ' review' : ''}` : ''}${holds ? ' holds' + lkClass(mine[0]) : ''}" ${a ? `data-select="${esc(a.id)}"` : r.notes ? `data-notes="${r.n}"` : ''} data-tip="${esc(`Runs on ${r.runs_on}\n\n${r.task}`)}">
         <span class="n">${r.loose ? '—' : r.n}${nb}</span><span class="t">${r.runs_on !== main ? `<span class="mtag">${esc(modelTag(r.runs_on, main))}</span>` : ''}${esc(r.title)}</span>${settings.wtsTwoLine && two && pk ? twoPills(two, ri, rc, pk, stTip, W) : `<span class="st2 c-${rc}${pk}" data-tip="${stTip}">${icon(ri)}<span>${stHtml}</span></span>`}`;
       // the row's agent, on a line of its own: what it is doing now. Named only when it is not the row's own agent
       // ("HP 296" under row 296 says nothing new); none for an agent that is done under a done row (the row says so)

@@ -122,11 +122,31 @@ class PlanTests(unittest.TestCase):
         os.utime(self.path, (1795071972, 1795071972))
         week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
         self.assertEqual((week["used"], week["src"]), (100.0, "usage"))
-        # two points lower is a real change: the newer stands
-        self.save({"rate_limits": {"seven_day": {"used_percentage": 98, "resets_at": 1795100400, "seen_at": 1795071980}}})
+        # a status line figure higher than the endpoint's is a real change: the newer stands
+        self.save({"rate_limits": {"seven_day": {"used_percentage": 100, "resets_at": 1795100400, "seen_at": 1795071980}}})
         os.utime(self.path, (1795071980, 1795071980))
         week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
-        self.assertEqual((week["used"], week["src"]), (98.0, "status line"))
+        self.assertEqual((week["used"], week["src"]), (100.0, "status line"))
+
+    def test_a_session_far_under_the_server_waits(self):
+        # the user, 2026-11-20: "my weekly shows 10, then 69 then 10, then 69": one session's 10% came newer every
+        # other minute; the endpoint, fetched minutes before, said 69
+        self.save({"fetched_at": 1795233382, "limits": [{"kind": "weekly_all", "percent": 69, "resets_at": "2026-11-26T14:59:59.876154+00:00"}]},
+                  self.upath)
+        self.save({"rate_limits": {"seven_day": {"used_percentage": 10, "resets_at": 1795705200, "seen_at": 1795234401}}})
+        os.utime(self.path, (1795234401, 1795234401))
+        week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
+        self.assertEqual((week["used"], week["src"], week["seen"]), (69.0, "usage", 1795234401))
+        # once the endpoint agrees (a reset by hand), the low figure stands
+        self.save({"fetched_at": 1795234500, "limits": [{"kind": "weekly_all", "percent": 10, "resets_at": "2026-11-26T14:59:59.876154+00:00"}]},
+                  self.upath)
+        week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
+        self.assertEqual(week["used"], 10.0)
+        # an endpoint reading over an hour old no longer holds a session back
+        self.save({"fetched_at": 1795230000, "limits": [{"kind": "weekly_all", "percent": 69, "resets_at": "2026-11-26T14:59:59.876154+00:00"}]},
+                  self.upath)
+        week = next(w for w in self.read()["windows"] if w["key"] == "seven_day")
+        self.assertEqual((week["used"], week["src"]), (10.0, "status line"))
 
     def test_bad_usage_rows_give_nothing(self):
         for bad in ("not json", "[]", '{"limits": []}', '{"limits": {}, "fetched_at": 1}',

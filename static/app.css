@@ -376,6 +376,10 @@ body.paused .conn .dot, body.paused .skel { animation-play-state: paused; }
 /* done rows: the same bar in the pill's violet (the user, 2026-11-18: "should also put a purple color bar (same color as
    the two capsule) to indicate they have been done?"; then, of a half-strength one, "the color looks a little of dull") */
 .wrow.fin { box-shadow: inset 3px 0 0 var(--c); }
+.wrow.fin.review { animation: revbar 2.6s ease-in-out infinite; }   /* done, waiting for the lead's review: the bar breathes */
+@keyframes revbar { 50% { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--c) 18%, transparent); } }
+:root[data-motion="reduced"] .wrow.fin.review { animation: none; }
+@media (prefers-reduced-motion: reduce) { .wrow.fin.review { animation: none; } }
 /* ⚙ Two-line WTS rows (on by default; the user, 2026-11-15: "the wTS's dsiplay can make two rows for one item. now it is
    too short, and the text display trimmed"): a title runs onto a second line before it is cut (a live row's still
    wraps in full), and a long status takes two narrower lines, which leaves the title more of the row */

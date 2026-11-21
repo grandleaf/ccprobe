@@ -515,7 +515,8 @@ The selected node gets a dashed outer hex. Nodes are focusable (`tabindex=0`, wi
     silent for 6 h starts a new stretch at its next "in progress" (`state_run`, `STRETCH_GAP`), so a redo after a "done"
     the transcripts never saw does not count from the day before. The words after them would widen a pill, so they go before the
     second pill, outside it: `to review` an eye, `waits for the window` a window, `small fix owed` a hammer (the words
-    for screen readers and in the tip), any other word as muted text. A parked row's word ("parked 20:44") leaves the
+    for screen readers and in the tip), any other word as muted text. A done row still to review has its edge bar breathe
+    slowly (`.wrow.fin.review`, 2.6 s; still with reduced motion) until the lead reviews it (the user, 2026-11-21). A parked row's word ("parked 20:44") leaves the
     first pill: its amber hourglass says it, the tip keeps it. A status with no time (queued, held, not filed) keeps its one pill, up to
     two lines of 20 characters, breaking only between its parts. `rowStatus` gives the two lines (`two`) beside its
     one-line `html`, which the Agent tab and the notes reader keep using. With the setting off: one line, one pill.
